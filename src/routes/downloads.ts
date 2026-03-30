@@ -302,13 +302,23 @@ router.patch("/jobs/:id/status", async (req: AuthRequest, res: Response) => {
     }
 
     // Validate status transition
-    if (!isValidTransition(currentJob.status, status)) {
+    // Allow same-status updates for progress/metadata changes
+    if (status !== currentJob.status && !isValidTransition(currentJob.status, status)) {
       res.status(422).json({
         error: `Ungültiger Status-Übergang: ${currentJob.status} → ${status}`,
         currentStatus: currentJob.status,
         allowedTransitions: STATUS_TRANSITIONS[currentJob.status] || [],
       });
       return;
+    }
+
+    // For same-status updates: require at least one field to change
+    if (status === currentJob.status) {
+      const hasFieldUpdate = progress !== undefined || hetznerServerId !== undefined || hetznerServerIp !== undefined || errorMsg !== undefined;
+      if (!hasFieldUpdate) {
+        res.status(422).json({ error: "Keine Änderung angegeben." });
+        return;
+      }
     }
 
     // Build update data with input validation
@@ -355,6 +365,20 @@ router.patch("/jobs/:id/status", async (req: AuthRequest, res: Response) => {
       if (!effectiveBucket) {
         res.status(400).json({ error: "s3Bucket ist erforderlich (weder im Request noch als S3_BUCKET konfiguriert)." });
         return;
+      }
+
+      // Validate S3 metadata
+      if (!/^[a-z0-9][a-z0-9.\-]{1,61}[a-z0-9]$/.test(effectiveBucket)) {
+        res.status(400).json({ error: "Ungültiger S3-Bucket-Name." });
+        return;
+      }
+
+      if (fileExtension !== undefined && fileExtension !== null) {
+        const ext = String(fileExtension);
+        if (!/^\.[a-zA-Z0-9]{1,10}$/.test(ext)) {
+          res.status(400).json({ error: "Ungültige Dateiendung (erwartet z.B. '.mkv', '.mp4')." });
+          return;
+        }
       }
 
       // Compare-and-swap: only update if status hasn't changed concurrently
