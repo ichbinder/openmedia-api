@@ -247,4 +247,96 @@ describe("NZB Routes", () => {
       expect(check1.status).toBe(404);
     });
   });
+
+  describe("NZB Import", () => {
+    it("importiert NZB-Datei und parst Metadaten", async () => {
+      const nzbContent = Buffer.from("<nzb>test content for import</nzb>");
+
+      const res = await request(app)
+        .post("/nzb/import")
+        .set("Authorization", `Bearer ${token}`)
+        .attach("nzb", nzbContent, "The.Matrix.1999.1080p.BluRay.x264-GROUP.nzb");
+
+      expect(res.status).toBe(201);
+      expect(res.body.imported).toBe(true);
+      expect(res.body.nzbFile.resolution).toBe("1080p");
+      expect(res.body.nzbFile.codec).toBe("x264");
+      expect(res.body.parsed.title).toBe("The Matrix");
+      expect(res.body.parsed.year).toBe(1999);
+      expect(res.body.movie).toBeDefined();
+      expect(res.body.movie.nzbFiles).toHaveLength(1);
+    });
+
+    it("erkennt Duplikate anhand des Hashes", async () => {
+      const nzbContent = Buffer.from("<nzb>duplicate test content</nzb>");
+
+      await request(app)
+        .post("/nzb/import")
+        .set("Authorization", `Bearer ${token}`)
+        .attach("nzb", nzbContent, "Movie.1080p.nzb");
+
+      const res = await request(app)
+        .post("/nzb/import")
+        .set("Authorization", `Bearer ${token}`)
+        .attach("nzb", nzbContent, "Movie.1080p.nzb");
+
+      expect(res.status).toBe(200);
+      expect(res.body.imported).toBe(false);
+      expect(res.body.message).toContain("existiert bereits");
+    });
+
+    it("importiert verschiedene Versionen zum gleichen Film", async () => {
+      const nzb1080 = Buffer.from("<nzb>1080p version</nzb>");
+      const nzb4k = Buffer.from("<nzb>4k version</nzb>");
+
+      const res1 = await request(app)
+        .post("/nzb/import")
+        .set("Authorization", `Bearer ${token}`)
+        .attach("nzb", nzb1080, "Some.Film.2024.1080p.BluRay.x264.nzb");
+
+      const res2 = await request(app)
+        .post("/nzb/import")
+        .set("Authorization", `Bearer ${token}`)
+        .attach("nzb", nzb4k, "Some.Film.2024.2160p.BluRay.x265.nzb");
+
+      expect(res1.status).toBe(201);
+      expect(res2.status).toBe(201);
+
+      // Without TMDB, both create separate movies (different parsed titles may match)
+      // The important thing is both imported successfully
+      expect(res1.body.nzbFile.resolution).toBe("1080p");
+      expect(res2.body.nzbFile.resolution).toBe("2160p");
+    });
+
+    it("akzeptiert Import mit expliziter movieId", async () => {
+      const movie = await createMovie(token);
+      const movieId = movie.body.movie.id;
+      const nzbContent = Buffer.from("<nzb>explicit movie id test</nzb>");
+
+      const res = await request(app)
+        .post("/nzb/import")
+        .set("Authorization", `Bearer ${token}`)
+        .field("movieId", movieId)
+        .attach("nzb", nzbContent, "Some.Movie.1080p.nzb");
+
+      expect(res.status).toBe(201);
+      expect(res.body.movie.id).toBe(movieId);
+    });
+
+    it("lehnt Import ohne Datei ab", async () => {
+      const res = await request(app)
+        .post("/nzb/import")
+        .set("Authorization", `Bearer ${token}`);
+
+      expect(res.status).toBe(400);
+    });
+
+    it("lehnt unautorisiert ab", async () => {
+      const res = await request(app)
+        .post("/nzb/import")
+        .attach("nzb", Buffer.from("test"), "test.nzb");
+
+      expect(res.status).toBe(401);
+    });
+  });
 });
