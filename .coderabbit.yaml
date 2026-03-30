@@ -1,0 +1,35 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: "de-DE"
+reviews:
+  profile: "chill"
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: true
+  path_filters:
+    - "!dist/**"
+    - "!node_modules/**"
+    - "!package-lock.json"
+    - "!generated/**"
+    - "!prisma/migrations/**"
+  path_instructions:
+    - path: "src/routes/**"
+      instructions: >-
+        Review Express routes for security issues (SQL injection, auth bypass),
+        input validation, error handling, and proper HTTP status codes.
+        All routes under /watchlist must use the requireAuth middleware.
+    - path: "src/middleware/**"
+      instructions: >-
+        Review middleware for security: JWT validation, proper error responses,
+        no information leakage in error messages.
+    - path: "prisma/schema.prisma"
+      instructions: >-
+        Check for proper indexing, cascade delete rules, and data type choices.
+  tools:
+    github-checks:
+      enabled: true
+      timeout_ms: 90000
+  auto_review:
+    enabled: true
+    drafts: false
