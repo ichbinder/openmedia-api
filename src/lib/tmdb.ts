@@ -11,17 +11,22 @@ export interface TmdbMovieResult {
   posterPath: string | null;
 }
 
+export type TmdbLookupResult =
+  | { status: "found"; movie: TmdbMovieResult }
+  | { status: "not_found" }
+  | { status: "error"; reason: string };
+
 /**
  * Search for a movie on TMDB and return the best match.
- * Searches first in German to get the German title, then fetches English title.
+ * Returns structured result distinguishing "not found" from "error".
  */
 export async function searchTmdbMovie(
   title: string,
   year?: number | null
-): Promise<TmdbMovieResult | null> {
+): Promise<TmdbLookupResult> {
   if (!TMDB_API_KEY) {
-    console.warn("[tmdb] No TMDB_API_KEY set — skipping lookup");
-    return null;
+    console.log("[tmdb] No TMDB_API_KEY set — skipping lookup");
+    return { status: "not_found" };
   }
 
   try {
@@ -34,15 +39,17 @@ export async function searchTmdbMovie(
     });
 
     const searchRes = await fetch(`${TMDB_BASE}/search/movie?${searchParams}`);
+
+    if (searchRes.status === 429) {
+      return { status: "error", reason: "TMDB rate limit exceeded" };
+    }
     if (!searchRes.ok) {
-      console.error(`[tmdb] Search failed: ${searchRes.status}`);
-      return null;
+      return { status: "error", reason: `TMDB search failed: ${searchRes.status}` };
     }
 
     const searchData = (await searchRes.json()) as { results?: Array<{ id: number; title: string; original_title: string; poster_path: string | null }> };
     if (!searchData.results?.length) {
-      console.log(`[tmdb] No results for "${title}"`);
-      return null;
+      return { status: "not_found" };
     }
 
     const match = searchData.results[0];
@@ -62,7 +69,7 @@ export async function searchTmdbMovie(
     const releaseDate = detailDe?.release_date || detailEn?.release_date || "";
     const releaseYear = releaseDate ? Number(releaseDate.slice(0, 4)) : null;
 
-    const result: TmdbMovieResult = {
+    const movie: TmdbMovieResult = {
       tmdbId,
       imdbId: detailDe?.imdb_id || detailEn?.imdb_id || null,
       titleDe: detailDe?.title || match.title || title,
@@ -72,10 +79,10 @@ export async function searchTmdbMovie(
       posterPath: match.poster_path || null,
     };
 
-    console.log(`[tmdb] Matched: "${title}" → ${result.titleEn} (${result.tmdbId})`);
-    return result;
+    console.log(`[tmdb] Matched: "${title}" → ${movie.titleEn} (${movie.tmdbId})`);
+    return { status: "found", movie };
   } catch (err) {
     console.error("[tmdb] Lookup error:", err);
-    return null;
+    return { status: "error", reason: "Network or unexpected error" };
   }
 }

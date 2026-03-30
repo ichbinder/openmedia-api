@@ -382,24 +382,33 @@ router.post("/import", upload.single("nzb"), async (req: AuthRequest, res: Respo
       // TMDB lookup
       const tmdbResult = await searchTmdbMovie(parsed.title, parsed.year);
 
-      if (tmdbResult) {
+      if (tmdbResult.status === "found") {
         // Upsert: find existing or create new — race-condition safe
         movie = await prisma.nzbMovie.upsert({
-          where: { tmdbId: tmdbResult.tmdbId },
+          where: { tmdbId: tmdbResult.movie.tmdbId },
           update: {}, // Movie already exists, don't overwrite
           create: {
-            tmdbId: tmdbResult.tmdbId,
-            imdbId: tmdbResult.imdbId,
-            titleDe: tmdbResult.titleDe,
-            titleEn: tmdbResult.titleEn,
-            description: tmdbResult.description,
-            year: tmdbResult.year,
-            posterPath: tmdbResult.posterPath,
+            tmdbId: tmdbResult.movie.tmdbId,
+            imdbId: tmdbResult.movie.imdbId,
+            titleDe: tmdbResult.movie.titleDe,
+            titleEn: tmdbResult.movie.titleEn,
+            description: tmdbResult.movie.description,
+            year: tmdbResult.movie.year,
+            posterPath: tmdbResult.movie.posterPath,
           },
         });
         console.log(`[nzb-import] Movie from TMDB: ${movie.titleEn} (${movie.id})`);
+      } else if (tmdbResult.status === "error") {
+        // TMDB error (network, rate limit, no API key) — don't create orphan movie
+        console.warn(`[nzb-import] TMDB lookup failed: ${tmdbResult.reason}`);
+        res.status(503).json({
+          error: "TMDB-Lookup fehlgeschlagen. Film konnte nicht identifiziert werden.",
+          reason: tmdbResult.reason,
+          parsed,
+        });
+        return;
       } else {
-        // No TMDB match — create movie from parsed name
+        // Not found on TMDB — create movie from parsed name
         movie = await prisma.nzbMovie.create({
           data: {
             titleDe: parsed.title,
@@ -411,19 +420,38 @@ router.post("/import", upload.single("nzb"), async (req: AuthRequest, res: Respo
       }
     }
 
-    // Create NZB file entry
-    const nzbFile = await prisma.nzbFile.create({
-      data: {
-        movieId: movie.id,
-        hash,
-        originalFilename,
-        fileSize: file.buffer.length ? BigInt(file.buffer.length) : null,
-        resolution: parsed.resolution,
-        audioLanguages: parsed.audioLanguages,
-        codec: parsed.codec,
-        source: parsed.source,
-      },
-    });
+    // Create NZB file entry — handle hash race condition
+    let nzbFile;
+    try {
+      nzbFile = await prisma.nzbFile.create({
+        data: {
+          movieId: movie.id,
+          hash,
+          originalFilename,
+          fileSize: file.buffer.length ? BigInt(file.buffer.length) : null,
+          resolution: parsed.resolution,
+          audioLanguages: parsed.audioLanguages,
+          codec: parsed.codec,
+          source: parsed.source,
+        },
+      });
+    } catch (err: any) {
+      if (err?.code === "P2002") {
+        // Race condition: another request created this file between our check and insert
+        const existing = await prisma.nzbFile.findUnique({
+          where: { hash },
+          include: { movie: true },
+        });
+        res.status(200).json({
+          imported: false,
+          message: "NZB-Datei existiert bereits (gleichzeitiger Import).",
+          movie: existing ? serializeMovieWithFiles({ ...existing.movie, nzbFiles: [existing] }) : null,
+          nzbFile: existing ? serializeNzbFile(existing) : null,
+        });
+        return;
+      }
+      throw err;
+    }
 
     console.log(`[nzb-import] Imported: ${hash.slice(0, 12)}... → ${movie.titleEn} (${parsed.resolution || "unknown"})`);
 
