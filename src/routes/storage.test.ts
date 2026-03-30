@@ -2,12 +2,9 @@ import { describe, it, expect, beforeEach } from "vitest";
 import request from "supertest";
 import { createApp } from "../app.js";
 import { prisma } from "../test/setup.js";
-import jwt from "jsonwebtoken";
+import { signToken } from "../middleware/auth.js";
 
 const app = createApp();
-
-// Use the same secret as the app middleware — matches the vitest.config.ts env
-const JWT_SECRET = process.env.JWT_SECRET || "test-secret-for-testing-only";
 
 /** Create a test user and return a valid JWT token */
 async function createTestUserAndToken(): Promise<{ token: string; userId: string }> {
@@ -19,7 +16,7 @@ async function createTestUserAndToken(): Promise<{ token: string; userId: string
     },
   });
 
-  const token = jwt.sign({ userId: user.id, email: user.email }, JWT_SECRET, { expiresIn: "1h" });
+  const token = signToken({ userId: user.id, email: user.email });
 
   return { token, userId: user.id };
 }
