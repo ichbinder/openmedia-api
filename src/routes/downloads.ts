@@ -334,6 +334,46 @@ router.patch("/jobs/:id/status", async (req: AuthRequest, res: Response) => {
       updateData.progress = 100;
     }
 
+    // On completed: require s3Key and update both job + NzbFile atomically
+    if (status === "completed") {
+      if (!s3Key || typeof s3Key !== "string") {
+        res.status(400).json({ error: "s3Key ist erforderlich wenn Status 'completed' gesetzt wird." });
+        return;
+      }
+
+      const [updatedJob] = await prisma.$transaction([
+        prisma.downloadJob.update({
+          where: { id: String(req.params.id) },
+          data: updateData,
+          include: {
+            nzbFile: {
+              include: { movie: true },
+            },
+          },
+        }),
+        prisma.nzbFile.update({
+          where: { id: currentJob.nzbFileId },
+          data: {
+            s3Key: String(s3Key),
+            s3Bucket: s3Bucket ? String(s3Bucket) : (process.env.S3_BUCKET || null),
+            fileExtension: fileExtension ? String(fileExtension) : null,
+            downloadedAt: new Date(),
+          },
+        }),
+      ]);
+
+      console.log(`[download-job] Completed: ${updatedJob.id} → s3://${s3Bucket || process.env.S3_BUCKET}/${s3Key}`);
+
+      // Re-fetch to include updated NzbFile in response
+      const fullJob = await prisma.downloadJob.findUnique({
+        where: { id: updatedJob.id },
+        include: { nzbFile: { include: { movie: true } } },
+      });
+
+      res.json({ job: serializeJob(fullJob) });
+      return;
+    }
+
     const updatedJob = await prisma.downloadJob.update({
       where: { id: String(req.params.id) },
       data: updateData,
@@ -344,23 +384,7 @@ router.patch("/jobs/:id/status", async (req: AuthRequest, res: Response) => {
       },
     });
 
-    // On completed: update NzbFile with S3 reference
-    if (status === "completed" && s3Key) {
-      await prisma.nzbFile.update({
-        where: { id: currentJob.nzbFileId },
-        data: {
-          s3Key: String(s3Key),
-          s3Bucket: s3Bucket ? String(s3Bucket) : (process.env.S3_BUCKET || null),
-          fileExtension: fileExtension ? String(fileExtension) : null,
-          downloadedAt: new Date(),
-        },
-      });
-      console.log(`[download-job] Completed: ${updatedJob.id} → s3://${s3Bucket || process.env.S3_BUCKET}/${s3Key}`);
-    } else if (status === "completed" && !s3Key) {
-      console.warn(`[download-job] Completed WITHOUT s3Key: ${updatedJob.id} — NzbFile S3 reference not set!`);
-    } else {
-      console.log(`[download-job] Status update: ${updatedJob.id} → ${status}`);
-    }
+    console.log(`[download-job] Status update: ${updatedJob.id} → ${status}`);
 
     res.json({ job: serializeJob(updatedJob) });
   } catch (err) {
