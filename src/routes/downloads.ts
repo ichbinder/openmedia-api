@@ -328,7 +328,7 @@ router.patch("/jobs/:id/status", async (req: AuthRequest, res: Response) => {
     const updateData: any = {
       status,
       ...(parsedProgress !== undefined && { progress: Math.min(Math.max(parsedProgress, 0), 100) }),
-      ...(errorMsg !== undefined && { error: errorMsg }),
+      ...(errorMsg !== undefined && typeof errorMsg === "string" && { error: errorMsg.slice(0, 2000) }),
       ...(parsedServerId !== undefined && { hetznerServerId: parsedServerId }),
       ...(hetznerServerIp !== undefined && { hetznerServerIp: String(hetznerServerIp) }),
     };
@@ -430,17 +430,22 @@ router.delete("/jobs/:id", async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    // Don't allow deleting active jobs
+    // Conditional delete: CAS-style to prevent deleting a job that became active
     const activeStatuses = ["provisioning", "downloading", "uploading"];
-    if (activeStatuses.includes(job.status)) {
+    const deleteResult = await prisma.downloadJob.deleteMany({
+      where: {
+        id: job.id,
+        status: { notIn: activeStatuses },
+      },
+    });
+
+    if (deleteResult.count === 0) {
       res.status(422).json({
-        error: `Aktiver Job kann nicht gelöscht werden (Status: ${job.status}).`,
-        status: job.status,
+        error: `Job-Status hat sich geändert und kann nicht gelöscht werden.`,
       });
       return;
     }
 
-    await prisma.downloadJob.delete({ where: { id: job.id } });
     console.log(`[download-job] Deleted: ${job.id}`);
 
     res.json({ success: true });
