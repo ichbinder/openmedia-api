@@ -65,6 +65,18 @@ describe("parseNzbName", () => {
     const result = parseNzbName("Movie.2024.1080p.Remux.AVC-GROUP.nzb");
     expect(result.source).toBe("Remux");
   });
+
+  it("WEB-DL wird nicht als Dual Language erkannt", () => {
+    const result = parseNzbName("Movie.2024.1080p.WEB-DL.x264-GROUP.nzb");
+    expect(result.source).toBe("WEB-DL");
+    expect(result.audioLanguages).toEqual(["en"]); // NOT ["de", "en"]
+  });
+
+  it("DL ohne WEB-Prefix wird als Dual Language erkannt", () => {
+    const result = parseNzbName("Movie.2024.German.DL.1080p.BluRay.x264-GROUP.nzb");
+    expect(result.audioLanguages).toContain("de");
+    expect(result.audioLanguages).toContain("en");
+  });
 });
 
 describe("calculateHash", () => {

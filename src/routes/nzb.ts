@@ -1,6 +1,9 @@
 import { Router, type Response } from "express";
+import multer from "multer";
 import prisma from "../lib/prisma.js";
 import { requireAuth, type AuthRequest } from "../middleware/auth.js";
+import { parseNzbName, calculateHash } from "../lib/nzb-parser.js";
+import { searchTmdbMovie } from "../lib/tmdb.js";
 
 const router = Router();
 
@@ -315,10 +318,6 @@ router.patch("/files/:id/status", async (req: AuthRequest, res: Response) => {
 
 // --- NZB Import ---
 
-import multer from "multer";
-import { parseNzbName, calculateHash } from "../lib/nzb-parser.js";
-import { searchTmdbMovie } from "../lib/tmdb.js";
-
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } }); // 10MB max
 
 /**
@@ -384,26 +383,21 @@ router.post("/import", upload.single("nzb"), async (req: AuthRequest, res: Respo
       const tmdbResult = await searchTmdbMovie(parsed.title, parsed.year);
 
       if (tmdbResult) {
-        // Check if movie already in DB by tmdbId
-        movie = await prisma.nzbMovie.findUnique({ where: { tmdbId: tmdbResult.tmdbId } });
-
-        if (!movie) {
-          // Create new movie from TMDB data
-          movie = await prisma.nzbMovie.create({
-            data: {
-              tmdbId: tmdbResult.tmdbId,
-              imdbId: tmdbResult.imdbId,
-              titleDe: tmdbResult.titleDe,
-              titleEn: tmdbResult.titleEn,
-              description: tmdbResult.description,
-              year: tmdbResult.year,
-              posterPath: tmdbResult.posterPath,
-            },
-          });
-          console.log(`[nzb-import] Created movie from TMDB: ${movie.titleEn} (${movie.id})`);
-        } else {
-          console.log(`[nzb-import] Movie already in DB: ${movie.titleEn} (${movie.id})`);
-        }
+        // Upsert: find existing or create new — race-condition safe
+        movie = await prisma.nzbMovie.upsert({
+          where: { tmdbId: tmdbResult.tmdbId },
+          update: {}, // Movie already exists, don't overwrite
+          create: {
+            tmdbId: tmdbResult.tmdbId,
+            imdbId: tmdbResult.imdbId,
+            titleDe: tmdbResult.titleDe,
+            titleEn: tmdbResult.titleEn,
+            description: tmdbResult.description,
+            year: tmdbResult.year,
+            posterPath: tmdbResult.posterPath,
+          },
+        });
+        console.log(`[nzb-import] Movie from TMDB: ${movie.titleEn} (${movie.id})`);
       } else {
         // No TMDB match — create movie from parsed name
         movie = await prisma.nzbMovie.create({

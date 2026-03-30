@@ -45,7 +45,7 @@ const SOURCE_PATTERNS: [RegExp, string][] = [
   [/remux/i, "Remux"],
 ];
 
-// Language indicators
+// Language indicators (DL handled separately below)
 const LANGUAGE_PATTERNS: [RegExp, string][] = [
   [/\b(german|deutsch|ger)\b/i, "de"],
   [/\b(english|eng|en)\b/i, "en"],
@@ -57,11 +57,11 @@ const LANGUAGE_PATTERNS: [RegExp, string][] = [
   [/\b(russian|rus)\b/i, "ru"],
   [/\b(portuguese|por)\b/i, "pt"],
   [/\b(dutch|nld|dut)\b/i, "nl"],
-  [/\bDL\b/, "de"], // DL = Dual Language, typically German+English
 ];
 
-// DL (Dual Language) pattern — indicates both German and English
-const DUAL_LANGUAGE_PATTERN = /\bDL\b/;
+// DL = Dual Language — but NOT when part of "WEB-DL"
+// Negative lookbehind ensures "WEB-" is not before "DL"
+const DUAL_LANGUAGE_PATTERN = /(?<!WEB[-.])\bDL\b/;
 
 /**
  * Parse an NZB release name to extract metadata.
@@ -106,7 +106,6 @@ export function parseNzbName(filename: string): ParsedNzbName {
   const isDualLanguage = DUAL_LANGUAGE_PATTERN.test(name);
 
   for (const [pattern, lang] of LANGUAGE_PATTERNS) {
-    if (pattern === DUAL_LANGUAGE_PATTERN) continue; // handled separately
     if (pattern.test(name) && !audioLanguages.includes(lang)) {
       audioLanguages.push(lang);
     }
