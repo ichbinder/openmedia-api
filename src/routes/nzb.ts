@@ -6,6 +6,19 @@ const router = Router();
 
 router.use(requireAuth);
 
+const VALID_STATUSES = ["ok", "broken", "untested"] as const;
+
+/** Convert BigInt fileSize to string for JSON serialization */
+function serializeNzbFile(file: any) {
+  return { ...file, fileSize: file.fileSize?.toString() ?? null };
+}
+
+/** Serialize movie with its NZB files */
+function serializeMovieWithFiles(movie: any) {
+  if (!movie.nzbFiles) return movie;
+  return { ...movie, nzbFiles: movie.nzbFiles.map(serializeNzbFile) };
+}
+
 // GET /nzb/movies — list all NZB movies
 router.get("/movies", async (_req: AuthRequest, res: Response) => {
   try {
@@ -33,7 +46,7 @@ router.get("/movies/:id", async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    res.json({ movie });
+    res.json({ movie: serializeMovieWithFiles(movie) });
   } catch (err) {
     console.error("[nzb] Get movie error:", err);
     res.status(500).json({ error: "Fehler beim Laden des Films." });
@@ -99,6 +112,10 @@ router.put("/movies/:id", async (req: AuthRequest, res: Response) => {
       res.status(404).json({ error: "Film nicht gefunden." });
       return;
     }
+    if (err?.code === "P2002") {
+      res.status(409).json({ error: "Film mit dieser TMDB/IMDB-ID existiert bereits." });
+      return;
+    }
     console.error("[nzb] Update movie error:", err);
     res.status(500).json({ error: "Fehler beim Aktualisieren des Films." });
   }
@@ -139,7 +156,7 @@ router.get("/movies/by-tmdb/:tmdbId", async (req: AuthRequest, res: Response) =>
       return;
     }
 
-    res.json({ movie });
+    res.json({ movie: serializeMovieWithFiles(movie) });
   } catch (err) {
     console.error("[nzb] Find by TMDB error:", err);
     res.status(500).json({ error: "Fehler beim Suchen des Films." });
@@ -180,7 +197,7 @@ router.post("/files", async (req: AuthRequest, res: Response) => {
     });
 
     console.log(`[nzb] File added: ${hash} → ${movie.titleEn}`);
-    res.status(201).json({ nzbFile: { ...nzbFile, fileSize: nzbFile.fileSize?.toString() } });
+    res.status(201).json({ nzbFile: serializeNzbFile(nzbFile) });
   } catch (err: any) {
     if (err?.code === "P2002") {
       res.status(409).json({ error: "NZB-Datei mit diesem Hash existiert bereits." });
@@ -196,6 +213,15 @@ router.put("/files/:id", async (req: AuthRequest, res: Response) => {
   try {
     const { resolution, audioLanguages, subtitleLanguages, codec, source, status, brokenReason } = req.body;
 
+    // Validate status if provided
+    if (status !== undefined && !VALID_STATUSES.includes(status)) {
+      res.status(400).json({ error: "Status muss 'ok', 'broken' oder 'untested' sein." });
+      return;
+    }
+
+    // Auto-clear brokenReason when status is not "broken"
+    const effectiveBrokenReason = status && status !== "broken" ? null : brokenReason;
+
     const nzbFile = await prisma.nzbFile.update({
       where: { id: String(req.params.id) },
       data: {
@@ -205,12 +231,12 @@ router.put("/files/:id", async (req: AuthRequest, res: Response) => {
         ...(codec !== undefined && { codec }),
         ...(source !== undefined && { source }),
         ...(status !== undefined && { status }),
-        ...(brokenReason !== undefined && { brokenReason }),
+        ...(effectiveBrokenReason !== undefined && { brokenReason: effectiveBrokenReason }),
       },
     });
 
     console.log(`[nzb] File updated: ${nzbFile.hash} (status: ${nzbFile.status})`);
-    res.json({ nzbFile: { ...nzbFile, fileSize: nzbFile.fileSize?.toString() } });
+    res.json({ nzbFile: serializeNzbFile(nzbFile) });
   } catch (err: any) {
     if (err?.code === "P2025") {
       res.status(404).json({ error: "NZB-Datei nicht gefunden." });
@@ -250,7 +276,7 @@ router.get("/files/by-hash/:hash", async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    res.json({ nzbFile: { ...nzbFile, fileSize: nzbFile.fileSize?.toString() } });
+    res.json({ nzbFile: serializeNzbFile(nzbFile) });
   } catch (err) {
     console.error("[nzb] Find by hash error:", err);
     res.status(500).json({ error: "Fehler beim Suchen der NZB-Datei." });
@@ -262,7 +288,7 @@ router.patch("/files/:id/status", async (req: AuthRequest, res: Response) => {
   try {
     const { status, brokenReason } = req.body;
 
-    if (!status || !["ok", "broken", "untested"].includes(status)) {
+    if (!status || !VALID_STATUSES.includes(status)) {
       res.status(400).json({ error: "Status muss 'ok', 'broken' oder 'untested' sein." });
       return;
     }
@@ -276,7 +302,7 @@ router.patch("/files/:id/status", async (req: AuthRequest, res: Response) => {
     });
 
     console.log(`[nzb] File status updated: ${nzbFile.hash} → ${status}`);
-    res.json({ nzbFile: { ...nzbFile, fileSize: nzbFile.fileSize?.toString() } });
+    res.json({ nzbFile: serializeNzbFile(nzbFile) });
   } catch (err: any) {
     if (err?.code === "P2025") {
       res.status(404).json({ error: "NZB-Datei nicht gefunden." });
