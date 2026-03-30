@@ -1,6 +1,6 @@
 # OpenMedia API
 
-Express.js Backend für die CineScope Film-Plattform.
+Express.js Backend für die OpenMedia Film-Plattform.
 
 ## Tech Stack
 
