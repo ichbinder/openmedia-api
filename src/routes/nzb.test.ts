@@ -1,0 +1,250 @@
+import { describe, it, expect, beforeEach } from "vitest";
+import request from "supertest";
+import { createApp } from "../app.js";
+import { prisma } from "../test/setup.js";
+
+const app = createApp();
+
+// Helper: register + get token
+let emailCounter = 0;
+async function getAuthToken() {
+  emailCounter++;
+  const res = await request(app)
+    .post("/auth/register")
+    .send({ email: `nzb-${emailCounter}-${Date.now()}@test.de`, password: "test123", name: "NZB User" });
+  return res.body.token as string;
+}
+
+// Helper: create a movie with unique tmdbId
+let tmdbCounter = 10000;
+async function createMovie(token: string, overrides: Record<string, unknown> = {}) {
+  tmdbCounter++;
+  const res = await request(app)
+    .post("/nzb/movies")
+    .set("Authorization", `Bearer ${token}`)
+    .send({
+      titleDe: "Der Pate",
+      titleEn: "The Godfather",
+      description: "Ein Mafioso...",
+      tmdbId: tmdbCounter,
+      imdbId: `tt${tmdbCounter}`,
+      year: 1972,
+      ...overrides,
+    });
+  return res;
+}
+
+describe("NZB Routes", () => {
+  let token: string;
+
+  beforeEach(async () => {
+    token = await getAuthToken();
+  });
+
+  describe("NzbMovie CRUD", () => {
+    it("erstellt einen Film", async () => {
+      const res = await createMovie(token);
+
+      expect(res.status).toBe(201);
+      expect(res.body.movie.titleEn).toBe("The Godfather");
+      expect(res.body.movie.tmdbId).toBeDefined();
+      expect(res.body.movie.year).toBe(1972);
+    });
+
+    it("lehnt doppelte TMDB-ID ab", async () => {
+      await createMovie(token, { tmdbId: 999999 });
+      const res = await createMovie(token, { tmdbId: 999999 });
+
+      expect(res.status).toBe(409);
+    });
+
+    it("listet alle Filme", async () => {
+      await createMovie(token, { tmdbId: 1, titleEn: "Film 1" });
+      await createMovie(token, { tmdbId: 2, titleEn: "Film 2" });
+
+      const res = await request(app)
+        .get("/nzb/movies")
+        .set("Authorization", `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.movies).toHaveLength(2);
+    });
+
+    it("findet Film nach ID", async () => {
+      const created = await createMovie(token);
+      const res = await request(app)
+        .get(`/nzb/movies/${created.body.movie.id}`)
+        .set("Authorization", `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.movie.titleEn).toBe("The Godfather");
+    });
+
+    it("findet Film nach TMDB-ID", async () => {
+      await createMovie(token, { tmdbId: 888888 });
+      const res = await request(app)
+        .get("/nzb/movies/by-tmdb/888888")
+        .set("Authorization", `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.movie.titleEn).toBe("The Godfather");
+    });
+
+    it("aktualisiert einen Film", async () => {
+      const created = await createMovie(token);
+      const res = await request(app)
+        .put(`/nzb/movies/${created.body.movie.id}`)
+        .set("Authorization", `Bearer ${token}`)
+        .send({ titleDe: "Der Pate - Aktualisiert" });
+
+      expect(res.status).toBe(200);
+      expect(res.body.movie.titleDe).toBe("Der Pate - Aktualisiert");
+    });
+
+    it("löscht einen Film", async () => {
+      const created = await createMovie(token);
+      const res = await request(app)
+        .delete(`/nzb/movies/${created.body.movie.id}`)
+        .set("Authorization", `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+    });
+
+    it("lehnt unautorisiert ab", async () => {
+      const res = await request(app).get("/nzb/movies");
+      expect(res.status).toBe(401);
+    });
+  });
+
+  describe("NzbFile CRUD", () => {
+    let movieId: string;
+
+    beforeEach(async () => {
+      const movie = await createMovie(token, { tmdbId: Math.floor(Math.random() * 100000) });
+      movieId = movie.body.movie.id;
+    });
+
+    it("fügt NZB-Datei zu Film hinzu", async () => {
+      const res = await request(app)
+        .post("/nzb/files")
+        .set("Authorization", `Bearer ${token}`)
+        .send({
+          movieId,
+          hash: "abc123hash",
+          originalFilename: "The.Godfather.1972.1080p.BluRay.x264-GROUP.nzb",
+          resolution: "1080p",
+          audioLanguages: ["de", "en"],
+          codec: "x264",
+          source: "BluRay",
+        });
+
+      expect(res.status).toBe(201);
+      expect(res.body.nzbFile.hash).toBe("abc123hash");
+      expect(res.body.nzbFile.resolution).toBe("1080p");
+      expect(res.body.nzbFile.audioLanguages).toEqual(["de", "en"]);
+    });
+
+    it("lehnt doppelten Hash ab", async () => {
+      await request(app)
+        .post("/nzb/files")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ movieId, hash: "samehash", originalFilename: "file1.nzb" });
+
+      const res = await request(app)
+        .post("/nzb/files")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ movieId, hash: "samehash", originalFilename: "file2.nzb" });
+
+      expect(res.status).toBe(409);
+    });
+
+    it("findet NZB-Datei nach Hash", async () => {
+      await request(app)
+        .post("/nzb/files")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ movieId, hash: "findhash", originalFilename: "file.nzb" });
+
+      const res = await request(app)
+        .get("/nzb/files/by-hash/findhash")
+        .set("Authorization", `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.nzbFile.hash).toBe("findhash");
+      expect(res.body.nzbFile.movie).toBeDefined();
+    });
+
+    it("aktualisiert NZB-Datei Status", async () => {
+      const created = await request(app)
+        .post("/nzb/files")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ movieId, hash: "statushash", originalFilename: "file.nzb" });
+
+      const res = await request(app)
+        .patch(`/nzb/files/${created.body.nzbFile.id}/status`)
+        .set("Authorization", `Bearer ${token}`)
+        .send({ status: "broken", brokenReason: "Ton verschoben ab Minute 42" });
+
+      expect(res.status).toBe(200);
+      expect(res.body.nzbFile.status).toBe("broken");
+      expect(res.body.nzbFile.brokenReason).toBe("Ton verschoben ab Minute 42");
+    });
+
+    it("setzt brokenReason auf null wenn Status nicht broken", async () => {
+      const created = await request(app)
+        .post("/nzb/files")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ movieId, hash: "clearhash", originalFilename: "file.nzb" });
+
+      // Set broken first
+      await request(app)
+        .patch(`/nzb/files/${created.body.nzbFile.id}/status`)
+        .set("Authorization", `Bearer ${token}`)
+        .send({ status: "broken", brokenReason: "Kaputt" });
+
+      // Set ok — reason should clear
+      const res = await request(app)
+        .patch(`/nzb/files/${created.body.nzbFile.id}/status`)
+        .set("Authorization", `Bearer ${token}`)
+        .send({ status: "ok" });
+
+      expect(res.body.nzbFile.status).toBe("ok");
+      expect(res.body.nzbFile.brokenReason).toBeNull();
+    });
+
+    it("löscht NZB-Datei", async () => {
+      const created = await request(app)
+        .post("/nzb/files")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ movieId, hash: "deletehash", originalFilename: "file.nzb" });
+
+      const res = await request(app)
+        .delete(`/nzb/files/${created.body.nzbFile.id}`)
+        .set("Authorization", `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+    });
+
+    it("cascade delete: Film löschen löscht NZB-Dateien", async () => {
+      await request(app)
+        .post("/nzb/files")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ movieId, hash: "cascade1", originalFilename: "file1.nzb" });
+      await request(app)
+        .post("/nzb/files")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ movieId, hash: "cascade2", originalFilename: "file2.nzb" });
+
+      // Delete movie
+      await request(app)
+        .delete(`/nzb/movies/${movieId}`)
+        .set("Authorization", `Bearer ${token}`);
+
+      // Files should be gone
+      const check1 = await request(app)
+        .get("/nzb/files/by-hash/cascade1")
+        .set("Authorization", `Bearer ${token}`);
+      expect(check1.status).toBe(404);
+    });
+  });
+});
