@@ -14,22 +14,24 @@ export function createApp() {
   app.use("/auth", authRoutes);
   app.use("/watchlist", watchlistRoutes);
 
-  app.get("/health", async (_req, res) => {
-    let dbStatus = "unknown";
-    try {
-      await prisma.$queryRaw`SELECT 1`;
-      dbStatus = "connected";
-    } catch {
-      dbStatus = "disconnected";
-    }
+  // Health check with DB status
+app.get("/health", async (_req, res) => {
+  let dbStatus = "unknown";
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    dbStatus = "connected";
+  } catch {
+    dbStatus = "disconnected";
+  }
 
-    res.json({
-      status: "ok",
-      db: dbStatus,
-      timestamp: new Date().toISOString(),
-      uptime: process.uptime(),
-    });
+  res.json({
+    status: "ok",
+    version: "0.1.0",
+    db: dbStatus,
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
   });
+});
 
   app.use(errorHandler);
 
