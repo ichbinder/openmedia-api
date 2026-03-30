@@ -351,6 +351,12 @@ router.patch("/jobs/:id/status", async (req: AuthRequest, res: Response) => {
         return;
       }
 
+      const effectiveBucket = s3Bucket ? String(s3Bucket) : process.env.S3_BUCKET;
+      if (!effectiveBucket) {
+        res.status(400).json({ error: "s3Bucket ist erforderlich (weder im Request noch als S3_BUCKET konfiguriert)." });
+        return;
+      }
+
       // Compare-and-swap: only update if status hasn't changed concurrently
       const updateResult = await prisma.$transaction(async (tx) => {
         const casResult = await tx.downloadJob.updateMany({
@@ -366,7 +372,7 @@ router.patch("/jobs/:id/status", async (req: AuthRequest, res: Response) => {
           where: { id: currentJob.nzbFileId },
           data: {
             s3Key: String(s3Key),
-            s3Bucket: s3Bucket ? String(s3Bucket) : (process.env.S3_BUCKET || null),
+            s3Bucket: effectiveBucket,
             fileExtension: fileExtension ? String(fileExtension) : null,
             downloadedAt: new Date(),
           },
@@ -380,13 +386,18 @@ router.patch("/jobs/:id/status", async (req: AuthRequest, res: Response) => {
         return;
       }
 
-      console.log(`[download-job] Completed: ${currentJob.id} → s3://${s3Bucket || process.env.S3_BUCKET}/${s3Key}`);
+      console.log(`[download-job] Completed: ${currentJob.id} → s3://${effectiveBucket}/${s3Key}`);
 
       // Re-fetch to include updated NzbFile in response
       const fullJob = await prisma.downloadJob.findUnique({
         where: { id: currentJob.id },
         include: { nzbFile: { include: { movie: true } } },
       });
+
+      if (!fullJob) {
+        res.status(404).json({ error: "Job wurde zwischenzeitlich gelöscht." });
+        return;
+      }
 
       res.json({ job: serializeJob(fullJob) });
       return;
@@ -408,6 +419,11 @@ router.patch("/jobs/:id/status", async (req: AuthRequest, res: Response) => {
       where: { id: String(req.params.id) },
       include: { nzbFile: { include: { movie: true } } },
     });
+
+    if (!updatedJob) {
+      res.status(404).json({ error: "Job wurde zwischenzeitlich gelöscht." });
+      return;
+    }
 
     console.log(`[download-job] Status update: ${currentJob.id} → ${status}`);
 
