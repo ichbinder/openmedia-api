@@ -143,6 +143,12 @@ export async function getSabnzbdStatus(): Promise<SabnzbdStatusResult> {
     }
 
     const data = (await res.json()) as Record<string, any>;
+
+    // SABnzbd returns HTTP 200 even for auth failures — check for error in body
+    if (data.status === false || data.error) {
+      return { connected: false, error: data.error || "SABnzbd-Authentifizierung fehlgeschlagen." };
+    }
+
     const queue = data.queue || {};
 
     return {
