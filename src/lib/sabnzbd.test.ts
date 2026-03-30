@@ -1,22 +1,48 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { sendToSabnzbd, getSabnzbdStatus, isSabnzbdConfigured } from "./sabnzbd.js";
-
-// Save original env
-const originalEnv = { ...process.env };
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { sendToSabnzbd, getSabnzbdStatus, isSabnzbdConfigured, getSabnzbdConfigSummary } from "./sabnzbd.js";
 
 describe("SABnzbd Client", () => {
+  const savedEnv = { ...process.env };
+
   beforeEach(() => {
-    vi.restoreAllMocks();
-    // Reset env
-    process.env = { ...originalEnv };
+    // Ensure SABnzbd is NOT configured for these tests
+    delete process.env.SABNZBD_URL;
+    delete process.env.SABNZBD_API_KEY;
+    delete process.env.SABNZBD_CATEGORY;
+  });
+
+  afterEach(() => {
+    process.env = { ...savedEnv };
   });
 
   describe("isSabnzbdConfigured", () => {
-    it("gibt false wenn URL fehlt", () => {
-      delete process.env.SABNZBD_URL;
-      delete process.env.SABNZBD_API_KEY;
-      // Module caches the values at import time, so we test the function's logic
+    it("gibt false wenn URL und API Key fehlen", () => {
       expect(isSabnzbdConfigured()).toBe(false);
+    });
+
+    it("gibt true wenn URL und API Key gesetzt", () => {
+      process.env.SABNZBD_URL = "http://test:8080";
+      process.env.SABNZBD_API_KEY = "test-key";
+      expect(isSabnzbdConfigured()).toBe(true);
+    });
+  });
+
+  describe("getSabnzbdConfigSummary", () => {
+    it("zeigt configured: false wenn nicht konfiguriert", () => {
+      const config = getSabnzbdConfigSummary();
+      expect(config.configured).toBe(false);
+      // Should NOT expose URL or API key
+      expect(config).not.toHaveProperty("url");
+      expect(config).not.toHaveProperty("apiKey");
+    });
+
+    it("zeigt category wenn gesetzt", () => {
+      process.env.SABNZBD_URL = "http://test:8080";
+      process.env.SABNZBD_API_KEY = "test-key";
+      process.env.SABNZBD_CATEGORY = "movies";
+      const config = getSabnzbdConfigSummary();
+      expect(config.configured).toBe(true);
+      expect(config.category).toBe("movies");
     });
   });
 

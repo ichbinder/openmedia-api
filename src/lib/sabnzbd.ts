@@ -7,15 +7,7 @@
  *   SABNZBD_CATEGORY — Download category (optional, e.g. "movies")
  */
 
-const SABNZBD_URL = process.env.SABNZBD_URL || "";
-const SABNZBD_API_KEY = process.env.SABNZBD_API_KEY || "";
-const SABNZBD_CATEGORY = process.env.SABNZBD_CATEGORY || "";
-
-export interface SabnzbdConfig {
-  url: string;
-  apiKey: string;
-  category: string;
-}
+const FETCH_TIMEOUT_MS = 30_000;
 
 export interface SabnzbdSendResult {
   success: boolean;
@@ -32,29 +24,50 @@ export interface SabnzbdStatusResult {
   error?: string;
 }
 
-/**
- * Get current SABnzbd configuration from environment.
- */
-export function getSabnzbdConfig(): SabnzbdConfig {
-  return {
-    url: SABNZBD_URL,
-    apiKey: SABNZBD_API_KEY,
-    category: SABNZBD_CATEGORY,
-  };
+/** Read config fresh from env every time — no module-level caching */
+function getUrl(): string {
+  return process.env.SABNZBD_URL || "";
+}
+
+function getApiKey(): string {
+  return process.env.SABNZBD_API_KEY || "";
+}
+
+function getCategory(): string {
+  return process.env.SABNZBD_CATEGORY || "";
 }
 
 /**
  * Check if SABnzbd is configured.
  */
 export function isSabnzbdConfigured(): boolean {
-  return !!(SABNZBD_URL && SABNZBD_API_KEY);
+  return !!(getUrl() && getApiKey());
+}
+
+/**
+ * Get SABnzbd config summary (no secrets exposed).
+ */
+export function getSabnzbdConfigSummary(): { configured: boolean; category: string | null } {
+  return {
+    configured: isSabnzbdConfigured(),
+    category: getCategory() || null,
+  };
+}
+
+/** Create a fetch with timeout via AbortController */
+async function fetchWithTimeout(url: string, options: RequestInit = {}): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 /**
  * Send an NZB file to SABnzbd for download.
- *
- * @param nzbContent — raw NZB XML content
- * @param filename — display name for the download
  */
 export async function sendToSabnzbd(
   nzbContent: string | Buffer,
@@ -68,15 +81,16 @@ export async function sendToSabnzbd(
     const formData = new FormData();
     const blob = new Blob([nzbContent], { type: "application/x-nzb" });
     formData.append("nzbfile", blob, filename.endsWith(".nzb") ? filename : `${filename}.nzb`);
-    formData.append("apikey", SABNZBD_API_KEY);
+    formData.append("apikey", getApiKey());
     formData.append("mode", "addfile");
     formData.append("output", "json");
 
-    if (SABNZBD_CATEGORY) {
-      formData.append("cat", SABNZBD_CATEGORY);
+    const category = getCategory();
+    if (category) {
+      formData.append("cat", category);
     }
 
-    const res = await fetch(`${SABNZBD_URL}/api`, {
+    const res = await fetchWithTimeout(`${getUrl()}/api`, {
       method: "POST",
       body: formData,
     });
@@ -98,6 +112,9 @@ export async function sendToSabnzbd(
       nzoIds: data.nzo_ids || [],
     };
   } catch (err: any) {
+    if (err.name === "AbortError") {
+      return { success: false, error: "SABnzbd Timeout — keine Antwort innerhalb von 30 Sekunden." };
+    }
     console.error("[sabnzbd] Send error:", err.message);
     return { success: false, error: `Verbindung zu SABnzbd fehlgeschlagen: ${err.message}` };
   }
@@ -113,13 +130,13 @@ export async function getSabnzbdStatus(): Promise<SabnzbdStatusResult> {
 
   try {
     const params = new URLSearchParams({
-      apikey: SABNZBD_API_KEY,
+      apikey: getApiKey(),
       mode: "queue",
       output: "json",
       limit: "0",
     });
 
-    const res = await fetch(`${SABNZBD_URL}/api?${params}`);
+    const res = await fetchWithTimeout(`${getUrl()}/api?${params}`);
 
     if (!res.ok) {
       return { connected: false, error: `HTTP ${res.status}` };
@@ -136,6 +153,9 @@ export async function getSabnzbdStatus(): Promise<SabnzbdStatusResult> {
       diskSpace: queue.diskspace1 ? `${queue.diskspace1} GB` : undefined,
     };
   } catch (err: any) {
+    if (err.name === "AbortError") {
+      return { connected: false, error: "Timeout — SABnzbd antwortet nicht." };
+    }
     return { connected: false, error: err.message };
   }
 }

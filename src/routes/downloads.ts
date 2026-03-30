@@ -1,7 +1,7 @@
 import { Router, type Response } from "express";
 import prisma from "../lib/prisma.js";
 import { requireAuth, type AuthRequest } from "../middleware/auth.js";
-import { sendToSabnzbd, getSabnzbdStatus, isSabnzbdConfigured } from "../lib/sabnzbd.js";
+import { sendToSabnzbd, getSabnzbdStatus, getSabnzbdConfigSummary } from "../lib/sabnzbd.js";
 
 const router = Router();
 
@@ -14,9 +14,15 @@ const NZB_API_URL = process.env.NZB_API_URL || "http://localhost:4100";
  */
 async function fetchNzbFromStorage(hash: string, token: string): Promise<string | null> {
   try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30_000);
+
     const res = await fetch(`${NZB_API_URL}/files/${hash}`, {
       headers: { Authorization: `Bearer ${token}` },
+      signal: controller.signal,
     });
+
+    clearTimeout(timeout);
 
     if (!res.ok) {
       console.error(`[download] Failed to fetch NZB ${hash.slice(0, 12)}... from storage: ${res.status}`);
@@ -25,7 +31,11 @@ async function fetchNzbFromStorage(hash: string, token: string): Promise<string 
 
     return await res.text();
   } catch (err: any) {
-    console.error(`[download] Storage connection error: ${err.message}`);
+    if (err.name === "AbortError") {
+      console.error(`[download] Storage timeout for ${hash.slice(0, 12)}...`);
+    } else {
+      console.error(`[download] Storage connection error: ${err.message}`);
+    }
     return null;
   }
 }
@@ -36,14 +46,9 @@ router.get("/sabnzbd/status", async (_req: AuthRequest, res: Response) => {
   res.json(status);
 });
 
-// GET /downloads/sabnzbd/config — check if SABnzbd is configured (no secrets exposed)
+// GET /downloads/sabnzbd/config — check if SABnzbd is configured (no secrets or URLs exposed)
 router.get("/sabnzbd/config", (_req: AuthRequest, res: Response) => {
-  const configured = isSabnzbdConfigured();
-  res.json({
-    configured,
-    url: configured ? process.env.SABNZBD_URL : null,
-    category: process.env.SABNZBD_CATEGORY || null,
-  });
+  res.json(getSabnzbdConfigSummary());
 });
 
 // POST /downloads/start — start a download by sending NZB to SABnzbd
