@@ -169,29 +169,39 @@ router.post("/jobs", async (req: AuthRequest, res: Response) => {
 
     // Atomic check-and-create inside a transaction to prevent race conditions
     // (two concurrent requests for the same nzbFileId)
-    const result = await prisma.$transaction(async (tx) => {
-      const existingJob = await tx.downloadJob.findFirst({
-        where: {
-          nzbFileId,
-          status: { in: ["queued", "provisioning", "downloading", "uploading"] },
-        },
-      });
-
-      if (existingJob) {
-        return { conflict: true as const, existingJob };
-      }
-
-      const job = await tx.downloadJob.create({
-        data: { nzbFileId },
-        include: {
-          nzbFile: {
-            include: { movie: true },
+    let result;
+    try {
+      result = await prisma.$transaction(async (tx) => {
+        const existingJob = await tx.downloadJob.findFirst({
+          where: {
+            nzbFileId,
+            status: { in: ["queued", "provisioning", "downloading", "uploading"] },
           },
-        },
-      });
+        });
 
-      return { conflict: false as const, job };
-    });
+        if (existingJob) {
+          return { conflict: true as const, existingJob };
+        }
+
+        const job = await tx.downloadJob.create({
+          data: { nzbFileId },
+          include: {
+            nzbFile: {
+              include: { movie: true },
+            },
+          },
+        });
+
+        return { conflict: false as const, job };
+      }, { isolationLevel: "Serializable" });
+    } catch (err: any) {
+      // Serialization failure from concurrent transaction — treat as conflict
+      if (err?.code === "P2034" || err?.code === "40001") {
+        res.status(409).json({ error: "Gleichzeitiger Request — bitte erneut versuchen." });
+        return;
+      }
+      throw err;
+    }
 
     if (result.conflict) {
       res.status(409).json({
@@ -305,8 +315,8 @@ router.patch("/jobs/:id/status", async (req: AuthRequest, res: Response) => {
     const parsedProgress = progress !== undefined ? Number(progress) : undefined;
     const parsedServerId = hetznerServerId !== undefined ? Number(hetznerServerId) : undefined;
 
-    if (parsedProgress !== undefined && (isNaN(parsedProgress) || parsedProgress < 0 || parsedProgress > 100)) {
-      res.status(400).json({ error: "progress muss eine Zahl zwischen 0 und 100 sein." });
+    if (parsedProgress !== undefined && (!Number.isFinite(parsedProgress) || !Number.isInteger(parsedProgress) || parsedProgress < 0 || parsedProgress > 100)) {
+      res.status(400).json({ error: "progress muss eine ganze Zahl zwischen 0 und 100 sein." });
       return;
     }
 
@@ -341,17 +351,18 @@ router.patch("/jobs/:id/status", async (req: AuthRequest, res: Response) => {
         return;
       }
 
-      const [updatedJob] = await prisma.$transaction([
-        prisma.downloadJob.update({
-          where: { id: String(req.params.id) },
+      // Compare-and-swap: only update if status hasn't changed concurrently
+      const updateResult = await prisma.$transaction(async (tx) => {
+        const casResult = await tx.downloadJob.updateMany({
+          where: { id: String(req.params.id), status: currentJob.status },
           data: updateData,
-          include: {
-            nzbFile: {
-              include: { movie: true },
-            },
-          },
-        }),
-        prisma.nzbFile.update({
+        });
+
+        if (casResult.count === 0) {
+          return { conflict: true as const };
+        }
+
+        await tx.nzbFile.update({
           where: { id: currentJob.nzbFileId },
           data: {
             s3Key: String(s3Key),
@@ -359,14 +370,21 @@ router.patch("/jobs/:id/status", async (req: AuthRequest, res: Response) => {
             fileExtension: fileExtension ? String(fileExtension) : null,
             downloadedAt: new Date(),
           },
-        }),
-      ]);
+        });
 
-      console.log(`[download-job] Completed: ${updatedJob.id} → s3://${s3Bucket || process.env.S3_BUCKET}/${s3Key}`);
+        return { conflict: false as const };
+      });
+
+      if (updateResult.conflict) {
+        res.status(409).json({ error: "Status wurde zwischenzeitlich geändert (Konflikt)." });
+        return;
+      }
+
+      console.log(`[download-job] Completed: ${currentJob.id} → s3://${s3Bucket || process.env.S3_BUCKET}/${s3Key}`);
 
       // Re-fetch to include updated NzbFile in response
       const fullJob = await prisma.downloadJob.findUnique({
-        where: { id: updatedJob.id },
+        where: { id: currentJob.id },
         include: { nzbFile: { include: { movie: true } } },
       });
 
@@ -374,17 +392,24 @@ router.patch("/jobs/:id/status", async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    const updatedJob = await prisma.downloadJob.update({
-      where: { id: String(req.params.id) },
+    // Non-completed status: compare-and-swap update
+    const casResult = await prisma.downloadJob.updateMany({
+      where: { id: String(req.params.id), status: currentJob.status },
       data: updateData,
-      include: {
-        nzbFile: {
-          include: { movie: true },
-        },
-      },
     });
 
-    console.log(`[download-job] Status update: ${updatedJob.id} → ${status}`);
+    if (casResult.count === 0) {
+      res.status(409).json({ error: "Status wurde zwischenzeitlich geändert (Konflikt)." });
+      return;
+    }
+
+    // Re-fetch with includes for response
+    const updatedJob = await prisma.downloadJob.findUnique({
+      where: { id: String(req.params.id) },
+      include: { nzbFile: { include: { movie: true } } },
+    });
+
+    console.log(`[download-job] Status update: ${currentJob.id} → ${status}`);
 
     res.json({ job: serializeJob(updatedJob) });
   } catch (err) {
