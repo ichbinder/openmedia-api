@@ -9,6 +9,34 @@ router.use(requireAuth);
 
 const NZB_API_URL = process.env.NZB_API_URL || "http://localhost:4100";
 
+// ---------------------------------------------------------------------------
+// Valid status transitions for download jobs
+// ---------------------------------------------------------------------------
+
+const VALID_STATUSES = ["queued", "provisioning", "downloading", "uploading", "completed", "failed"] as const;
+type JobStatus = (typeof VALID_STATUSES)[number];
+
+/** Map of allowed status transitions: current → allowed next statuses */
+const STATUS_TRANSITIONS: Record<string, JobStatus[]> = {
+  queued: ["provisioning", "failed"],
+  provisioning: ["downloading", "failed"],
+  downloading: ["uploading", "failed"],
+  uploading: ["completed", "failed"],
+  // Terminal states — no transitions out
+  completed: [],
+  failed: [],
+};
+
+function isValidTransition(from: string, to: string): boolean {
+  const allowed = STATUS_TRANSITIONS[from];
+  if (!allowed) return false;
+  return allowed.includes(to as JobStatus);
+}
+
+// ---------------------------------------------------------------------------
+// NZB Storage helper
+// ---------------------------------------------------------------------------
+
 /**
  * Fetch NZB file content from openmedia-nzb by hash.
  */
@@ -40,18 +68,22 @@ async function fetchNzbFromStorage(hash: string, token: string): Promise<string 
   }
 }
 
+// ---------------------------------------------------------------------------
+// SABnzbd status endpoints (legacy, kept for compatibility)
+// ---------------------------------------------------------------------------
+
 // GET /downloads/sabnzbd/status — check SABnzbd connection
 router.get("/sabnzbd/status", async (_req: AuthRequest, res: Response) => {
   const status = await getSabnzbdStatus();
   res.json(status);
 });
 
-// GET /downloads/sabnzbd/config — check if SABnzbd is configured (no secrets or URLs exposed)
+// GET /downloads/sabnzbd/config — check if SABnzbd is configured
 router.get("/sabnzbd/config", (_req: AuthRequest, res: Response) => {
   res.json(getSabnzbdConfigSummary());
 });
 
-// POST /downloads/start — start a download by sending NZB to SABnzbd
+// POST /downloads/start — start a download by sending NZB to SABnzbd (legacy)
 router.post("/start", async (req: AuthRequest, res: Response) => {
   try {
     const { nzbFileId } = req.body;
@@ -61,7 +93,6 @@ router.post("/start", async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    // Get NZB file info from DB
     const nzbFile = await prisma.nzbFile.findUnique({
       where: { id: nzbFileId },
       include: { movie: true },
@@ -72,10 +103,7 @@ router.post("/start", async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    // Get the auth token from the request to forward to openmedia-nzb
     const authHeader = req.headers.authorization || "";
-
-    // Fetch NZB content from openmedia-nzb
     const nzbContent = await fetchNzbFromStorage(nzbFile.hash, authHeader.replace("Bearer ", ""));
 
     if (!nzbContent) {
@@ -83,10 +111,7 @@ router.post("/start", async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    // Build a readable filename for SABnzbd
     const downloadName = `${nzbFile.movie.titleEn} (${nzbFile.movie.year || "unknown"}) [${nzbFile.resolution || "unknown"}]`;
-
-    // Send to SABnzbd
     const result = await sendToSabnzbd(nzbContent, downloadName);
 
     if (!result.success) {
@@ -99,24 +124,256 @@ router.post("/start", async (req: AuthRequest, res: Response) => {
 
     res.status(201).json({
       started: true,
-      movie: {
-        id: nzbFile.movie.id,
-        titleDe: nzbFile.movie.titleDe,
-        titleEn: nzbFile.movie.titleEn,
-        year: nzbFile.movie.year,
-      },
-      nzbFile: {
-        id: nzbFile.id,
-        hash: nzbFile.hash,
-        resolution: nzbFile.resolution,
-      },
-      sabnzbd: {
-        nzoIds: result.nzoIds,
-      },
+      movie: { id: nzbFile.movie.id, titleDe: nzbFile.movie.titleDe, titleEn: nzbFile.movie.titleEn, year: nzbFile.movie.year },
+      nzbFile: { id: nzbFile.id, hash: nzbFile.hash, resolution: nzbFile.resolution },
+      sabnzbd: { nzoIds: result.nzoIds },
     });
   } catch (err) {
     console.error("[download] Start error:", err);
     res.status(500).json({ error: "Fehler beim Starten des Downloads." });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Download Job CRUD
+// ---------------------------------------------------------------------------
+
+/** Serialize BigInt fields for JSON response */
+function serializeJob(job: any) {
+  const nzbFile = job.nzbFile
+    ? { ...job.nzbFile, fileSize: job.nzbFile.fileSize?.toString() ?? null }
+    : undefined;
+  return { ...job, nzbFile };
+}
+
+// POST /downloads/jobs — create a download job
+router.post("/jobs", async (req: AuthRequest, res: Response) => {
+  try {
+    const { nzbFileId } = req.body;
+
+    if (!nzbFileId || typeof nzbFileId !== "string") {
+      res.status(400).json({ error: "nzbFileId ist erforderlich (string)." });
+      return;
+    }
+
+    // Verify NZB file exists
+    const nzbFile = await prisma.nzbFile.findUnique({
+      where: { id: nzbFileId },
+      include: { movie: true },
+    });
+
+    if (!nzbFile) {
+      res.status(404).json({ error: "NZB-Datei nicht gefunden." });
+      return;
+    }
+
+    // Check for existing active job for this file
+    const existingJob = await prisma.downloadJob.findFirst({
+      where: {
+        nzbFileId,
+        status: { in: ["queued", "provisioning", "downloading", "uploading"] },
+      },
+    });
+
+    if (existingJob) {
+      res.status(409).json({
+        error: "Es läuft bereits ein Download für diese Datei.",
+        existingJobId: existingJob.id,
+        existingStatus: existingJob.status,
+      });
+      return;
+    }
+
+    const job = await prisma.downloadJob.create({
+      data: { nzbFileId },
+      include: {
+        nzbFile: {
+          include: { movie: true },
+        },
+      },
+    });
+
+    console.log(`[download-job] Created: ${job.id} for ${nzbFile.movie.titleEn} (${nzbFile.hash.slice(0, 12)}...)`);
+
+    res.status(201).json({ job: serializeJob(job) });
+  } catch (err) {
+    console.error("[download-job] Create error:", err);
+    res.status(500).json({ error: "Fehler beim Erstellen des Download-Jobs." });
+  }
+});
+
+// GET /downloads/jobs — list download jobs
+router.get("/jobs", async (req: AuthRequest, res: Response) => {
+  try {
+    const statusFilter = typeof req.query.status === "string" ? req.query.status : undefined;
+
+    // Validate status filter if provided
+    if (statusFilter && !VALID_STATUSES.includes(statusFilter as JobStatus)) {
+      res.status(400).json({
+        error: `Ungültiger Status. Erlaubt: ${VALID_STATUSES.join(", ")}`,
+      });
+      return;
+    }
+
+    const jobs = await prisma.downloadJob.findMany({
+      where: statusFilter ? { status: statusFilter } : undefined,
+      include: {
+        nzbFile: {
+          include: { movie: { select: { id: true, titleDe: true, titleEn: true, year: true, posterPath: true } } },
+        },
+      },
+      orderBy: { createdAt: "desc" },
+      take: 50,
+    });
+
+    res.json({ jobs: jobs.map(serializeJob) });
+  } catch (err) {
+    console.error("[download-job] List error:", err);
+    res.status(500).json({ error: "Fehler beim Laden der Download-Jobs." });
+  }
+});
+
+// GET /downloads/jobs/:id — get a single download job
+router.get("/jobs/:id", async (req: AuthRequest, res: Response) => {
+  try {
+    const job = await prisma.downloadJob.findUnique({
+      where: { id: String(req.params.id) },
+      include: {
+        nzbFile: {
+          include: { movie: true },
+        },
+      },
+    });
+
+    if (!job) {
+      res.status(404).json({ error: "Download-Job nicht gefunden." });
+      return;
+    }
+
+    res.json({ job: serializeJob(job) });
+  } catch (err) {
+    console.error("[download-job] Get error:", err);
+    res.status(500).json({ error: "Fehler beim Laden des Download-Jobs." });
+  }
+});
+
+// PATCH /downloads/jobs/:id/status — update job status (callback from VPS)
+router.patch("/jobs/:id/status", async (req: AuthRequest, res: Response) => {
+  try {
+    const { status, error: errorMsg, progress, s3Key, s3Bucket, fileExtension, hetznerServerId, hetznerServerIp } = req.body;
+
+    if (!status || typeof status !== "string") {
+      res.status(400).json({ error: "status ist erforderlich (string)." });
+      return;
+    }
+
+    if (!VALID_STATUSES.includes(status as JobStatus)) {
+      res.status(400).json({ error: `Ungültiger Status. Erlaubt: ${VALID_STATUSES.join(", ")}` });
+      return;
+    }
+
+    // Get current job
+    const currentJob = await prisma.downloadJob.findUnique({
+      where: { id: String(req.params.id) },
+    });
+
+    if (!currentJob) {
+      res.status(404).json({ error: "Download-Job nicht gefunden." });
+      return;
+    }
+
+    // Validate status transition
+    if (!isValidTransition(currentJob.status, status)) {
+      res.status(422).json({
+        error: `Ungültiger Status-Übergang: ${currentJob.status} → ${status}`,
+        currentStatus: currentJob.status,
+        allowedTransitions: STATUS_TRANSITIONS[currentJob.status] || [],
+      });
+      return;
+    }
+
+    // Build update data
+    const updateData: any = {
+      status,
+      ...(progress !== undefined && { progress: Math.min(Math.max(Number(progress), 0), 100) }),
+      ...(errorMsg !== undefined && { error: errorMsg }),
+      ...(hetznerServerId !== undefined && { hetznerServerId: Number(hetznerServerId) }),
+      ...(hetznerServerIp !== undefined && { hetznerServerIp: String(hetznerServerIp) }),
+    };
+
+    // Set timing fields based on status
+    if (status === "provisioning" && !currentJob.startedAt) {
+      updateData.startedAt = new Date();
+    }
+    if (status === "completed" || status === "failed") {
+      updateData.completedAt = new Date();
+    }
+    if (status === "completed") {
+      updateData.progress = 100;
+    }
+
+    const updatedJob = await prisma.downloadJob.update({
+      where: { id: String(req.params.id) },
+      data: updateData,
+      include: {
+        nzbFile: {
+          include: { movie: true },
+        },
+      },
+    });
+
+    // On completed: update NzbFile with S3 reference
+    if (status === "completed" && s3Key) {
+      await prisma.nzbFile.update({
+        where: { id: currentJob.nzbFileId },
+        data: {
+          s3Key: String(s3Key),
+          s3Bucket: s3Bucket ? String(s3Bucket) : (process.env.S3_BUCKET || null),
+          fileExtension: fileExtension ? String(fileExtension) : null,
+          downloadedAt: new Date(),
+        },
+      });
+      console.log(`[download-job] Completed: ${updatedJob.id} → s3://${s3Bucket || process.env.S3_BUCKET}/${s3Key}`);
+    } else {
+      console.log(`[download-job] Status update: ${updatedJob.id} → ${status}`);
+    }
+
+    res.json({ job: serializeJob(updatedJob) });
+  } catch (err) {
+    console.error("[download-job] Status update error:", err);
+    res.status(500).json({ error: "Fehler beim Aktualisieren des Status." });
+  }
+});
+
+// DELETE /downloads/jobs/:id — delete a job (only if not active)
+router.delete("/jobs/:id", async (req: AuthRequest, res: Response) => {
+  try {
+    const job = await prisma.downloadJob.findUnique({
+      where: { id: String(req.params.id) },
+    });
+
+    if (!job) {
+      res.status(404).json({ error: "Download-Job nicht gefunden." });
+      return;
+    }
+
+    // Don't allow deleting active jobs
+    const activeStatuses = ["provisioning", "downloading", "uploading"];
+    if (activeStatuses.includes(job.status)) {
+      res.status(422).json({
+        error: `Aktiver Job kann nicht gelöscht werden (Status: ${job.status}).`,
+        status: job.status,
+      });
+      return;
+    }
+
+    await prisma.downloadJob.delete({ where: { id: job.id } });
+    console.log(`[download-job] Deleted: ${job.id}`);
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("[download-job] Delete error:", err);
+    res.status(500).json({ error: "Fehler beim Löschen des Download-Jobs." });
   }
 });
 

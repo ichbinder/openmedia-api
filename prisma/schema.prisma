@@ -65,12 +65,48 @@ model NzbFile {
   source            String?
   status            String   @default("untested")
   brokenReason      String?  @map("broken_reason")
+
+  // S3 storage reference (set after successful download + upload)
+  s3Key             String?  @map("s3_key")
+  s3Bucket          String?  @map("s3_bucket")
+  fileExtension     String?  @map("file_extension")
+  downloadedAt      DateTime? @map("downloaded_at")
+
   createdAt         DateTime @default(now()) @map("created_at")
   updatedAt         DateTime @updatedAt @map("updated_at")
 
   movie   NzbMovie @relation(fields: [movieId], references: [id], onDelete: Cascade)
   movieId String   @map("movie_id")
 
+  downloadJobs DownloadJob[]
+
   @@index([movieId])
   @@map("nzb_files")
+}
+
+model DownloadJob {
+  id              String   @id @default(uuid())
+
+  // Status: queued → provisioning → downloading → uploading → completed | failed
+  status          String   @default("queued")
+  progress        Int      @default(0)      // 0-100 percentage
+  error           String?                    // error message if failed
+
+  // Hetzner VPS tracking
+  hetznerServerId Int?     @map("hetzner_server_id")
+  hetznerServerIp String?  @map("hetzner_server_ip")
+
+  // Timing
+  startedAt       DateTime? @map("started_at")
+  completedAt     DateTime? @map("completed_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  nzbFile   NzbFile @relation(fields: [nzbFileId], references: [id], onDelete: Cascade)
+  nzbFileId String  @map("nzb_file_id")
+
+  @@index([nzbFileId])
+  @@index([status])
+  @@map("download_jobs")
 }
