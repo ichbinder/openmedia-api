@@ -1,0 +1,22 @@
+name: Hold Merge
+
+on:
+  pull_request:
+    types: [labeled, unlabeled]
+
+jobs:
+  hold:
+    runs-on: ubuntu-latest
+    if: github.event.label.name == 'hold'
+    steps:
+      - name: Disable auto-merge when "hold" label is added
+        if: github.event.action == 'labeled'
+        run: gh pr merge ${{ github.event.pull_request.number }} --disable-auto --repo ${{ github.repository }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Re-enable auto-merge when "hold" label is removed
+        if: github.event.action == 'unlabeled'
+        run: gh pr merge ${{ github.event.pull_request.number }} --auto --squash --repo ${{ github.repository }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
