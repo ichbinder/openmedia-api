@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import request from "supertest";
 import { createApp } from "../app.js";
 import { prisma } from "../test/setup.js";
@@ -6,6 +6,7 @@ import jwt from "jsonwebtoken";
 
 const app = createApp();
 
+// Use the same secret as the app middleware — matches the vitest.config.ts env
 const JWT_SECRET = process.env.JWT_SECRET || "test-secret-for-testing-only";
 
 /** Create a test user and return a valid JWT token */
@@ -66,6 +67,17 @@ describe("Storage Routes", () => {
       expect(res.body.files).toEqual([]);
     });
 
+    it("GET /storage/files rejects invalid limit", async () => {
+      const res = await request(app)
+        .get("/storage/files?limit=abc")
+        .set("Authorization", `Bearer ${token}`);
+
+      if (res.status === 503) return;
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain("limit");
+    });
+
     it("GET /storage/files/:key/url rejects invalid expires", async () => {
       const res = await request(app)
         .get("/storage/files/test-key.txt/url?expires=abc")
@@ -99,6 +111,18 @@ describe("Storage Routes", () => {
       expect(res.body.error).toContain("key");
     });
 
+    it("POST /storage/upload-url rejects invalid expiresIn", async () => {
+      const res = await request(app)
+        .post("/storage/upload-url")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ key: "test.txt", expiresIn: -1 });
+
+      if (res.status === 503) return;
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain("expiresIn");
+    });
+
     it("POST /storage/upload-url generates upload URL", async () => {
       const res = await request(app)
         .post("/storage/upload-url")
@@ -108,10 +132,24 @@ describe("Storage Routes", () => {
       if (res.status === 503) return;
 
       expect(res.status).toBe(200);
-      expect(res.body.url).toContain("openmedia-files");
+      // Check URL contains the configured bucket name (not hardcoded)
+      const bucket = process.env.S3_BUCKET;
+      if (bucket) {
+        expect(res.body.url).toContain(bucket);
+      }
       expect(res.body.key).toBe("test-upload/test.txt");
       expect(res.body.expiresIn).toBeDefined();
       expect(res.body.expiresAt).toBeDefined();
+    });
+
+    it("DELETE /storage/files/:key returns 404 for non-existent key", async () => {
+      const res = await request(app)
+        .delete("/storage/files/nonexistent-key-12345.txt")
+        .set("Authorization", `Bearer ${token}`);
+
+      if (res.status === 503) return;
+
+      expect(res.status).toBe(404);
     });
   });
 });

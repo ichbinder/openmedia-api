@@ -7,7 +7,9 @@ import {
   generatePresignedUploadUrl,
   deleteFile,
   getFileMetadata,
+  fileExists,
   EXPIRY_PRESETS,
+  MAX_PRESIGNED_EXPIRY_SECONDS,
 } from "../lib/s3.js";
 
 const router = Router();
@@ -25,12 +27,35 @@ router.use((_req: AuthRequest, res: Response, next) => {
   next();
 });
 
+/**
+ * Safely decode a URL-encoded key parameter.
+ * Returns null if the key contains invalid percent-escapes.
+ */
+function decodeKey(raw: string | string[]): string | null {
+  try {
+    return decodeURIComponent(String(raw));
+  } catch (err) {
+    if (err instanceof URIError) return null;
+    throw err;
+  }
+}
+
 // GET /storage/files — list files in the bucket
 router.get("/files", async (req: AuthRequest, res: Response) => {
   try {
     const prefix = typeof req.query.prefix === "string" ? req.query.prefix : undefined;
-    const maxKeys = typeof req.query.limit === "string" ? Math.min(parseInt(req.query.limit, 10), 1000) : 100;
     const continuationToken = typeof req.query.cursor === "string" ? req.query.cursor : undefined;
+
+    // Validate limit parameter
+    let maxKeys = 100;
+    if (typeof req.query.limit === "string") {
+      const parsed = parseInt(req.query.limit, 10);
+      if (isNaN(parsed) || parsed < 1 || parsed > 1000) {
+        res.status(400).json({ error: "limit muss eine Zahl zwischen 1 und 1000 sein." });
+        return;
+      }
+      maxKeys = parsed;
+    }
 
     const result = await listFiles(prefix, maxKeys, continuationToken);
 
@@ -45,12 +70,17 @@ router.get("/files", async (req: AuthRequest, res: Response) => {
 // Key is URL-encoded (e.g. "abc123%2Fabc123.mkv" for "abc123/abc123.mkv")
 router.get("/files/:key/url", async (req: AuthRequest, res: Response) => {
   try {
-    const key = decodeURIComponent(String(req.params.key));
+    const key = decodeKey(req.params.key);
+    if (key === null) {
+      res.status(400).json({ error: "Ungültiger Key (fehlerhafte URL-Kodierung)." });
+      return;
+    }
+
     const expiresParam = typeof req.query.expires === "string" ? req.query.expires : "7d";
 
     // Resolve expiry: either a preset name or raw seconds
     let expiresIn: number;
-    if (expiresParam in EXPIRY_PRESETS) {
+    if (Object.hasOwn(EXPIRY_PRESETS, expiresParam)) {
       expiresIn = EXPIRY_PRESETS[expiresParam];
     } else {
       expiresIn = parseInt(expiresParam, 10);
@@ -59,6 +89,9 @@ router.get("/files/:key/url", async (req: AuthRequest, res: Response) => {
         return;
       }
     }
+
+    // Cap to max presigned URL expiry
+    const cappedExpires = Math.min(expiresIn, MAX_PRESIGNED_EXPIRY_SECONDS);
 
     // Verify file exists before generating URL
     try {
@@ -71,14 +104,14 @@ router.get("/files/:key/url", async (req: AuthRequest, res: Response) => {
       throw err;
     }
 
-    const url = await generatePresignedUrl(key, expiresIn);
+    const url = await generatePresignedUrl(key, cappedExpires);
 
-    const expiresAt = new Date(Date.now() + expiresIn * 1000).toISOString();
+    const expiresAt = new Date(Date.now() + cappedExpires * 1000).toISOString();
 
     res.json({
       url,
       key,
-      expiresIn,
+      expiresIn: cappedExpires,
       expiresAt,
     });
   } catch (err) {
@@ -90,7 +123,12 @@ router.get("/files/:key/url", async (req: AuthRequest, res: Response) => {
 // GET /storage/files/:key/meta — get file metadata
 router.get("/files/:key/meta", async (req: AuthRequest, res: Response) => {
   try {
-    const key = decodeURIComponent(String(req.params.key));
+    const key = decodeKey(req.params.key);
+    if (key === null) {
+      res.status(400).json({ error: "Ungültiger Key (fehlerhafte URL-Kodierung)." });
+      return;
+    }
+
     const meta = await getFileMetadata(key);
 
     res.json(meta);
@@ -105,9 +143,22 @@ router.get("/files/:key/meta", async (req: AuthRequest, res: Response) => {
 });
 
 // DELETE /storage/files/:key — delete a file
+// Note: S3 delete is idempotent — succeeds even if key doesn't exist.
+// We verify existence first and return 404 if the key is unknown.
 router.delete("/files/:key", async (req: AuthRequest, res: Response) => {
   try {
-    const key = decodeURIComponent(String(req.params.key));
+    const key = decodeKey(req.params.key);
+    if (key === null) {
+      res.status(400).json({ error: "Ungültiger Key (fehlerhafte URL-Kodierung)." });
+      return;
+    }
+
+    // Verify file exists before deleting (S3 delete always succeeds)
+    const exists = await fileExists(key);
+    if (!exists) {
+      res.status(404).json({ error: "Datei nicht gefunden." });
+      return;
+    }
 
     await deleteFile(key);
 
@@ -130,7 +181,15 @@ router.post("/upload-url", async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    const expiresIn = typeof rawExpiry === "number" ? Math.min(rawExpiry, 3600) : 3600;
+    // Validate expiresIn: must be a positive integer >= 60
+    let expiresIn = 3600; // default 1 hour
+    if (rawExpiry !== undefined) {
+      if (typeof rawExpiry !== "number" || !Number.isInteger(rawExpiry) || rawExpiry < 60) {
+        res.status(400).json({ error: "expiresIn muss eine positive Ganzzahl >= 60 sein (Sekunden)." });
+        return;
+      }
+      expiresIn = Math.min(rawExpiry, 3600);
+    }
 
     const url = await generatePresignedUploadUrl(key, contentType, expiresIn);
 

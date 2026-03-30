@@ -21,6 +21,7 @@ import {
 const TEST_PREFIX = "test-integration/";
 const TEST_KEY = `${TEST_PREFIX}test-file-${Date.now()}.txt`;
 const TEST_CONTENT = `S3 integration test — ${new Date().toISOString()}`;
+const TEST_BUCKET = process.env.S3_BUCKET || "";
 
 // Skip entire suite if S3 is not configured
 const runTests = isS3Configured();
@@ -45,7 +46,7 @@ describe.skipIf(!runTests)("S3 Service (integration)", () => {
     createdKeys.push(TEST_KEY);
 
     expect(result.key).toBe(TEST_KEY);
-    expect(result.bucket).toBe(process.env.S3_BUCKET);
+    expect(result.bucket).toBe(TEST_BUCKET);
     expect(result.etag).toBeDefined();
 
     // Verify with HEAD request
@@ -66,7 +67,7 @@ describe.skipIf(!runTests)("S3 Service (integration)", () => {
   it("generates a presigned download URL that works", async () => {
     const url = await generatePresignedUrl(TEST_KEY, 3600);
 
-    expect(url).toContain("openmedia-files");
+    expect(url).toContain(TEST_BUCKET);
     expect(url).toContain("test-integration/");
 
     // Actually fetch via the presigned URL
@@ -96,6 +97,7 @@ describe.skipIf(!runTests)("S3 Service (integration)", () => {
     // Upload a separate file to delete
     const deleteKey = `${TEST_PREFIX}delete-me-${Date.now()}.txt`;
     await uploadFile(deleteKey, "delete me", "text/plain");
+    createdKeys.push(deleteKey);
 
     // Verify it exists
     const beforeDelete = await fileExists(deleteKey);

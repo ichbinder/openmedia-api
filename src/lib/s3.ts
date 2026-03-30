@@ -32,15 +32,20 @@ function getConfig() {
   return {
     accessKey: process.env.S3_ACCESS_KEY || "",
     secretKey: process.env.S3_SECRET_KEY || "",
-    endpoint: process.env.S3_ENDPOINT || "https://hel1.your-objectstorage.com",
-    bucket: process.env.S3_BUCKET || "openmedia-files",
+    endpoint: process.env.S3_ENDPOINT || "",
+    bucket: process.env.S3_BUCKET || "",
     region: process.env.S3_REGION || "hel1",
   };
 }
 
+/** Check if S3 is configured by reading raw env vars (no fallback defaults). */
 export function isS3Configured(): boolean {
-  const cfg = getConfig();
-  return !!(cfg.accessKey && cfg.secretKey && cfg.endpoint && cfg.bucket);
+  return !!(
+    process.env.S3_ACCESS_KEY &&
+    process.env.S3_SECRET_KEY &&
+    process.env.S3_ENDPOINT &&
+    process.env.S3_BUCKET
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -52,7 +57,7 @@ let _clientConfigHash = "";
 
 function getClient(): S3Client {
   const cfg = getConfig();
-  const configHash = `${cfg.accessKey}:${cfg.endpoint}:${cfg.region}`;
+  const configHash = `${cfg.accessKey}:${cfg.secretKey}:${cfg.endpoint}:${cfg.region}`;
 
   if (_client && _clientConfigHash === configHash) {
     return _client;
@@ -109,7 +114,7 @@ export interface S3UploadResult {
 // Max presigned URL expiry — Hetzner S3 supports up to 7 days
 // ---------------------------------------------------------------------------
 
-const MAX_PRESIGNED_EXPIRY_SECONDS = 7 * 24 * 60 * 60; // 7 days
+export const MAX_PRESIGNED_EXPIRY_SECONDS = 7 * 24 * 60 * 60; // 7 days
 
 export const EXPIRY_PRESETS: Record<string, number> = {
   "1h": 60 * 60,
