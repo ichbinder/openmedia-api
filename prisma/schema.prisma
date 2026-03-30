@@ -71,5 +71,6 @@ model NzbFile {
   movie   NzbMovie @relation(fields: [movieId], references: [id], onDelete: Cascade)
   movieId String   @map("movie_id")
 
+  @@index([movieId])
   @@map("nzb_files")
 }

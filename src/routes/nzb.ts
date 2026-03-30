@@ -26,7 +26,7 @@ router.get("/movies", async (_req: AuthRequest, res: Response) => {
       include: { nzbFiles: { select: { id: true, hash: true, resolution: true, audioLanguages: true, status: true } } },
       orderBy: { updatedAt: "desc" },
     });
-    res.json({ movies });
+    res.json({ movies: movies.map(serializeMovieWithFiles) });
   } catch (err) {
     console.error("[nzb] List movies error:", err);
     res.status(500).json({ error: "Fehler beim Laden der Filme." });
