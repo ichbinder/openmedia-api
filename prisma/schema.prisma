@@ -1,0 +1,37 @@
+datasource db {
+  provider = "postgresql"
+}
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/client"
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  name      String
+  password  String
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  watchlist  WatchlistItem[]
+
+  @@map("users")
+}
+
+model WatchlistItem {
+  id          String   @id @default(uuid())
+  movieId     Int      @map("movie_id")
+  title       String
+  posterPath  String?  @map("poster_path")
+  voteAverage Float    @default(0) @map("vote_average")
+  releaseDate String   @default("") @map("release_date")
+  addedAt     DateTime @default(now()) @map("added_at")
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String @map("user_id")
+
+  @@unique([userId, movieId])
+  @@map("watchlist_items")
+}

@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.env
+.env.test
+generated/
+*.log
+.DS_Store

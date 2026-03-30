@@ -1,0 +1,29 @@
+import { PrismaClient } from "../../generated/client/index.js";
+import { PrismaPg } from "@prisma/adapter-pg";
+import { beforeAll, afterAll, beforeEach } from "vitest";
+import { execSync } from "child_process";
+
+// Set test DATABASE_URL before any imports
+process.env.DATABASE_URL = process.env.DATABASE_URL || "postgresql://cinescope_test:cinescope_test@localhost:5433/cinescope_test";
+process.env.JWT_SECRET = process.env.JWT_SECRET || "test-secret-for-testing-only";
+
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
+export const prisma = new PrismaClient({ adapter });
+
+beforeAll(async () => {
+  // Push schema to test DB using prisma db push
+  execSync("npx prisma db push --force-reset --accept-data-loss", {
+    cwd: process.cwd(),
+    env: { ...process.env },
+    stdio: "pipe",
+  });
+});
+
+beforeEach(async () => {
+  await prisma.$executeRawUnsafe('TRUNCATE TABLE "watchlist_items" CASCADE');
+  await prisma.$executeRawUnsafe('TRUNCATE TABLE "users" CASCADE');
+});
+
+afterAll(async () => {
+  await prisma.$disconnect();
+});
