@@ -35,3 +35,41 @@ model WatchlistItem {
   @@unique([userId, movieId])
   @@map("watchlist_items")
 }
+
+model NzbMovie {
+  id          String   @id @default(uuid())
+  tmdbId      Int?     @unique @map("tmdb_id")
+  imdbId      String?  @unique @map("imdb_id")
+  titleDe     String   @map("title_de")
+  titleEn     String   @map("title_en")
+  description String   @default("")
+  year        Int?
+  posterPath  String?  @map("poster_path")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  nzbFiles NzbFile[]
+
+  @@map("nzb_movies")
+}
+
+model NzbFile {
+  id                String   @id @default(uuid())
+  hash              String   @unique
+  originalFilename  String   @map("original_filename")
+  fileSize          BigInt?  @map("file_size")
+  resolution        String?
+  audioLanguages    String[] @default([]) @map("audio_languages")
+  subtitleLanguages String[] @default([]) @map("subtitle_languages")
+  codec             String?
+  source            String?
+  status            String   @default("untested")
+  brokenReason      String?  @map("broken_reason")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  movie   NzbMovie @relation(fields: [movieId], references: [id], onDelete: Cascade)
+  movieId String   @map("movie_id")
+
+  @@map("nzb_files")
+}

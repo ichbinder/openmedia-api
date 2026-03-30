@@ -3,6 +3,7 @@ import cors from "cors";
 import prisma from "./lib/prisma.js";
 import authRoutes from "./routes/auth.js";
 import watchlistRoutes from "./routes/watchlist.js";
+import nzbRoutes from "./routes/nzb.js";
 import { errorHandler } from "./middleware/error-handler.js";
 
 export function createApp() {
@@ -13,6 +14,7 @@ export function createApp() {
 
   app.use("/auth", authRoutes);
   app.use("/watchlist", watchlistRoutes);
+  app.use("/nzb", nzbRoutes);
 
   // Health check with DB status
 app.get("/health", async (_req, res) => {
