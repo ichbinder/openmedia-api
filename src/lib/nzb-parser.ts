@@ -121,8 +121,8 @@ export function parseNzbName(filename: string): ParsedNzbName {
     audioLanguages.push("en");
   }
 
-  // Extract year
-  const yearMatch = name.match(/[.\s(_](\d{4})[.\s)_]/);
+  // Extract year — also match at end of string (e.g. "Movie.2024.nzb" → name = "Movie.2024")
+  const yearMatch = name.match(/[.\s(_](\d{4})(?:[.\s)_]|$)/);
   const year = yearMatch ? Number(yearMatch[1]) : null;
 
   // Extract title: everything before the first technical marker
