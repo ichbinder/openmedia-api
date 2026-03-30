@@ -25,8 +25,11 @@ export async function searchTmdbMovie(
   year?: number | null
 ): Promise<TmdbLookupResult> {
   if (!TMDB_API_KEY) {
-    console.log("[tmdb] No TMDB_API_KEY set — skipping lookup");
-    return { status: "not_found" };
+    if (process.env.NODE_ENV === "test" || process.env.ALLOW_TMDB_FALLBACK === "true") {
+      console.log("[tmdb] No TMDB_API_KEY set — falling back to not_found (test/dev mode)");
+      return { status: "not_found" };
+    }
+    return { status: "error", reason: "TMDB_API_KEY is not configured" };
   }
 
   try {
