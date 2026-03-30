@@ -167,35 +167,44 @@ router.post("/jobs", async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    // Check for existing active job for this file
-    const existingJob = await prisma.downloadJob.findFirst({
-      where: {
-        nzbFileId,
-        status: { in: ["queued", "provisioning", "downloading", "uploading"] },
-      },
+    // Atomic check-and-create inside a transaction to prevent race conditions
+    // (two concurrent requests for the same nzbFileId)
+    const result = await prisma.$transaction(async (tx) => {
+      const existingJob = await tx.downloadJob.findFirst({
+        where: {
+          nzbFileId,
+          status: { in: ["queued", "provisioning", "downloading", "uploading"] },
+        },
+      });
+
+      if (existingJob) {
+        return { conflict: true as const, existingJob };
+      }
+
+      const job = await tx.downloadJob.create({
+        data: { nzbFileId },
+        include: {
+          nzbFile: {
+            include: { movie: true },
+          },
+        },
+      });
+
+      return { conflict: false as const, job };
     });
 
-    if (existingJob) {
+    if (result.conflict) {
       res.status(409).json({
         error: "Es läuft bereits ein Download für diese Datei.",
-        existingJobId: existingJob.id,
-        existingStatus: existingJob.status,
+        existingJobId: result.existingJob.id,
+        existingStatus: result.existingJob.status,
       });
       return;
     }
 
-    const job = await prisma.downloadJob.create({
-      data: { nzbFileId },
-      include: {
-        nzbFile: {
-          include: { movie: true },
-        },
-      },
-    });
+    console.log(`[download-job] Created: ${result.job.id} for ${nzbFile.movie.titleEn} (${nzbFile.hash.slice(0, 12)}...)`);
 
-    console.log(`[download-job] Created: ${job.id} for ${nzbFile.movie.titleEn} (${nzbFile.hash.slice(0, 12)}...)`);
-
-    res.status(201).json({ job: serializeJob(job) });
+    res.status(201).json({ job: serializeJob(result.job) });
   } catch (err) {
     console.error("[download-job] Create error:", err);
     res.status(500).json({ error: "Fehler beim Erstellen des Download-Jobs." });
@@ -292,12 +301,25 @@ router.patch("/jobs/:id/status", async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    // Build update data
+    // Build update data with input validation
+    const parsedProgress = progress !== undefined ? Number(progress) : undefined;
+    const parsedServerId = hetznerServerId !== undefined ? Number(hetznerServerId) : undefined;
+
+    if (parsedProgress !== undefined && (isNaN(parsedProgress) || parsedProgress < 0 || parsedProgress > 100)) {
+      res.status(400).json({ error: "progress muss eine Zahl zwischen 0 und 100 sein." });
+      return;
+    }
+
+    if (parsedServerId !== undefined && (isNaN(parsedServerId) || !Number.isInteger(parsedServerId))) {
+      res.status(400).json({ error: "hetznerServerId muss eine ganze Zahl sein." });
+      return;
+    }
+
     const updateData: any = {
       status,
-      ...(progress !== undefined && { progress: Math.min(Math.max(Number(progress), 0), 100) }),
+      ...(parsedProgress !== undefined && { progress: Math.min(Math.max(parsedProgress, 0), 100) }),
       ...(errorMsg !== undefined && { error: errorMsg }),
-      ...(hetznerServerId !== undefined && { hetznerServerId: Number(hetznerServerId) }),
+      ...(parsedServerId !== undefined && { hetznerServerId: parsedServerId }),
       ...(hetznerServerIp !== undefined && { hetznerServerIp: String(hetznerServerIp) }),
     };
 
@@ -334,6 +356,8 @@ router.patch("/jobs/:id/status", async (req: AuthRequest, res: Response) => {
         },
       });
       console.log(`[download-job] Completed: ${updatedJob.id} → s3://${s3Bucket || process.env.S3_BUCKET}/${s3Key}`);
+    } else if (status === "completed" && !s3Key) {
+      console.warn(`[download-job] Completed WITHOUT s3Key: ${updatedJob.id} — NzbFile S3 reference not set!`);
     } else {
       console.log(`[download-job] Status update: ${updatedJob.id} → ${status}`);
     }
