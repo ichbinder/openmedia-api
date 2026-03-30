@@ -340,7 +340,7 @@ router.patch("/jobs/:id/status", async (req: AuthRequest, res: Response) => {
       ...(parsedProgress !== undefined && { progress: Math.min(Math.max(parsedProgress, 0), 100) }),
       ...(errorMsg !== undefined && typeof errorMsg === "string" && { error: errorMsg.slice(0, 2000) }),
       ...(parsedServerId !== undefined && { hetznerServerId: parsedServerId }),
-      ...(hetznerServerIp !== undefined && { hetznerServerIp: String(hetznerServerIp) }),
+      ...(hetznerServerIp !== undefined && typeof hetznerServerIp === "string" && { hetznerServerIp }),
     };
 
     // Set timing fields based on status
