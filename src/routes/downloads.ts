@@ -56,8 +56,8 @@ router.post("/start", async (req: AuthRequest, res: Response) => {
   try {
     const { nzbFileId } = req.body;
 
-    if (!nzbFileId) {
-      res.status(400).json({ error: "nzbFileId ist erforderlich." });
+    if (!nzbFileId || typeof nzbFileId !== "string") {
+      res.status(400).json({ error: "nzbFileId ist erforderlich (string)." });
       return;
     }
 
