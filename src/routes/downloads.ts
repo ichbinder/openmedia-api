@@ -495,4 +495,196 @@ router.delete("/jobs/:id", async (req: AuthRequest, res: Response) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// VPS Management
+// ---------------------------------------------------------------------------
+
+import {
+  isHetznerConfigured,
+  createServer,
+  getServer,
+  deleteServer,
+  listServers,
+  findZombieServers,
+  cleanupZombieServers,
+  generateCloudInit,
+} from "../lib/hetzner.js";
+
+// POST /downloads/jobs/:id/provision — create a VPS for a download job
+router.post("/jobs/:id/provision", async (req: AuthRequest, res: Response) => {
+  try {
+    if (!isHetznerConfigured()) {
+      res.status(503).json({ error: "Hetzner Cloud API ist nicht konfiguriert." });
+      return;
+    }
+
+    const job = await prisma.downloadJob.findUnique({
+      where: { id: String(req.params.id) },
+      include: { nzbFile: { include: { movie: true } } },
+    });
+
+    if (!job) {
+      res.status(404).json({ error: "Download-Job nicht gefunden." });
+      return;
+    }
+
+    if (job.status !== "queued") {
+      res.status(422).json({
+        error: `Job kann nur aus Status 'queued' provisioniert werden (aktuell: ${job.status}).`,
+      });
+      return;
+    }
+
+    // Generate Cloud-Init script
+    const cloudInit = generateCloudInit({
+      jobId: job.id,
+      nzbHash: job.nzbFile.hash,
+      apiBaseUrl: process.env.API_BASE_URL || `http://localhost:${process.env.PORT || 4000}`,
+      apiToken: req.headers.authorization?.replace("Bearer ", "") || "",
+      s3AccessKey: process.env.S3_ACCESS_KEY || "",
+      s3SecretKey: process.env.S3_SECRET_KEY || "",
+      s3Endpoint: process.env.S3_ENDPOINT || "",
+      s3Bucket: process.env.S3_BUCKET || "",
+      usenetHost: process.env.USENET_HOST || "",
+      usenetPort: parseInt(process.env.USENET_PORT || "563", 10),
+      usenetUser: process.env.USENET_USER || "",
+      usenetPassword: process.env.USENET_PASSWORD || "",
+      usenetSsl: process.env.USENET_SSL !== "false",
+    });
+
+    const serverName = `dl-${job.id.slice(0, 8)}`;
+
+    const result = await createServer({
+      name: serverName,
+      userData: cloudInit,
+      labels: {
+        "job-id": job.id,
+      },
+    });
+
+    // Update job with server info
+    await prisma.downloadJob.update({
+      where: { id: job.id },
+      data: {
+        status: "provisioning",
+        hetznerServerId: result.server.id,
+        hetznerServerIp: result.server.publicIpv4,
+        startedAt: new Date(),
+      },
+    });
+
+    console.log(`[download-vps] Provisioned: ${serverName} (id: ${result.server.id}) for job ${job.id}`);
+
+    res.status(201).json({
+      server: {
+        id: result.server.id,
+        name: result.server.name,
+        status: result.server.status,
+        ip: result.server.publicIpv4,
+        location: result.server.location,
+      },
+      job: { id: job.id, status: "provisioning" },
+    });
+  } catch (err: any) {
+    console.error("[download-vps] Provision error:", err.message);
+    res.status(500).json({ error: `Fehler beim Erstellen des Download-Servers: ${err.message}` });
+  }
+});
+
+// POST /downloads/jobs/:id/cleanup — delete VPS for a completed/failed job
+router.post("/jobs/:id/cleanup", async (req: AuthRequest, res: Response) => {
+  try {
+    if (!isHetznerConfigured()) {
+      res.status(503).json({ error: "Hetzner Cloud API ist nicht konfiguriert." });
+      return;
+    }
+
+    const job = await prisma.downloadJob.findUnique({
+      where: { id: String(req.params.id) },
+    });
+
+    if (!job) {
+      res.status(404).json({ error: "Download-Job nicht gefunden." });
+      return;
+    }
+
+    if (!job.hetznerServerId) {
+      res.status(422).json({ error: "Job hat keinen zugeordneten Server." });
+      return;
+    }
+
+    const deleted = await deleteServer(job.hetznerServerId);
+
+    // Clear server reference from job
+    await prisma.downloadJob.update({
+      where: { id: job.id },
+      data: { hetznerServerId: null, hetznerServerIp: null },
+    });
+
+    console.log(`[download-vps] Cleanup: server ${job.hetznerServerId} for job ${job.id} — ${deleted ? "deleted" : "already gone"}`);
+
+    res.json({ success: true, deleted, serverId: job.hetznerServerId });
+  } catch (err: any) {
+    console.error("[download-vps] Cleanup error:", err.message);
+    res.status(500).json({ error: `Fehler beim Löschen des Download-Servers: ${err.message}` });
+  }
+});
+
+// GET /downloads/servers — list active download servers
+router.get("/servers", async (_req: AuthRequest, res: Response) => {
+  try {
+    if (!isHetznerConfigured()) {
+      res.status(503).json({ error: "Hetzner Cloud API ist nicht konfiguriert." });
+      return;
+    }
+
+    const servers = await listServers("purpose=openmedia-download");
+
+    res.json({
+      servers: servers.map((s) => ({
+        id: s.id,
+        name: s.name,
+        status: s.status,
+        ip: s.publicIpv4,
+        location: s.location,
+        labels: s.labels,
+        created: s.created,
+      })),
+    });
+  } catch (err: any) {
+    console.error("[download-vps] List servers error:", err.message);
+    res.status(500).json({ error: "Fehler beim Laden der Download-Server." });
+  }
+});
+
+// POST /downloads/cleanup-zombies — find and delete zombie servers
+router.post("/cleanup-zombies", async (req: AuthRequest, res: Response) => {
+  try {
+    if (!isHetznerConfigured()) {
+      res.status(503).json({ error: "Hetzner Cloud API ist nicht konfiguriert." });
+      return;
+    }
+
+    const maxAgeHours = typeof req.body?.maxAgeHours === "number" ? req.body.maxAgeHours : 6;
+
+    const zombies = await findZombieServers(maxAgeHours);
+
+    if (zombies.length === 0) {
+      res.json({ cleaned: 0, zombies: [] });
+      return;
+    }
+
+    const deletedIds = await cleanupZombieServers(maxAgeHours);
+
+    res.json({
+      cleaned: deletedIds.length,
+      deletedServerIds: deletedIds,
+      zombiesFound: zombies.length,
+    });
+  } catch (err: any) {
+    console.error("[download-vps] Cleanup zombies error:", err.message);
+    res.status(500).json({ error: "Fehler beim Bereinigen verwaister Server." });
+  }
+});
+
 export default router;
