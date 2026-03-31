@@ -646,7 +646,7 @@ router.post("/jobs/:id/provision", async (req: AuthRequest, res: Response) => {
     const cloudInit = generateCloudInit({
       jobId: job.id,
       nzbHash: job.nzbFile.hash,
-      nzbUrl: `${nzbServiceUrl}/nzb/${job.nzbFile.hash}`,
+      nzbUrl: `${nzbServiceUrl}/nzb/${job.nzbFile.hash}.nzb`,
       apiBaseUrl: process.env.API_BASE_URL!,
       apiToken: process.env.SERVICE_API_TOKEN || req.headers.authorization?.replace("Bearer ", "") || "",
       s3AccessKey: process.env.S3_ACCESS_KEY!,
