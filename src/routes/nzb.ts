@@ -3,6 +3,15 @@ import multer from "multer";
 import prisma from "../lib/prisma.js";
 import { requireAuth, type AuthRequest } from "../middleware/auth.js";
 import { parseNzbName, calculateHash } from "../lib/nzb-parser.js";
+
+// Select fields for NzbFile — excludes nzbData blob from responses
+const nzbFileSelect = {
+  id: true, hash: true, originalFilename: true, fileSize: true,
+  resolution: true, audioLanguages: true, subtitleLanguages: true,
+  codec: true, source: true, status: true, brokenReason: true,
+  s3Key: true, s3Bucket: true, fileExtension: true, downloadedAt: true,
+  createdAt: true, updatedAt: true, movieId: true,
+} as const;
 import { searchTmdbMovie } from "../lib/tmdb.js";
 
 const router = Router();
@@ -41,7 +50,7 @@ router.get("/movies/:id", async (req: AuthRequest, res: Response) => {
   try {
     const movie = await prisma.nzbMovie.findUnique({
       where: { id: String(req.params.id) },
-      include: { nzbFiles: true },
+      include: { nzbFiles: { select: nzbFileSelect } },
     });
 
     if (!movie) {
@@ -151,7 +160,7 @@ router.get("/movies/by-tmdb/:tmdbId", async (req: AuthRequest, res: Response) =>
 
     const movie = await prisma.nzbMovie.findUnique({
       where: { tmdbId },
-      include: { nzbFiles: true },
+      include: { nzbFiles: { select: nzbFileSelect } },
     });
 
     if (!movie) {
@@ -429,6 +438,7 @@ router.post("/import", upload.single("nzb"), async (req: AuthRequest, res: Respo
           hash,
           originalFilename,
           fileSize: file.buffer.length ? BigInt(file.buffer.length) : null,
+          nzbData: new Uint8Array(file.buffer),
           resolution: parsed.resolution,
           audioLanguages: parsed.audioLanguages,
           codec: parsed.codec,
@@ -458,7 +468,7 @@ router.post("/import", upload.single("nzb"), async (req: AuthRequest, res: Respo
     // Reload movie with all files
     const fullMovie = await prisma.nzbMovie.findUnique({
       where: { id: movie.id },
-      include: { nzbFiles: true },
+      include: { nzbFiles: { select: nzbFileSelect } },
     });
 
     res.status(201).json({
@@ -476,6 +486,39 @@ router.post("/import", upload.single("nzb"), async (req: AuthRequest, res: Respo
 // --- Download Link ---
 
 import { isS3Configured, generatePresignedUrl, EXPIRY_PRESETS, MAX_PRESIGNED_EXPIRY_SECONDS } from "../lib/s3.js";
+
+// GET /nzb/files/:id/raw — download the raw NZB XML file
+router.get("/files/:id/raw", async (req: AuthRequest, res: Response) => {
+  try {
+    const nzbFile = await prisma.nzbFile.findUnique({
+      where: { id: String(req.params.id) },
+      select: { id: true, hash: true, originalFilename: true, nzbData: true },
+    });
+
+    if (!nzbFile) {
+      res.status(404).json({ error: "NZB-Datei nicht gefunden." });
+      return;
+    }
+
+    if (!nzbFile.nzbData) {
+      res.status(422).json({ error: "NZB-Rohdaten nicht verfügbar (vor nzbData-Feature importiert)." });
+      return;
+    }
+
+    // Sanitize filename for Content-Disposition (prevent header injection)
+    const safeFilename = nzbFile.originalFilename
+      .replace(/[\r\n"]/g, "")
+      .replace(/[^\x20-\x7E]/g, "_")
+      .slice(0, 200) || "download.nzb";
+
+    res.setHeader("Content-Type", "application/x-nzb");
+    res.setHeader("Content-Disposition", `attachment; filename="${safeFilename}"`);
+    res.send(Buffer.from(nzbFile.nzbData));
+  } catch (err) {
+    console.error("[nzb] Raw download error:", err);
+    res.status(500).json({ error: "Fehler beim Laden der NZB-Datei." });
+  }
+});
 
 // GET /nzb/files/:id/download-link — generate presigned download URL for an NZB file's media
 router.get("/files/:id/download-link", async (req: AuthRequest, res: Response) => {

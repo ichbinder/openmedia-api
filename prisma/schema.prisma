@@ -58,6 +58,7 @@ model NzbFile {
   hash              String   @unique
   originalFilename  String   @map("original_filename")
   fileSize          BigInt?  @map("file_size")
+  nzbData           Bytes?   @map("nzb_data")          // Raw NZB XML content
   resolution        String?
   audioLanguages    String[] @default([]) @map("audio_languages")
   subtitleLanguages String[] @default([]) @map("subtitle_languages")

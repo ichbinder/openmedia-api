@@ -639,17 +639,21 @@ router.post("/jobs/:id/provision", async (req: AuthRequest, res: Response) => {
     const cloudInit = generateCloudInit({
       jobId: job.id,
       nzbHash: job.nzbFile.hash,
+      nzbUrl: `${process.env.API_BASE_URL}/nzb/files/${job.nzbFile.id}/raw`,
       apiBaseUrl: process.env.API_BASE_URL!,
       apiToken: process.env.SERVICE_API_TOKEN || req.headers.authorization?.replace("Bearer ", "") || "",
       s3AccessKey: process.env.S3_ACCESS_KEY!,
       s3SecretKey: process.env.S3_SECRET_KEY!,
       s3Endpoint: process.env.S3_ENDPOINT!,
       s3Bucket: process.env.S3_BUCKET!,
+      s3Region: process.env.S3_REGION || "hel1",
       usenetHost: process.env.USENET_HOST || "",
       usenetPort: parseInt(process.env.USENET_PORT || "563", 10),
       usenetUser: process.env.USENET_USER || "",
       usenetPassword: process.env.USENET_PASSWORD || "",
       usenetSsl: process.env.USENET_SSL !== "false",
+      usenetConnections: parseInt(process.env.USENET_CONNECTIONS || "10", 10),
+      dockerImage: process.env.DOWNLOADER_DOCKER_IMAGE || "ghcr.io/ichbinder/openmedia-downloader:latest",
     });
 
     const serverName = `dl-${job.id.slice(0, 8)}`;
