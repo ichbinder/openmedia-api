@@ -146,8 +146,23 @@ describe("Download VPS Routes", () => {
 
     const origToken = process.env.HETZNER_API_TOKEN;
     const origApiBase = process.env.API_BASE_URL;
+    const origS3Key = process.env.S3_ACCESS_KEY;
+    const origS3Secret = process.env.S3_SECRET_KEY;
+    const origS3Endpoint = process.env.S3_ENDPOINT;
+    const origS3Bucket = process.env.S3_BUCKET;
+    const origUsenetHost = process.env.USENET_HOST;
+    const origUsenetUser = process.env.USENET_USER;
+    const origUsenetPass = process.env.USENET_PASSWORD;
+
     process.env.HETZNER_API_TOKEN = "fake-token-for-test";
     process.env.API_BASE_URL = "http://localhost:4000";
+    process.env.S3_ACCESS_KEY = process.env.S3_ACCESS_KEY || "test-key";
+    process.env.S3_SECRET_KEY = process.env.S3_SECRET_KEY || "test-secret";
+    process.env.S3_ENDPOINT = process.env.S3_ENDPOINT || "https://hel1.test.com";
+    process.env.S3_BUCKET = process.env.S3_BUCKET || "test-bucket";
+    process.env.USENET_HOST = process.env.USENET_HOST || "news.test.com";
+    process.env.USENET_USER = process.env.USENET_USER || "user";
+    process.env.USENET_PASSWORD = process.env.USENET_PASSWORD || "pass";
 
     try {
       const res = await request(app)
@@ -157,10 +172,20 @@ describe("Download VPS Routes", () => {
       expect(res.status).toBe(422);
       expect(res.body.error).toContain("queued");
     } finally {
-      if (origToken) process.env.HETZNER_API_TOKEN = origToken;
-      else delete process.env.HETZNER_API_TOKEN;
-      if (origApiBase) process.env.API_BASE_URL = origApiBase;
-      else delete process.env.API_BASE_URL;
+      // Restore all env vars
+      const restore = (key: string, orig: string | undefined) => {
+        if (orig !== undefined) process.env[key] = orig;
+        else delete process.env[key];
+      };
+      restore("HETZNER_API_TOKEN", origToken);
+      restore("API_BASE_URL", origApiBase);
+      restore("S3_ACCESS_KEY", origS3Key);
+      restore("S3_SECRET_KEY", origS3Secret);
+      restore("S3_ENDPOINT", origS3Endpoint);
+      restore("S3_BUCKET", origS3Bucket);
+      restore("USENET_HOST", origUsenetHost);
+      restore("USENET_USER", origUsenetUser);
+      restore("USENET_PASSWORD", origUsenetPass);
     }
   });
 

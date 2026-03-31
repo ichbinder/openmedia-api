@@ -517,7 +517,7 @@ router.post("/jobs/:id/provision", async (req: AuthRequest, res: Response) => {
     }
 
     // Validate required config before creating a VPS
-    const requiredEnvVars = ["S3_ACCESS_KEY", "S3_SECRET_KEY", "S3_ENDPOINT", "S3_BUCKET", "API_BASE_URL"];
+    const requiredEnvVars = ["S3_ACCESS_KEY", "S3_SECRET_KEY", "S3_ENDPOINT", "S3_BUCKET", "API_BASE_URL", "USENET_HOST", "USENET_USER", "USENET_PASSWORD"];
     const missingVars = requiredEnvVars.filter((v) => !process.env[v]);
     if (missingVars.length > 0) {
       res.status(503).json({
