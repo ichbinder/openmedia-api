@@ -473,4 +473,68 @@ router.post("/import", upload.single("nzb"), async (req: AuthRequest, res: Respo
   }
 });
 
+// --- Download Link ---
+
+import { isS3Configured, generatePresignedUrl, EXPIRY_PRESETS } from "../lib/s3.js";
+
+// GET /nzb/files/:id/download-link — generate presigned download URL for an NZB file's media
+router.get("/files/:id/download-link", async (req: AuthRequest, res: Response) => {
+  try {
+    if (!isS3Configured()) {
+      res.status(503).json({ error: "Object Storage ist nicht konfiguriert." });
+      return;
+    }
+
+    const nzbFile = await prisma.nzbFile.findUnique({
+      where: { id: String(req.params.id) },
+      include: { movie: { select: { id: true, titleDe: true, titleEn: true, year: true } } },
+    });
+
+    if (!nzbFile) {
+      res.status(404).json({ error: "NZB-Datei nicht gefunden." });
+      return;
+    }
+
+    if (!nzbFile.s3Key) {
+      res.status(422).json({ error: "Datei wurde noch nicht heruntergeladen (kein S3-Speicherort vorhanden)." });
+      return;
+    }
+
+    // Parse expiry
+    const expiresParam = typeof req.query.expires === "string" ? req.query.expires : "7d";
+    let expiresIn: number;
+    if (Object.hasOwn(EXPIRY_PRESETS, expiresParam)) {
+      expiresIn = EXPIRY_PRESETS[expiresParam];
+    } else {
+      expiresIn = parseInt(expiresParam, 10);
+      if (isNaN(expiresIn) || expiresIn < 60) {
+        res.status(400).json({ error: "Ungültiger expires-Wert. Verwende 1h, 1d, 3d, 7d oder Sekunden (min 60)." });
+        return;
+      }
+    }
+
+    const url = await generatePresignedUrl(nzbFile.s3Key, expiresIn);
+    const expiresAt = new Date(Date.now() + expiresIn * 1000).toISOString();
+
+    console.log(`[nzb] Download link generated: ${nzbFile.hash.slice(0, 12)}... (expires: ${expiresParam})`);
+
+    res.json({
+      url,
+      expiresIn,
+      expiresAt,
+      nzbFile: {
+        id: nzbFile.id,
+        hash: nzbFile.hash,
+        s3Key: nzbFile.s3Key,
+        resolution: nzbFile.resolution,
+        fileExtension: nzbFile.fileExtension,
+      },
+      movie: nzbFile.movie,
+    });
+  } catch (err) {
+    console.error("[nzb] Download link error:", err);
+    res.status(500).json({ error: "Fehler beim Erstellen des Download-Links." });
+  }
+});
+
 export default router;
