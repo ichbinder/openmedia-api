@@ -480,11 +480,6 @@ import { isS3Configured, generatePresignedUrl, EXPIRY_PRESETS, MAX_PRESIGNED_EXP
 // GET /nzb/files/:id/download-link — generate presigned download URL for an NZB file's media
 router.get("/files/:id/download-link", async (req: AuthRequest, res: Response) => {
   try {
-    if (!isS3Configured()) {
-      res.status(503).json({ error: "Object Storage ist nicht konfiguriert." });
-      return;
-    }
-
     const nzbFile = await prisma.nzbFile.findUnique({
       where: { id: String(req.params.id) },
       include: { movie: { select: { id: true, titleDe: true, titleEn: true, year: true } } },
@@ -497,6 +492,11 @@ router.get("/files/:id/download-link", async (req: AuthRequest, res: Response) =
 
     if (!nzbFile.s3Key) {
       res.status(422).json({ error: "Datei wurde noch nicht heruntergeladen (kein S3-Speicherort vorhanden)." });
+      return;
+    }
+
+    if (!isS3Configured()) {
+      res.status(503).json({ error: "Object Storage ist nicht konfiguriert." });
       return;
     }
 
