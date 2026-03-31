@@ -505,8 +505,14 @@ router.get("/files/:id/raw", async (req: AuthRequest, res: Response) => {
       return;
     }
 
+    // Sanitize filename for Content-Disposition (prevent header injection)
+    const safeFilename = nzbFile.originalFilename
+      .replace(/[\r\n"]/g, "")
+      .replace(/[^\x20-\x7E]/g, "_")
+      .slice(0, 200) || "download.nzb";
+
     res.setHeader("Content-Type", "application/x-nzb");
-    res.setHeader("Content-Disposition", `attachment; filename="${nzbFile.originalFilename}"`);
+    res.setHeader("Content-Disposition", `attachment; filename="${safeFilename}"`);
     res.send(Buffer.from(nzbFile.nzbData));
   } catch (err) {
     console.error("[nzb] Raw download error:", err);
