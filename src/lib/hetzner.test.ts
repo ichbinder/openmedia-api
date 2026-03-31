@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import {
   isHetznerConfigured,
   generateCloudInit,
@@ -33,26 +33,27 @@ describe("Hetzner Service", () => {
   });
 
   describe("generateCloudInit", () => {
+    const defaultParams = {
+      jobId: "test-job-123",
+      nzbHash: "abc123hash",
+      apiBaseUrl: "http://api.example.com",
+      apiToken: "test-token",
+      s3AccessKey: "s3-key",
+      s3SecretKey: "s3-secret",
+      s3Endpoint: "https://hel1.your-objectstorage.com",
+      s3Bucket: "openmedia-files",
+      usenetHost: "news.example.com",
+      usenetPort: 563,
+      usenetUser: "user",
+      usenetPassword: "pass",
+      usenetSsl: true,
+    };
+
     it("generates valid cloud-init YAML", () => {
-      const cloudInit = generateCloudInit({
-        jobId: "test-job-123",
-        nzbHash: "abc123hash",
-        apiBaseUrl: "http://api.example.com",
-        apiToken: "test-token",
-        s3AccessKey: "s3-key",
-        s3SecretKey: "s3-secret",
-        s3Endpoint: "https://hel1.your-objectstorage.com",
-        s3Bucket: "openmedia-files",
-        usenetHost: "news.example.com",
-        usenetPort: 563,
-        usenetUser: "user",
-        usenetPassword: "pass",
-        usenetSsl: true,
-      });
+      const cloudInit = generateCloudInit(defaultParams);
 
       expect(cloudInit).toContain("#cloud-config");
       expect(cloudInit).toContain("test-job-123");
-      expect(cloudInit).toContain("abc123hash");
       expect(cloudInit).toContain("api.example.com");
       expect(cloudInit).toContain("openmedia-files");
       expect(cloudInit).toContain("sha256sum");
@@ -60,21 +61,17 @@ describe("Hetzner Service", () => {
       expect(cloudInit).toContain("post-process.sh");
     });
 
+    it("uses correct host paths (not container paths)", () => {
+      const cloudInit = generateCloudInit(defaultParams);
+
+      expect(cloudInit).toContain("/opt/downloads/complete");
+      expect(cloudInit).toContain("/opt/downloads/config:/config");
+    });
+
     it("includes S3 upload configuration", () => {
       const cloudInit = generateCloudInit({
-        jobId: "j1",
-        nzbHash: "h1",
-        apiBaseUrl: "http://localhost",
-        apiToken: "t1",
-        s3AccessKey: "ak",
-        s3SecretKey: "sk",
-        s3Endpoint: "https://hel1.your-objectstorage.com",
+        ...defaultParams,
         s3Bucket: "my-bucket",
-        usenetHost: "news.example.com",
-        usenetPort: 563,
-        usenetUser: "u",
-        usenetPassword: "p",
-        usenetSsl: true,
       });
 
       expect(cloudInit).toContain("AWS_ACCESS_KEY_ID");
@@ -84,11 +81,8 @@ describe("Hetzner Service", () => {
   });
 });
 
-// Route tests use mocked Hetzner API to avoid real server creation
+// Route tests — mocked Hetzner API to avoid real server creation
 describe("Download VPS Routes", () => {
-  // These tests verify the route logic without hitting the real Hetzner API
-  // The actual Hetzner API integration is tested separately
-
   it("provision endpoint requires Hetzner config", async () => {
     const request = (await import("supertest")).default;
     const { createApp } = await import("../app.js");
@@ -97,13 +91,11 @@ describe("Download VPS Routes", () => {
 
     const app = createApp();
 
-    // Create test user
     const user = await prisma.user.create({
       data: { email: `vps-test-${Date.now()}@test.de`, password: "$2b$10$hash", name: "VPS Test" },
     });
     const token = signToken({ userId: user.id, email: user.email });
 
-    // Create test movie + nzb file + job
     const movie = await prisma.nzbMovie.create({
       data: { titleDe: "Test", titleEn: "Test", year: 2024 },
     });
@@ -114,19 +106,19 @@ describe("Download VPS Routes", () => {
       data: { nzbFileId: nzbFile.id },
     });
 
-    // Remove Hetzner token temporarily
     const origToken = process.env.HETZNER_API_TOKEN;
     delete process.env.HETZNER_API_TOKEN;
 
-    const res = await request(app)
-      .post(`/downloads/jobs/${job.id}/provision`)
-      .set("Authorization", `Bearer ${token}`);
+    try {
+      const res = await request(app)
+        .post(`/downloads/jobs/${job.id}/provision`)
+        .set("Authorization", `Bearer ${token}`);
 
-    // Restore token
-    if (origToken) process.env.HETZNER_API_TOKEN = origToken;
-
-    expect(res.status).toBe(503);
-    expect(res.body.error).toContain("nicht konfiguriert");
+      expect(res.status).toBe(503);
+      expect(res.body.error).toContain("nicht konfiguriert");
+    } finally {
+      if (origToken) process.env.HETZNER_API_TOKEN = origToken;
+    }
   });
 
   it("provision endpoint rejects non-queued jobs", async () => {
@@ -152,19 +144,24 @@ describe("Download VPS Routes", () => {
       data: { nzbFileId: nzbFile.id, status: "downloading" },
     });
 
-    // Set a fake token so the config check passes
     const origToken = process.env.HETZNER_API_TOKEN;
+    const origApiBase = process.env.API_BASE_URL;
     process.env.HETZNER_API_TOKEN = "fake-token-for-test";
+    process.env.API_BASE_URL = "http://localhost:4000";
 
-    const res = await request(app)
-      .post(`/downloads/jobs/${job.id}/provision`)
-      .set("Authorization", `Bearer ${token}`);
+    try {
+      const res = await request(app)
+        .post(`/downloads/jobs/${job.id}/provision`)
+        .set("Authorization", `Bearer ${token}`);
 
-    if (origToken) process.env.HETZNER_API_TOKEN = origToken;
-    else delete process.env.HETZNER_API_TOKEN;
-
-    expect(res.status).toBe(422);
-    expect(res.body.error).toContain("queued");
+      expect(res.status).toBe(422);
+      expect(res.body.error).toContain("queued");
+    } finally {
+      if (origToken) process.env.HETZNER_API_TOKEN = origToken;
+      else delete process.env.HETZNER_API_TOKEN;
+      if (origApiBase) process.env.API_BASE_URL = origApiBase;
+      else delete process.env.API_BASE_URL;
+    }
   });
 
   it("cleanup endpoint returns 404 for unknown job", async () => {
@@ -183,14 +180,16 @@ describe("Download VPS Routes", () => {
     const origToken = process.env.HETZNER_API_TOKEN;
     process.env.HETZNER_API_TOKEN = "fake-token-for-test";
 
-    const res = await request(app)
-      .post("/downloads/jobs/nonexistent-id/cleanup")
-      .set("Authorization", `Bearer ${token}`);
+    try {
+      const res = await request(app)
+        .post("/downloads/jobs/nonexistent-id/cleanup")
+        .set("Authorization", `Bearer ${token}`);
 
-    if (origToken) process.env.HETZNER_API_TOKEN = origToken;
-    else delete process.env.HETZNER_API_TOKEN;
-
-    expect(res.status).toBe(404);
+      expect(res.status).toBe(404);
+    } finally {
+      if (origToken) process.env.HETZNER_API_TOKEN = origToken;
+      else delete process.env.HETZNER_API_TOKEN;
+    }
   });
 
   it("cleanup endpoint rejects jobs without server", async () => {
@@ -219,14 +218,16 @@ describe("Download VPS Routes", () => {
     const origToken = process.env.HETZNER_API_TOKEN;
     process.env.HETZNER_API_TOKEN = "fake-token-for-test";
 
-    const res = await request(app)
-      .post(`/downloads/jobs/${job.id}/cleanup`)
-      .set("Authorization", `Bearer ${token}`);
+    try {
+      const res = await request(app)
+        .post(`/downloads/jobs/${job.id}/cleanup`)
+        .set("Authorization", `Bearer ${token}`);
 
-    if (origToken) process.env.HETZNER_API_TOKEN = origToken;
-    else delete process.env.HETZNER_API_TOKEN;
-
-    expect(res.status).toBe(422);
-    expect(res.body.error).toContain("keinen zugeordneten Server");
+      expect(res.status).toBe(422);
+      expect(res.body.error).toContain("keinen zugeordneten Server");
+    } finally {
+      if (origToken) process.env.HETZNER_API_TOKEN = origToken;
+      else delete process.env.HETZNER_API_TOKEN;
+    }
   });
 });

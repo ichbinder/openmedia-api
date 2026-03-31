@@ -502,11 +502,9 @@ router.delete("/jobs/:id", async (req: AuthRequest, res: Response) => {
 import {
   isHetznerConfigured,
   createServer,
-  getServer,
   deleteServer,
   listServers,
   findZombieServers,
-  cleanupZombieServers,
   generateCloudInit,
 } from "../lib/hetzner.js";
 
@@ -515,6 +513,16 @@ router.post("/jobs/:id/provision", async (req: AuthRequest, res: Response) => {
   try {
     if (!isHetznerConfigured()) {
       res.status(503).json({ error: "Hetzner Cloud API ist nicht konfiguriert." });
+      return;
+    }
+
+    // Validate required config before creating a VPS
+    const requiredEnvVars = ["S3_ACCESS_KEY", "S3_SECRET_KEY", "S3_ENDPOINT", "S3_BUCKET", "API_BASE_URL"];
+    const missingVars = requiredEnvVars.filter((v) => !process.env[v]);
+    if (missingVars.length > 0) {
+      res.status(503).json({
+        error: `Fehlende Konfiguration: ${missingVars.join(", ")}`,
+      });
       return;
     }
 
@@ -535,16 +543,27 @@ router.post("/jobs/:id/provision", async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    // Generate Cloud-Init script
+    // CAS: atomically claim the job so concurrent requests can't both provision
+    const casResult = await prisma.downloadJob.updateMany({
+      where: { id: job.id, status: "queued" },
+      data: { status: "provisioning", startedAt: new Date() },
+    });
+
+    if (casResult.count === 0) {
+      res.status(409).json({ error: "Job wurde zwischenzeitlich geändert (Konflikt)." });
+      return;
+    }
+
+    // Generate Cloud-Init script with service token (not user JWT)
     const cloudInit = generateCloudInit({
       jobId: job.id,
       nzbHash: job.nzbFile.hash,
-      apiBaseUrl: process.env.API_BASE_URL || `http://localhost:${process.env.PORT || 4000}`,
-      apiToken: req.headers.authorization?.replace("Bearer ", "") || "",
-      s3AccessKey: process.env.S3_ACCESS_KEY || "",
-      s3SecretKey: process.env.S3_SECRET_KEY || "",
-      s3Endpoint: process.env.S3_ENDPOINT || "",
-      s3Bucket: process.env.S3_BUCKET || "",
+      apiBaseUrl: process.env.API_BASE_URL!,
+      apiToken: process.env.SERVICE_API_TOKEN || req.headers.authorization?.replace("Bearer ", "") || "",
+      s3AccessKey: process.env.S3_ACCESS_KEY!,
+      s3SecretKey: process.env.S3_SECRET_KEY!,
+      s3Endpoint: process.env.S3_ENDPOINT!,
+      s3Bucket: process.env.S3_BUCKET!,
       usenetHost: process.env.USENET_HOST || "",
       usenetPort: parseInt(process.env.USENET_PORT || "563", 10),
       usenetUser: process.env.USENET_USER || "",
@@ -554,22 +573,28 @@ router.post("/jobs/:id/provision", async (req: AuthRequest, res: Response) => {
 
     const serverName = `dl-${job.id.slice(0, 8)}`;
 
-    const result = await createServer({
-      name: serverName,
-      userData: cloudInit,
-      labels: {
-        "job-id": job.id,
-      },
-    });
+    let result;
+    try {
+      result = await createServer({
+        name: serverName,
+        userData: cloudInit,
+        labels: { "job-id": job.id },
+      });
+    } catch (err: any) {
+      // Rollback job status on server creation failure
+      await prisma.downloadJob.update({
+        where: { id: job.id },
+        data: { status: "failed", error: `VPS-Erstellung fehlgeschlagen: ${err.message}`, completedAt: new Date() },
+      });
+      throw err;
+    }
 
     // Update job with server info
     await prisma.downloadJob.update({
       where: { id: job.id },
       data: {
-        status: "provisioning",
         hetznerServerId: result.server.id,
         hetznerServerIp: result.server.publicIpv4,
-        startedAt: new Date(),
       },
     });
 
@@ -667,6 +692,11 @@ router.post("/cleanup-zombies", async (req: AuthRequest, res: Response) => {
 
     const maxAgeHours = typeof req.body?.maxAgeHours === "number" ? req.body.maxAgeHours : 6;
 
+    if (maxAgeHours < 1 || maxAgeHours > 168) {
+      res.status(400).json({ error: "maxAgeHours muss zwischen 1 und 168 (7 Tage) liegen." });
+      return;
+    }
+
     const zombies = await findZombieServers(maxAgeHours);
 
     if (zombies.length === 0) {
@@ -674,7 +704,19 @@ router.post("/cleanup-zombies", async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    const deletedIds = await cleanupZombieServers(maxAgeHours);
+    // Delete zombies directly (avoid double listServers call)
+    const deletedIds: number[] = [];
+    for (const server of zombies) {
+      try {
+        const deleted = await deleteServer(server.id);
+        if (deleted) {
+          deletedIds.push(server.id);
+          console.log(`[download-vps] Zombie cleaned: ${server.name} (id: ${server.id})`);
+        }
+      } catch (err: any) {
+        console.error(`[download-vps] Failed to clean zombie ${server.id}: ${err.message}`);
+      }
+    }
 
     res.json({
       cleaned: deletedIds.length,
