@@ -336,7 +336,7 @@ runcmd:
         -d "{\\"status\\":\\"failed\\",\\"error\\":\\"$1\\"}" || true
     }
 
-    if ! docker pull ${params.dockerImage}; then
+    if ! docker pull "${params.dockerImage}"; then
       fail_job "Docker pull failed: ${params.dockerImage}"
       exit 1
     fi
@@ -366,18 +366,20 @@ runcmd:
 
     if ! docker run -d --name openmedia-downloader \\
       --env-file /opt/openmedia-env \\
-      ${params.dockerImage}; then
+      "${params.dockerImage}"; then
       fail_job "Docker run failed"
       exit 1
     fi
 
-  # Monitor container — when it exits, signal that VPS can be destroyed
+  # Monitor container — when it exits, clean up and signal VPS can be destroyed
   - |
-    docker wait openmedia-downloader
-    EXIT_CODE=$?
+    EXIT_CODE=$(docker wait openmedia-downloader)
     echo "openmedia-downloader exited with code $EXIT_CODE"
     docker logs openmedia-downloader > /var/log/openmedia-downloader.log 2>&1
     # Clean up env file with credentials
     rm -f /opt/openmedia-env
+    # Signal to API that this server can be cleaned up
+    # (zombie-cleanup cron will also catch this as a fallback)
+    echo "VPS ready for cleanup"
 `;
 }

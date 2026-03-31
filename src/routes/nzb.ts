@@ -429,6 +429,7 @@ router.post("/import", upload.single("nzb"), async (req: AuthRequest, res: Respo
           hash,
           originalFilename,
           fileSize: file.buffer.length ? BigInt(file.buffer.length) : null,
+          nzbData: new Uint8Array(file.buffer),
           resolution: parsed.resolution,
           audioLanguages: parsed.audioLanguages,
           codec: parsed.codec,
@@ -476,6 +477,33 @@ router.post("/import", upload.single("nzb"), async (req: AuthRequest, res: Respo
 // --- Download Link ---
 
 import { isS3Configured, generatePresignedUrl, EXPIRY_PRESETS, MAX_PRESIGNED_EXPIRY_SECONDS } from "../lib/s3.js";
+
+// GET /nzb/files/:id/raw — download the raw NZB XML file
+router.get("/files/:id/raw", async (req: AuthRequest, res: Response) => {
+  try {
+    const nzbFile = await prisma.nzbFile.findUnique({
+      where: { id: String(req.params.id) },
+      select: { id: true, hash: true, originalFilename: true, nzbData: true },
+    });
+
+    if (!nzbFile) {
+      res.status(404).json({ error: "NZB-Datei nicht gefunden." });
+      return;
+    }
+
+    if (!nzbFile.nzbData) {
+      res.status(422).json({ error: "NZB-Rohdaten nicht verfügbar (vor nzbData-Feature importiert)." });
+      return;
+    }
+
+    res.setHeader("Content-Type", "application/x-nzb");
+    res.setHeader("Content-Disposition", `attachment; filename="${nzbFile.originalFilename}"`);
+    res.send(Buffer.from(nzbFile.nzbData));
+  } catch (err) {
+    console.error("[nzb] Raw download error:", err);
+    res.status(500).json({ error: "Fehler beim Laden der NZB-Datei." });
+  }
+});
 
 // GET /nzb/files/:id/download-link — generate presigned download URL for an NZB file's media
 router.get("/files/:id/download-link", async (req: AuthRequest, res: Response) => {
