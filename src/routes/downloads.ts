@@ -598,7 +598,7 @@ router.post("/jobs/:id/provision", async (req: AuthRequest, res: Response) => {
     }
 
     // Validate required config before creating a VPS
-    const requiredEnvVars = ["S3_ACCESS_KEY", "S3_SECRET_KEY", "S3_ENDPOINT", "S3_BUCKET", "API_BASE_URL", "USENET_HOST", "USENET_USER", "USENET_PASSWORD"];
+    const requiredEnvVars = ["S3_ACCESS_KEY", "S3_SECRET_KEY", "S3_ENDPOINT", "S3_BUCKET", "API_BASE_URL", "NZB_SERVICE_URL", "USENET_HOST", "USENET_USER", "USENET_PASSWORD"];
     const missingVars = requiredEnvVars.filter((v) => !process.env[v]);
     if (missingVars.length > 0) {
       res.status(503).json({
@@ -636,10 +636,17 @@ router.post("/jobs/:id/provision", async (req: AuthRequest, res: Response) => {
     }
 
     // Generate Cloud-Init script with service token (not user JWT)
+    // Build NZB URL pointing to the openmedia-nzb service (not this API)
+    const nzbServiceUrl = process.env.NZB_SERVICE_URL;
+    if (!nzbServiceUrl) {
+      res.status(503).json({ error: "NZB_SERVICE_URL ist nicht konfiguriert." });
+      return;
+    }
+
     const cloudInit = generateCloudInit({
       jobId: job.id,
       nzbHash: job.nzbFile.hash,
-      nzbUrl: `${process.env.API_BASE_URL}/nzb/files/${job.nzbFile.id}/raw`,
+      nzbUrl: `${nzbServiceUrl}/nzb/${job.nzbFile.hash}`,
       apiBaseUrl: process.env.API_BASE_URL!,
       apiToken: process.env.SERVICE_API_TOKEN || req.headers.authorization?.replace("Bearer ", "") || "",
       s3AccessKey: process.env.S3_ACCESS_KEY!,

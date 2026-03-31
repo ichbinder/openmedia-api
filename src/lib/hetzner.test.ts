@@ -161,6 +161,7 @@ describe("Download VPS Routes", () => {
     const origUsenetHost = process.env.USENET_HOST;
     const origUsenetUser = process.env.USENET_USER;
     const origUsenetPass = process.env.USENET_PASSWORD;
+    const origNzbService = process.env.NZB_SERVICE_URL;
 
     process.env.HETZNER_API_TOKEN = "fake-token-for-test";
     process.env.API_BASE_URL = "http://localhost:4000";
@@ -171,6 +172,7 @@ describe("Download VPS Routes", () => {
     process.env.USENET_HOST = process.env.USENET_HOST || "news.test.com";
     process.env.USENET_USER = process.env.USENET_USER || "user";
     process.env.USENET_PASSWORD = process.env.USENET_PASSWORD || "pass";
+    process.env.NZB_SERVICE_URL = process.env.NZB_SERVICE_URL || "http://localhost:3001";
 
     try {
       const res = await request(app)
@@ -194,6 +196,7 @@ describe("Download VPS Routes", () => {
       restore("USENET_HOST", origUsenetHost);
       restore("USENET_USER", origUsenetUser);
       restore("USENET_PASSWORD", origUsenetPass);
+      restore("NZB_SERVICE_URL", origNzbService);
     }
   });
 
