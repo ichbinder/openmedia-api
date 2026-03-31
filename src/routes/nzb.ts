@@ -3,6 +3,15 @@ import multer from "multer";
 import prisma from "../lib/prisma.js";
 import { requireAuth, type AuthRequest } from "../middleware/auth.js";
 import { parseNzbName, calculateHash } from "../lib/nzb-parser.js";
+
+// Select fields for NzbFile — excludes nzbData blob from responses
+const nzbFileSelect = {
+  id: true, hash: true, originalFilename: true, fileSize: true,
+  resolution: true, audioLanguages: true, subtitleLanguages: true,
+  codec: true, source: true, status: true, brokenReason: true,
+  s3Key: true, s3Bucket: true, fileExtension: true, downloadedAt: true,
+  createdAt: true, updatedAt: true, movieId: true,
+} as const;
 import { searchTmdbMovie } from "../lib/tmdb.js";
 
 const router = Router();
@@ -41,7 +50,7 @@ router.get("/movies/:id", async (req: AuthRequest, res: Response) => {
   try {
     const movie = await prisma.nzbMovie.findUnique({
       where: { id: String(req.params.id) },
-      include: { nzbFiles: true },
+      include: { nzbFiles: { select: nzbFileSelect } },
     });
 
     if (!movie) {
@@ -151,7 +160,7 @@ router.get("/movies/by-tmdb/:tmdbId", async (req: AuthRequest, res: Response) =>
 
     const movie = await prisma.nzbMovie.findUnique({
       where: { tmdbId },
-      include: { nzbFiles: true },
+      include: { nzbFiles: { select: nzbFileSelect } },
     });
 
     if (!movie) {
@@ -459,7 +468,7 @@ router.post("/import", upload.single("nzb"), async (req: AuthRequest, res: Respo
     // Reload movie with all files
     const fullMovie = await prisma.nzbMovie.findUnique({
       where: { id: movie.id },
-      include: { nzbFiles: true },
+      include: { nzbFiles: { select: nzbFileSelect } },
     });
 
     res.status(201).json({
