@@ -508,6 +508,87 @@ import {
   generateCloudInit,
 } from "../lib/hetzner.js";
 
+// GET /downloads/jobs/:id/link — generate presigned download URL for a completed job
+router.get("/jobs/:id/link", async (req: AuthRequest, res: Response) => {
+  try {
+    const job = await prisma.downloadJob.findUnique({
+      where: { id: String(req.params.id) },
+      include: {
+        nzbFile: {
+          include: { movie: { select: { id: true, titleDe: true, titleEn: true, year: true } } },
+        },
+      },
+    });
+
+    if (!job) {
+      res.status(404).json({ error: "Download-Job nicht gefunden." });
+      return;
+    }
+
+    if (job.status !== "completed") {
+      res.status(422).json({
+        error: `Download-Link nur für abgeschlossene Jobs verfügbar (aktuell: ${job.status}).`,
+      });
+      return;
+    }
+
+    if (!job.nzbFile.s3Key) {
+      res.status(422).json({ error: "Keine S3-Referenz vorhanden." });
+      return;
+    }
+
+    const { isS3Configured, generatePresignedUrl, EXPIRY_PRESETS, MAX_PRESIGNED_EXPIRY_SECONDS } = await import("../lib/s3.js");
+
+    if (!isS3Configured()) {
+      res.status(503).json({ error: "Object Storage ist nicht konfiguriert." });
+      return;
+    }
+
+    const rawExpires = req.query.expires;
+    if (Array.isArray(rawExpires)) {
+      res.status(400).json({ error: "Nur ein expires-Wert erlaubt." });
+      return;
+    }
+    const expiresParam = typeof rawExpires === "string" ? rawExpires : "7d";
+    let expiresIn: number;
+    if (Object.hasOwn(EXPIRY_PRESETS, expiresParam)) {
+      expiresIn = EXPIRY_PRESETS[expiresParam];
+    } else if (/^\d+$/.test(expiresParam)) {
+      expiresIn = parseInt(expiresParam, 10);
+      if (expiresIn < 60) {
+        res.status(400).json({ error: "Ungültiger expires-Wert. Verwende 1h, 1d, 3d, 7d oder Sekunden (min 60)." });
+        return;
+      }
+    } else {
+      res.status(400).json({ error: "Ungültiger expires-Wert. Verwende 1h, 1d, 3d, 7d oder Sekunden (min 60)." });
+      return;
+    }
+
+    const cappedExpires = Math.min(expiresIn, MAX_PRESIGNED_EXPIRY_SECONDS);
+    const url = await generatePresignedUrl(job.nzbFile.s3Key, cappedExpires);
+    const expiresAt = new Date(Date.now() + cappedExpires * 1000).toISOString();
+
+    console.log(`[download-job] Link generated: job ${job.id} → ${job.nzbFile.hash.slice(0, 12)}... (expires: ${expiresParam})`);
+
+    res.json({
+      url,
+      expiresIn: cappedExpires,
+      expiresAt,
+      job: { id: job.id, status: job.status },
+      nzbFile: {
+        id: job.nzbFile.id,
+        hash: job.nzbFile.hash,
+        s3Key: job.nzbFile.s3Key,
+        resolution: job.nzbFile.resolution,
+      },
+      movie: job.nzbFile.movie,
+    });
+  } catch (err) {
+    console.error("[download-job] Link error:", err);
+    res.status(500).json({ error: "Fehler beim Erstellen des Download-Links." });
+  }
+});
+
 // POST /downloads/jobs/:id/provision — create a VPS for a download job
 router.post("/jobs/:id/provision", async (req: AuthRequest, res: Response) => {
   try {

@@ -339,4 +339,92 @@ describe("NZB Routes", () => {
       expect(res.status).toBe(401);
     });
   });
+
+  describe("Download Link", () => {
+    it("gibt 404 für nicht existierende NZB-Datei", async () => {
+      const res = await request(app)
+        .get("/nzb/files/nonexistent-id/download-link")
+        .set("Authorization", `Bearer ${token}`);
+
+      expect(res.status).toBe(404);
+    });
+
+    it("gibt 422 wenn NZB-Datei kein s3Key hat", async () => {
+      const movie = await prisma.nzbMovie.create({
+        data: { titleDe: "DL Test", titleEn: "DL Test", year: 2024 },
+      });
+      const nzbFile = await prisma.nzbFile.create({
+        data: {
+          movieId: movie.id,
+          hash: `dlhash-${Date.now()}`,
+          originalFilename: "test.nzb",
+          // s3Key is null — not yet downloaded
+        },
+      });
+
+      const res = await request(app)
+        .get(`/nzb/files/${nzbFile.id}/download-link`)
+        .set("Authorization", `Bearer ${token}`);
+
+      expect(res.status).toBe(422);
+      expect(res.body.error).toContain("noch nicht heruntergeladen");
+    });
+
+    it("generiert Download-Link wenn s3Key vorhanden und S3 konfiguriert", async () => {
+      const movie = await prisma.nzbMovie.create({
+        data: { titleDe: "DL Test", titleEn: "DL Test", year: 2024 },
+      });
+      const nzbFile = await prisma.nzbFile.create({
+        data: {
+          movieId: movie.id,
+          hash: `dlhash2-${Date.now()}`,
+          originalFilename: "test.nzb",
+          s3Key: "fakehash/fakehash.mkv",
+          s3Bucket: "openmedia-files",
+          fileExtension: ".mkv",
+          downloadedAt: new Date(),
+        },
+      });
+
+      const res = await request(app)
+        .get(`/nzb/files/${nzbFile.id}/download-link?expires=1d`)
+        .set("Authorization", `Bearer ${token}`);
+
+      // If S3 is not configured, expect 503
+      if (res.status === 503) {
+        expect(res.body.error).toContain("nicht konfiguriert");
+        return;
+      }
+
+      expect(res.status).toBe(200);
+      expect(res.body.url).toBeDefined();
+      expect(res.body.expiresIn).toBe(86400); // 1 day
+      expect(res.body.nzbFile.hash).toContain("dlhash2");
+      expect(res.body.movie.titleEn).toBe("DL Test");
+    });
+
+    it("lehnt ungültigen expires-Wert ab", async () => {
+      const movie = await prisma.nzbMovie.create({
+        data: { titleDe: "DL Test", titleEn: "DL Test", year: 2024 },
+      });
+      const nzbFile = await prisma.nzbFile.create({
+        data: {
+          movieId: movie.id,
+          hash: `dlhash3-${Date.now()}`,
+          originalFilename: "test.nzb",
+          s3Key: "fakehash/fakehash.mkv",
+          s3Bucket: "openmedia-files",
+        },
+      });
+
+      const res = await request(app)
+        .get(`/nzb/files/${nzbFile.id}/download-link?expires=abc`)
+        .set("Authorization", `Bearer ${token}`);
+
+      if (res.status === 503) return;
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain("expires");
+    });
+  });
 });

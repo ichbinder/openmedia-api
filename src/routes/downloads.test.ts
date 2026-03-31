@@ -310,6 +310,45 @@ describe("Downloads Routes", () => {
     });
   });
 
+  describe("GET /downloads/jobs/:id/link", () => {
+    it("gibt 404 für nicht existierenden Job", async () => {
+      const res = await request(app)
+        .get("/downloads/jobs/nonexistent-id/link")
+        .set("Authorization", `Bearer ${token}`);
+
+      expect(res.status).toBe(404);
+    });
+
+    it("gibt 422 für nicht abgeschlossenen Job", async () => {
+      const { nzbFile } = await createTestNzbFile();
+      const createRes = await request(app)
+        .post("/downloads/jobs")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ nzbFileId: nzbFile.id });
+
+      const res = await request(app)
+        .get(`/downloads/jobs/${createRes.body.job.id}/link`)
+        .set("Authorization", `Bearer ${token}`);
+
+      expect(res.status).toBe(422);
+      expect(res.body.error).toContain("abgeschlossene");
+    });
+
+    it("gibt 422 wenn kein s3Key vorhanden", async () => {
+      const { nzbFile } = await createTestNzbFile();
+      // Create a job and force it to completed without s3Key (direct DB manipulation)
+      const job = await prisma.downloadJob.create({
+        data: { nzbFileId: nzbFile.id, status: "completed", completedAt: new Date() },
+      });
+
+      const res = await request(app)
+        .get(`/downloads/jobs/${job.id}/link`)
+        .set("Authorization", `Bearer ${token}`);
+
+      expect(res.status).toBe(422);
+    });
+  });
+
   describe("DELETE /downloads/jobs/:id", () => {
     it("löscht einen queued Job", async () => {
       const { nzbFile } = await createTestNzbFile();
