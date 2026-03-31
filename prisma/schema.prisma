@@ -110,3 +110,15 @@ model DownloadJob {
   @@index([status])
   @@map("download_jobs")
 }
+
+model EncryptedConfig {
+  id              String   @id @default(uuid())
+  key             String   @unique
+  encryptedValue  String   @map("encrypted_value")
+  iv              String                              // hex-encoded initialization vector
+  tag             String                              // hex-encoded auth tag
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@map("encrypted_configs")
+}
