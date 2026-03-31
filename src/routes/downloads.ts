@@ -544,16 +544,24 @@ router.get("/jobs/:id/link", async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    const expiresParam = typeof req.query.expires === "string" ? req.query.expires : "7d";
+    const rawExpires = req.query.expires;
+    if (Array.isArray(rawExpires)) {
+      res.status(400).json({ error: "Nur ein expires-Wert erlaubt." });
+      return;
+    }
+    const expiresParam = typeof rawExpires === "string" ? rawExpires : "7d";
     let expiresIn: number;
     if (Object.hasOwn(EXPIRY_PRESETS, expiresParam)) {
       expiresIn = EXPIRY_PRESETS[expiresParam];
-    } else {
+    } else if (/^\d+$/.test(expiresParam)) {
       expiresIn = parseInt(expiresParam, 10);
-      if (isNaN(expiresIn) || expiresIn < 60) {
+      if (expiresIn < 60) {
         res.status(400).json({ error: "Ungültiger expires-Wert. Verwende 1h, 1d, 3d, 7d oder Sekunden (min 60)." });
         return;
       }
+    } else {
+      res.status(400).json({ error: "Ungültiger expires-Wert. Verwende 1h, 1d, 3d, 7d oder Sekunden (min 60)." });
+      return;
     }
 
     const cappedExpires = Math.min(expiresIn, MAX_PRESIGNED_EXPIRY_SECONDS);
