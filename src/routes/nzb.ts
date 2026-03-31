@@ -475,7 +475,7 @@ router.post("/import", upload.single("nzb"), async (req: AuthRequest, res: Respo
 
 // --- Download Link ---
 
-import { isS3Configured, generatePresignedUrl, EXPIRY_PRESETS } from "../lib/s3.js";
+import { isS3Configured, generatePresignedUrl, EXPIRY_PRESETS, MAX_PRESIGNED_EXPIRY_SECONDS } from "../lib/s3.js";
 
 // GET /nzb/files/:id/download-link — generate presigned download URL for an NZB file's media
 router.get("/files/:id/download-link", async (req: AuthRequest, res: Response) => {
@@ -513,14 +513,15 @@ router.get("/files/:id/download-link", async (req: AuthRequest, res: Response) =
       }
     }
 
-    const url = await generatePresignedUrl(nzbFile.s3Key, expiresIn);
-    const expiresAt = new Date(Date.now() + expiresIn * 1000).toISOString();
+    const cappedExpires = Math.min(expiresIn, MAX_PRESIGNED_EXPIRY_SECONDS);
+    const url = await generatePresignedUrl(nzbFile.s3Key, cappedExpires);
+    const expiresAt = new Date(Date.now() + cappedExpires * 1000).toISOString();
 
     console.log(`[nzb] Download link generated: ${nzbFile.hash.slice(0, 12)}... (expires: ${expiresParam})`);
 
     res.json({
       url,
-      expiresIn,
+      expiresIn: cappedExpires,
       expiresAt,
       nzbFile: {
         id: nzbFile.id,

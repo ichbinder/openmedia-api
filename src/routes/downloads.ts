@@ -537,7 +537,7 @@ router.get("/jobs/:id/link", async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    const { isS3Configured, generatePresignedUrl, EXPIRY_PRESETS } = await import("../lib/s3.js");
+    const { isS3Configured, generatePresignedUrl, EXPIRY_PRESETS, MAX_PRESIGNED_EXPIRY_SECONDS } = await import("../lib/s3.js");
 
     if (!isS3Configured()) {
       res.status(503).json({ error: "Object Storage ist nicht konfiguriert." });
@@ -556,14 +556,15 @@ router.get("/jobs/:id/link", async (req: AuthRequest, res: Response) => {
       }
     }
 
-    const url = await generatePresignedUrl(job.nzbFile.s3Key, expiresIn);
-    const expiresAt = new Date(Date.now() + expiresIn * 1000).toISOString();
+    const cappedExpires = Math.min(expiresIn, MAX_PRESIGNED_EXPIRY_SECONDS);
+    const url = await generatePresignedUrl(job.nzbFile.s3Key, cappedExpires);
+    const expiresAt = new Date(Date.now() + cappedExpires * 1000).toISOString();
 
     console.log(`[download-job] Link generated: job ${job.id} → ${job.nzbFile.hash.slice(0, 12)}... (expires: ${expiresParam})`);
 
     res.json({
       url,
-      expiresIn,
+      expiresIn: cappedExpires,
       expiresAt,
       job: { id: job.id, status: job.status },
       nzbFile: {
