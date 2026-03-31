@@ -304,112 +304,55 @@ export async function cleanupZombieServers(
 export function generateCloudInit(params: {
   jobId: string;
   nzbHash: string;
+  nzbUrl: string;
   apiBaseUrl: string;
   apiToken: string;
   s3AccessKey: string;
   s3SecretKey: string;
   s3Endpoint: string;
   s3Bucket: string;
+  s3Region: string;
   usenetHost: string;
   usenetPort: number;
   usenetUser: string;
   usenetPassword: string;
   usenetSsl: boolean;
+  usenetConnections: number;
+  dockerImage: string;
 }): string {
   return `#cloud-config
-package_update: true
+package_update: false
 
 runcmd:
-  # Get server IP for status callback
-  - export SERVER_IP=$(curl -s http://169.254.169.254/hetzner/v1/metadata/public-ipv4)
-
-  # Signal downloading status
+  # Pull and run the openmedia-downloader container
   - |
-    curl -s -X PATCH "${params.apiBaseUrl}/downloads/jobs/${params.jobId}/status" \\
-      -H "Authorization: Bearer ${params.apiToken}" \\
-      -H "Content-Type: application/json" \\
-      -d "{\\"status\\":\\"downloading\\",\\"hetznerServerIp\\":\\"$SERVER_IP\\"}"
-
-  # Create working directories
-  - mkdir -p /opt/downloads/incomplete /opt/downloads/complete /opt/downloads/nzb /opt/downloads/config
-
-  # Run SABnzbd container with proper volume mounts
-  - |
-    docker run -d --name sabnzbd \\
-      -p 8080:8080 \\
-      -v /opt/downloads/config:/config \\
-      -v /opt/downloads/incomplete:/incomplete \\
-      -v /opt/downloads/complete:/complete \\
-      -v /opt/downloads/nzb:/nzb \\
+    docker pull ${params.dockerImage}
+    docker run -d --name openmedia-downloader \\
+      -e JOB_ID="${params.jobId}" \\
+      -e JOB_HASH="${params.nzbHash}" \\
+      -e NZB_URL="${params.nzbUrl}" \\
+      -e API_BASE_URL="${params.apiBaseUrl}" \\
+      -e SERVICE_TOKEN="${params.apiToken}" \\
+      -e USENET_HOST="${params.usenetHost}" \\
+      -e USENET_PORT="${params.usenetPort}" \\
+      -e USENET_USER="${params.usenetUser}" \\
+      -e USENET_PASSWORD="${params.usenetPassword}" \\
+      -e USENET_SSL="${params.usenetSsl ? "1" : "0"}" \\
+      -e USENET_CONNECTIONS="${params.usenetConnections}" \\
+      -e S3_ACCESS_KEY="${params.s3AccessKey}" \\
+      -e S3_SECRET_KEY="${params.s3SecretKey}" \\
+      -e S3_ENDPOINT="${params.s3Endpoint}" \\
+      -e S3_BUCKET="${params.s3Bucket}" \\
+      -e S3_REGION="${params.s3Region}" \\
       -e PUID=1000 -e PGID=1000 \\
-      lscr.io/linuxserver/sabnzbd:latest
+      ${params.dockerImage}
 
-  # Wait for SABnzbd to initialize and create config
-  - sleep 30
-
-  # Write post-processing script (runs on HOST, not in container)
+  # Monitor container — when it exits, signal that VPS can be destroyed
   - |
-    cat > /opt/downloads/post-process.sh << 'EOF'
-    #!/bin/bash
-    set -e
-    
-    COMPLETE_DIR="/opt/downloads/complete"
-    
-    echo "[post-process] Starting for job ${params.jobId}"
-    
-    # Signal uploading status
-    curl -s -X PATCH "${params.apiBaseUrl}/downloads/jobs/${params.jobId}/status" \\
-      -H "Authorization: Bearer ${params.apiToken}" \\
-      -H "Content-Type: application/json" \\
-      -d '{"status":"uploading","progress":80}'
-    
-    # Find the main video file
-    VIDEO_FILE=$(find "$COMPLETE_DIR" -type f \\( -name "*.mkv" -o -name "*.mp4" -o -name "*.avi" -o -name "*.m4v" \\) -size +10M | head -1)
-    
-    if [ -z "$VIDEO_FILE" ]; then
-      echo "[post-process] No video file found!"
-      curl -s -X PATCH "${params.apiBaseUrl}/downloads/jobs/${params.jobId}/status" \\
-        -H "Authorization: Bearer ${params.apiToken}" \\
-        -H "Content-Type: application/json" \\
-        -d '{"status":"failed","error":"Keine Videodatei gefunden nach dem Entpacken."}'
-      exit 1
-    fi
-    
-    # Get file extension
-    FILE_EXT=".$(echo "$VIDEO_FILE" | rev | cut -d. -f1 | rev)"
-    
-    # Calculate SHA-256 hash of the file
-    FILE_HASH=$(sha256sum "$VIDEO_FILE" | cut -d' ' -f1)
-    S3_KEY="$FILE_HASH/$FILE_HASH$FILE_EXT"
-    
-    echo "[post-process] Uploading $S3_KEY to S3..."
-    
-    # Install AWS CLI for S3 upload
-    apt-get install -y -qq awscli 2>/dev/null || pip3 install awscli 2>/dev/null
-    
-    # Configure AWS CLI for Hetzner S3
-    export AWS_ACCESS_KEY_ID="${params.s3AccessKey}"
-    export AWS_SECRET_ACCESS_KEY="${params.s3SecretKey}"
-    
-    # Upload to S3
-    aws s3 cp "$VIDEO_FILE" "s3://${params.s3Bucket}/$S3_KEY" \\
-      --endpoint-url "${params.s3Endpoint}" \\
-      --region hel1
-    
-    echo "[post-process] Upload complete. Signaling API..."
-    
-    # Signal completed with S3 reference
-    curl -s -X PATCH "${params.apiBaseUrl}/downloads/jobs/${params.jobId}/status" \\
-      -H "Authorization: Bearer ${params.apiToken}" \\
-      -H "Content-Type: application/json" \\
-      -d "{\\"status\\":\\"completed\\",\\"s3Key\\":\\"$S3_KEY\\",\\"s3Bucket\\":\\"${params.s3Bucket}\\",\\"fileExtension\\":\\"$FILE_EXT\\",\\"progress\\":100}"
-    
-    echo "[post-process] Done."
-    EOF
-    chmod +x /opt/downloads/post-process.sh
-
-  # Note: SABnzbd configuration (Usenet server, NZB submission, post-processing hook)
-  # will be handled by the Docker image's entrypoint in S04.
-  # This Cloud-Init provides the framework and post-processing script.
+    docker wait openmedia-downloader
+    EXIT_CODE=$?
+    echo "openmedia-downloader exited with code $EXIT_CODE"
+    # Collect logs for debugging
+    docker logs openmedia-downloader > /var/log/openmedia-downloader.log 2>&1
 `;
 }

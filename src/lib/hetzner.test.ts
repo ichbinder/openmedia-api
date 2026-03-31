@@ -36,46 +36,52 @@ describe("Hetzner Service", () => {
     const defaultParams = {
       jobId: "test-job-123",
       nzbHash: "abc123hash",
+      nzbUrl: "http://api.example.com/nzb/files/xyz/raw",
       apiBaseUrl: "http://api.example.com",
       apiToken: "test-token",
       s3AccessKey: "s3-key",
       s3SecretKey: "s3-secret",
       s3Endpoint: "https://hel1.your-objectstorage.com",
       s3Bucket: "openmedia-files",
+      s3Region: "hel1",
       usenetHost: "news.example.com",
       usenetPort: 563,
       usenetUser: "user",
       usenetPassword: "pass",
       usenetSsl: true,
+      usenetConnections: 10,
+      dockerImage: "ghcr.io/ichbinder/openmedia-downloader:latest",
     };
 
-    it("generates valid cloud-init YAML", () => {
+    it("generates valid cloud-init YAML with docker run", () => {
       const cloudInit = generateCloudInit(defaultParams);
 
       expect(cloudInit).toContain("#cloud-config");
       expect(cloudInit).toContain("test-job-123");
       expect(cloudInit).toContain("api.example.com");
       expect(cloudInit).toContain("openmedia-files");
-      expect(cloudInit).toContain("sha256sum");
-      expect(cloudInit).toContain("aws s3 cp");
-      expect(cloudInit).toContain("post-process.sh");
+      expect(cloudInit).toContain("docker pull");
+      expect(cloudInit).toContain("docker run");
+      expect(cloudInit).toContain("openmedia-downloader");
     });
 
-    it("uses correct host paths (not container paths)", () => {
+    it("passes hash and NZB URL as env vars", () => {
       const cloudInit = generateCloudInit(defaultParams);
 
-      expect(cloudInit).toContain("/opt/downloads/complete");
-      expect(cloudInit).toContain("/opt/downloads/config:/config");
+      expect(cloudInit).toContain("JOB_HASH=");
+      expect(cloudInit).toContain("abc123hash");
+      expect(cloudInit).toContain("NZB_URL=");
     });
 
-    it("includes S3 upload configuration", () => {
+    it("includes S3 and Usenet credentials", () => {
       const cloudInit = generateCloudInit({
         ...defaultParams,
         s3Bucket: "my-bucket",
       });
 
-      expect(cloudInit).toContain("AWS_ACCESS_KEY_ID");
-      expect(cloudInit).toContain("AWS_SECRET_ACCESS_KEY");
+      expect(cloudInit).toContain("S3_ACCESS_KEY=");
+      expect(cloudInit).toContain("S3_SECRET_KEY=");
+      expect(cloudInit).toContain("USENET_HOST=");
       expect(cloudInit).toContain("my-bucket");
     });
   });
