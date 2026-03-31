@@ -63,6 +63,8 @@ describe("Hetzner Service", () => {
       expect(cloudInit).toContain("docker pull");
       expect(cloudInit).toContain("docker run");
       expect(cloudInit).toContain("openmedia-downloader");
+      expect(cloudInit).toContain("fail_job");
+      expect(cloudInit).toContain("--env-file");
     });
 
     it("passes hash and NZB URL as env vars", () => {

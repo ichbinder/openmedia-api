@@ -326,33 +326,58 @@ package_update: false
 runcmd:
   # Pull and run the openmedia-downloader container
   - |
-    docker pull ${params.dockerImage}
-    docker run -d --name openmedia-downloader \\
-      -e JOB_ID="${params.jobId}" \\
-      -e JOB_HASH="${params.nzbHash}" \\
-      -e NZB_URL="${params.nzbUrl}" \\
-      -e API_BASE_URL="${params.apiBaseUrl}" \\
-      -e SERVICE_TOKEN="${params.apiToken}" \\
-      -e USENET_HOST="${params.usenetHost}" \\
-      -e USENET_PORT="${params.usenetPort}" \\
-      -e USENET_USER="${params.usenetUser}" \\
-      -e USENET_PASSWORD="${params.usenetPassword}" \\
-      -e USENET_SSL="${params.usenetSsl ? "1" : "0"}" \\
-      -e USENET_CONNECTIONS="${params.usenetConnections}" \\
-      -e S3_ACCESS_KEY="${params.s3AccessKey}" \\
-      -e S3_SECRET_KEY="${params.s3SecretKey}" \\
-      -e S3_ENDPOINT="${params.s3Endpoint}" \\
-      -e S3_BUCKET="${params.s3Bucket}" \\
-      -e S3_REGION="${params.s3Region}" \\
-      -e PUID=1000 -e PGID=1000 \\
-      ${params.dockerImage}
+    set -e
+
+    # Signal failure to API if anything goes wrong
+    fail_job() {
+      curl -sf -X PATCH "${params.apiBaseUrl}/downloads/jobs/${params.jobId}/status" \\
+        -H "Authorization: Bearer ${params.apiToken}" \\
+        -H "Content-Type: application/json" \\
+        -d "{\\"status\\":\\"failed\\",\\"error\\":\\"$1\\"}" || true
+    }
+
+    if ! docker pull ${params.dockerImage}; then
+      fail_job "Docker pull failed: ${params.dockerImage}"
+      exit 1
+    fi
+
+    # Write credentials to env file (avoids /proc/cmdline exposure)
+    cat > /opt/openmedia-env << 'ENVEOF'
+    JOB_ID=${params.jobId}
+    JOB_HASH=${params.nzbHash}
+    NZB_URL=${params.nzbUrl}
+    API_BASE_URL=${params.apiBaseUrl}
+    SERVICE_TOKEN=${params.apiToken}
+    USENET_HOST=${params.usenetHost}
+    USENET_PORT=${params.usenetPort}
+    USENET_USER=${params.usenetUser}
+    USENET_PASSWORD=${params.usenetPassword}
+    USENET_SSL=${params.usenetSsl ? "1" : "0"}
+    USENET_CONNECTIONS=${params.usenetConnections}
+    S3_ACCESS_KEY=${params.s3AccessKey}
+    S3_SECRET_KEY=${params.s3SecretKey}
+    S3_ENDPOINT=${params.s3Endpoint}
+    S3_BUCKET=${params.s3Bucket}
+    S3_REGION=${params.s3Region}
+    PUID=1000
+    PGID=1000
+    ENVEOF
+    chmod 600 /opt/openmedia-env
+
+    if ! docker run -d --name openmedia-downloader \\
+      --env-file /opt/openmedia-env \\
+      ${params.dockerImage}; then
+      fail_job "Docker run failed"
+      exit 1
+    fi
 
   # Monitor container — when it exits, signal that VPS can be destroyed
   - |
     docker wait openmedia-downloader
     EXIT_CODE=$?
     echo "openmedia-downloader exited with code $EXIT_CODE"
-    # Collect logs for debugging
     docker logs openmedia-downloader > /var/log/openmedia-downloader.log 2>&1
+    # Clean up env file with credentials
+    rm -f /opt/openmedia-env
 `;
 }
