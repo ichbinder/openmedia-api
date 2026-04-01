@@ -6,6 +6,7 @@ import { execSync } from "child_process";
 // Set test DATABASE_URL before any imports
 process.env.DATABASE_URL = process.env.DATABASE_URL || "postgresql://cinescope_test:cinescope_test@localhost:5433/cinescope_test";
 process.env.JWT_SECRET = process.env.JWT_SECRET || "test-secret-for-testing-only";
+process.env.AUTO_PROVISION = "false"; // Disable auto-provisioning in tests
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 export const prisma = new PrismaClient({ adapter });
