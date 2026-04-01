@@ -215,6 +215,16 @@ router.post("/jobs", async (req: AuthRequest, res: Response) => {
     console.log(`[download-job] Created: ${result.job.id} for ${nzbFile.movie.titleEn} (${nzbFile.hash.slice(0, 12)}...)`);
 
     res.status(201).json({ job: serializeJob(result.job) });
+
+    // Auto-provision: start download container in background
+    // (after response is sent to client)
+    if (process.env.AUTO_PROVISION !== "false") {
+      import("../lib/local-provisioner.js").then(({ provisionLocalDownload }) => {
+        provisionLocalDownload(result.job.id).catch((err) => {
+          console.error("[download-job] Auto-provision failed:", err);
+        });
+      });
+    }
   } catch (err) {
     console.error("[download-job] Create error:", err);
     res.status(500).json({ error: "Fehler beim Erstellen des Download-Jobs." });
