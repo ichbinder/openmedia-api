@@ -17,9 +17,11 @@ type ProvisionMode = "hetzner" | "local" | "false";
 
 function getProvisionMode(): ProvisionMode {
   const mode = process.env.AUTO_PROVISION || "hetzner";
-  if (mode === "false") return "false";
-  if (mode === "local") return "local";
-  return "hetzner";
+  if (mode === "false" || mode === "local" || mode === "hetzner") {
+    return mode;
+  }
+  console.error(`[provision] Unknown AUTO_PROVISION value: "${mode}" — must be "hetzner", "local", or "false". Defaulting to "false" (disabled).`);
+  return "false";
 }
 
 /**
