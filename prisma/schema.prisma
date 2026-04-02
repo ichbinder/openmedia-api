@@ -16,6 +16,7 @@ model User {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   watchlist  WatchlistItem[]
+  library   UserLibrary[]
 
   @@map("users")
 }
@@ -72,6 +73,10 @@ model NzbFile {
   fileExtension     String?  @map("file_extension")
   downloadedAt      DateTime? @map("downloaded_at")
 
+  // Lifecycle management
+  lastAccessedAt       DateTime? @map("last_accessed_at")       // updated on every presigned URL request
+  scheduledDeletionAt  DateTime? @map("scheduled_deletion_at")  // set when LRU cleanup marks for deletion
+
   createdAt         DateTime @default(now()) @map("created_at")
   updatedAt         DateTime @updatedAt @map("updated_at")
 
@@ -79,9 +84,26 @@ model NzbFile {
   movieId String   @map("movie_id")
 
   downloadJobs DownloadJob[]
+  libraryUsers UserLibrary[]
 
   @@index([movieId])
   @@map("nzb_files")
+}
+
+model UserLibrary {
+  id        String    @id @default(uuid())
+  addedAt   DateTime  @default(now()) @map("added_at")
+  removedAt DateTime? @map("removed_at")              // null = active, set = user removed from library
+
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String  @map("user_id")
+
+  nzbFile   NzbFile @relation(fields: [nzbFileId], references: [id], onDelete: Cascade)
+  nzbFileId String  @map("nzb_file_id")
+
+  @@unique([userId, nzbFileId])
+  @@index([nzbFileId])
+  @@map("user_library")
 }
 
 model DownloadJob {
@@ -91,6 +113,9 @@ model DownloadJob {
   status          String   @default("queued")
   progress        Int      @default(0)      // 0-100 percentage
   error           String?                    // error message if failed
+
+  // Who started this download
+  userId          String?  @map("user_id")
 
   // Hetzner VPS tracking
   hetznerServerId Int?     @map("hetzner_server_id")

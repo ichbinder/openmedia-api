@@ -184,7 +184,7 @@ router.post("/jobs", async (req: AuthRequest, res: Response) => {
         }
 
         const job = await tx.downloadJob.create({
-          data: { nzbFileId },
+          data: { nzbFileId, userId: req.user?.userId || null },
           include: {
             nzbFile: {
               include: { movie: true },
@@ -421,6 +421,20 @@ router.patch("/jobs/:id/status", async (req: AuthRequest, res: Response) => {
       }
 
       console.log(`[download-job] Completed: ${currentJob.id} → s3://${effectiveBucket}/${s3Key}`);
+
+      // Auto-add to user's library if job has a userId
+      if (currentJob.userId) {
+        try {
+          await prisma.userLibrary.upsert({
+            where: { userId_nzbFileId: { userId: currentJob.userId, nzbFileId: currentJob.nzbFileId } },
+            create: { userId: currentJob.userId, nzbFileId: currentJob.nzbFileId },
+            update: { removedAt: null, addedAt: new Date() },  // re-add if previously removed
+          });
+          console.log(`[library] Auto-added to library: user ${currentJob.userId.slice(0, 8)}... → ${currentJob.nzbFileId.slice(0, 8)}...`);
+        } catch (libErr) {
+          console.error("[library] Auto-add failed:", libErr);
+        }
+      }
 
       // Re-fetch to include updated NzbFile in response
       const fullJob = await prisma.downloadJob.findUnique({
