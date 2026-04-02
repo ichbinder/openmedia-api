@@ -343,25 +343,25 @@ runcmd:
 
     # Write credentials to env file (avoids /proc/cmdline exposure)
     cat > /opt/openmedia-env << 'ENVEOF'
-    JOB_ID=${params.jobId}
-    JOB_HASH=${params.nzbHash}
-    NZB_URL=${params.nzbUrl}
-    API_BASE_URL=${params.apiBaseUrl}
-    SERVICE_TOKEN=${params.apiToken}
-    USENET_HOST=${params.usenetHost}
-    USENET_PORT=${params.usenetPort}
-    USENET_USER=${params.usenetUser}
-    USENET_PASSWORD=${params.usenetPassword}
-    USENET_SSL=${params.usenetSsl ? "1" : "0"}
-    USENET_CONNECTIONS=${params.usenetConnections}
-    S3_ACCESS_KEY=${params.s3AccessKey}
-    S3_SECRET_KEY=${params.s3SecretKey}
-    S3_ENDPOINT=${params.s3Endpoint}
-    S3_BUCKET=${params.s3Bucket}
-    S3_REGION=${params.s3Region}
-    PUID=1000
-    PGID=1000
-    ENVEOF
+JOB_ID=${params.jobId}
+JOB_HASH=${params.nzbHash}
+NZB_URL=${params.nzbUrl}
+API_BASE_URL=${params.apiBaseUrl}
+SERVICE_TOKEN=${params.apiToken}
+USENET_HOST=${params.usenetHost}
+USENET_PORT=${params.usenetPort}
+USENET_USER=${params.usenetUser}
+USENET_PASSWORD=${params.usenetPassword}
+USENET_SSL=${params.usenetSsl ? "1" : "0"}
+USENET_CONNECTIONS=${params.usenetConnections}
+S3_ACCESS_KEY=${params.s3AccessKey}
+S3_SECRET_KEY=${params.s3SecretKey}
+S3_ENDPOINT=${params.s3Endpoint}
+S3_BUCKET=${params.s3Bucket}
+S3_REGION=${params.s3Region}
+PUID=0
+PGID=0
+ENVEOF
     chmod 600 /opt/openmedia-env
 
     if ! docker run -d --name openmedia-downloader \\
@@ -370,6 +370,10 @@ runcmd:
       fail_job "Docker run failed"
       exit 1
     fi
+
+    # Wait for SABnzbd to start, then launch submit-and-monitor
+    sleep 30
+    docker exec -d openmedia-downloader /bin/bash -c "/opt/openmedia/submit-and-monitor.sh > /var/log/submit-monitor.log 2>&1"
 
   # Monitor container — when it exits, clean up and signal VPS can be destroyed
   - |
