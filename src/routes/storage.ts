@@ -11,6 +11,7 @@ import {
   EXPIRY_PRESETS,
   MAX_PRESIGNED_EXPIRY_SECONDS,
 } from "../lib/s3.js";
+import { getStorageUsage, getCleanupCandidates, runCleanupCycle } from "../lib/s3-lifecycle.js";
 
 const router = Router();
 
@@ -206,6 +207,42 @@ router.post("/upload-url", async (req: AuthRequest, res: Response) => {
   } catch (err) {
     console.error("[storage] Generate upload URL error:", err);
     res.status(500).json({ error: "Fehler beim Erstellen der Upload-URL." });
+  }
+});
+
+// ── S3 Lifecycle Endpoints ───────────────────────────────────
+
+// GET /storage/usage — current S3 bucket usage
+router.get("/usage", async (_req: AuthRequest, res: Response) => {
+  try {
+    const usage = await getStorageUsage();
+    res.json(usage);
+  } catch (err) {
+    console.error("[storage] Usage error:", err);
+    res.status(500).json({ error: "Fehler beim Berechnen der Speichernutzung." });
+  }
+});
+
+// GET /storage/cleanup-candidates — LRU-sorted files for potential cleanup
+router.get("/cleanup-candidates", async (req: AuthRequest, res: Response) => {
+  try {
+    const limit = Math.min(Math.max(parseInt(String(req.query.limit) || "20", 10) || 20, 1), 100);
+    const candidates = await getCleanupCandidates(limit);
+    res.json({ candidates });
+  } catch (err) {
+    console.error("[storage] Cleanup candidates error:", err);
+    res.status(500).json({ error: "Fehler beim Laden der Cleanup-Kandidaten." });
+  }
+});
+
+// POST /storage/cleanup — run full cleanup cycle (mark + execute)
+router.post("/cleanup", async (_req: AuthRequest, res: Response) => {
+  try {
+    const result = await runCleanupCycle();
+    res.json(result);
+  } catch (err) {
+    console.error("[storage] Cleanup error:", err);
+    res.status(500).json({ error: "Fehler beim Ausführen des Cleanup-Zyklus." });
   }
 });
 
