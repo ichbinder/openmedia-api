@@ -21,6 +21,7 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
+  await prisma.$executeRawUnsafe('TRUNCATE TABLE "user_library" CASCADE');
   await prisma.$executeRawUnsafe('TRUNCATE TABLE "encrypted_configs" CASCADE');
   await prisma.$executeRawUnsafe('TRUNCATE TABLE "download_jobs" CASCADE');
   await prisma.$executeRawUnsafe('TRUNCATE TABLE "nzb_files" CASCADE');

@@ -539,6 +539,12 @@ router.get("/files/:id/download-link", async (req: AuthRequest, res: Response) =
 
     console.log(`[nzb] Download link generated: ${nzbFile.hash.slice(0, 12)}... (expires: ${expiresParam})`);
 
+    // Update lastAccessedAt for LRU lifecycle tracking
+    prisma.nzbFile.update({
+      where: { id: String(req.params.id) },
+      data: { lastAccessedAt: new Date() },
+    }).catch(() => {}); // fire-and-forget
+
     res.json({
       url,
       expiresIn: cappedExpires,
