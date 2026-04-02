@@ -68,13 +68,17 @@ export async function provisionDownload(jobId: string): Promise<void> {
 
 async function provisionHetznerVPS(job: any): Promise<void> {
   if (!isHetznerConfigured()) {
-    console.error("[provision] Hetzner API not configured — falling back to local");
-    await provisionLocalDocker(job);
+    const error = "AUTO_PROVISION=hetzner but HETZNER_API_TOKEN is not configured";
+    console.error(`[provision] ${error}`);
+    await prisma.downloadJob.updateMany({
+      where: { id: job.id, status: "provisioning" },
+      data: { status: "failed", error },
+    });
     return;
   }
 
   // Validate required env vars
-  const required = ["S3_ACCESS_KEY", "S3_SECRET_KEY", "S3_ENDPOINT", "S3_BUCKET", "API_BASE_URL", "NZB_SERVICE_URL", "USENET_HOST", "USENET_USER", "USENET_PASSWORD"];
+  const required = ["S3_ACCESS_KEY", "S3_SECRET_KEY", "S3_ENDPOINT", "S3_BUCKET", "API_BASE_URL", "NZB_SERVICE_URL", "USENET_HOST", "USENET_USER", "USENET_PASSWORD", "SERVICE_API_TOKEN"];
   const missing = required.filter((v) => !process.env[v]);
   if (missing.length > 0) {
     const error = `Missing config: ${missing.join(", ")}`;
@@ -94,7 +98,7 @@ async function provisionHetznerVPS(job: any): Promise<void> {
     nzbHash: job.nzbFile.hash,
     nzbUrl: `${nzbServiceUrl}/nzb/${job.nzbFile.hash}.nzb`,
     apiBaseUrl: process.env.API_BASE_URL!,
-    apiToken: process.env.SERVICE_API_TOKEN || "",
+    apiToken: process.env.SERVICE_API_TOKEN!,
     s3AccessKey: process.env.S3_ACCESS_KEY!,
     s3SecretKey: process.env.S3_SECRET_KEY!,
     s3Endpoint: process.env.S3_ENDPOINT!,
