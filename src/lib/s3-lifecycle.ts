@@ -104,16 +104,17 @@ export async function markForDeletion(fileIds: string[]): Promise<number> {
 
   let marked = 0;
   for (const id of fileIds) {
-    // Only mark if no active library users
-    const activeUsers = await prisma.userLibrary.count({
-      where: { nzbFileId: id, removedAt: null },
+    // Atomic: only mark if no active library users
+    const result = await prisma.nzbFile.updateMany({
+      where: {
+        id,
+        scheduledDeletionAt: null,
+        libraryUsers: { none: { removedAt: null } },
+      },
+      data: { scheduledDeletionAt: deletionDate },
     });
 
-    if (activeUsers === 0) {
-      await prisma.nzbFile.update({
-        where: { id },
-        data: { scheduledDeletionAt: deletionDate },
-      });
+    if (result.count > 0) {
       marked++;
       console.log(`[s3-lifecycle] Marked for deletion: ${id} (in ${DELETION_GRACE_DAYS} days)`);
     }
@@ -161,24 +162,25 @@ export async function executePendingDeletions(): Promise<{
     }
 
     try {
-      await deleteFile(file.s3Key!);
+      const s3Key = file.s3Key!;
+
+      // DB update first — clear reference before S3 delete
+      // Safer: orphaned S3 file > DB ref pointing to deleted S3 object
+      await prisma.nzbFile.update({
+        where: { id: file.id },
+        data: {
+          s3Key: null,
+          s3Bucket: null,
+          fileExtension: null,
+          downloadedAt: null,
+          scheduledDeletionAt: null,
+        },
+      });
 
       try {
-        await prisma.nzbFile.update({
-          where: { id: file.id },
-          data: {
-            s3Key: null,
-            s3Bucket: null,
-            fileExtension: null,
-            downloadedAt: null,
-            scheduledDeletionAt: null,
-          },
-        });
-      } catch (dbErr) {
-        // S3 deleted but DB update failed — orphaned DB reference
-        console.error(`[s3-lifecycle] DB update failed after S3 delete: ${file.hash.slice(0, 16)}...`, dbErr);
-        errors++;
-        continue;
+        await deleteFile(s3Key);
+      } catch (s3Err) {
+        console.error(`[s3-lifecycle] S3 delete failed (orphaned): ${file.hash.slice(0, 16)}...`, s3Err);
       }
 
       console.log(`[s3-lifecycle] Deleted: ${file.hash.slice(0, 16)}...`);
