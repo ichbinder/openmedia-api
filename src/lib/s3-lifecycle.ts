@@ -162,16 +162,25 @@ export async function executePendingDeletions(): Promise<{
 
     try {
       await deleteFile(file.s3Key!);
-      await prisma.nzbFile.update({
-        where: { id: file.id },
-        data: {
-          s3Key: null,
-          s3Bucket: null,
-          fileExtension: null,
-          downloadedAt: null,
-          scheduledDeletionAt: null,
-        },
-      });
+
+      try {
+        await prisma.nzbFile.update({
+          where: { id: file.id },
+          data: {
+            s3Key: null,
+            s3Bucket: null,
+            fileExtension: null,
+            downloadedAt: null,
+            scheduledDeletionAt: null,
+          },
+        });
+      } catch (dbErr) {
+        // S3 deleted but DB update failed — orphaned DB reference
+        console.error(`[s3-lifecycle] DB update failed after S3 delete: ${file.hash.slice(0, 16)}...`, dbErr);
+        errors++;
+        continue;
+      }
+
       console.log(`[s3-lifecycle] Deleted: ${file.hash.slice(0, 16)}...`);
       deleted++;
     } catch (err) {

@@ -11,6 +11,7 @@ import {
   EXPIRY_PRESETS,
   MAX_PRESIGNED_EXPIRY_SECONDS,
 } from "../lib/s3.js";
+import { getStorageUsage, getCleanupCandidates, runCleanupCycle } from "../lib/s3-lifecycle.js";
 
 const router = Router();
 
@@ -214,7 +215,6 @@ router.post("/upload-url", async (req: AuthRequest, res: Response) => {
 // GET /storage/usage — current S3 bucket usage
 router.get("/usage", async (_req: AuthRequest, res: Response) => {
   try {
-    const { getStorageUsage } = await import("../lib/s3-lifecycle.js");
     const usage = await getStorageUsage();
     res.json(usage);
   } catch (err) {
@@ -226,8 +226,7 @@ router.get("/usage", async (_req: AuthRequest, res: Response) => {
 // GET /storage/cleanup-candidates — LRU-sorted files for potential cleanup
 router.get("/cleanup-candidates", async (req: AuthRequest, res: Response) => {
   try {
-    const limit = Math.min(parseInt(String(req.query.limit) || "20", 10), 100);
-    const { getCleanupCandidates } = await import("../lib/s3-lifecycle.js");
+    const limit = Math.min(Math.max(parseInt(String(req.query.limit) || "20", 10) || 20, 1), 100);
     const candidates = await getCleanupCandidates(limit);
     res.json({ candidates });
   } catch (err) {
@@ -239,7 +238,6 @@ router.get("/cleanup-candidates", async (req: AuthRequest, res: Response) => {
 // POST /storage/cleanup — run full cleanup cycle (mark + execute)
 router.post("/cleanup", async (_req: AuthRequest, res: Response) => {
   try {
-    const { runCleanupCycle } = await import("../lib/s3-lifecycle.js");
     const result = await runCleanupCycle();
     res.json(result);
   } catch (err) {
