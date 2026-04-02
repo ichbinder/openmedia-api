@@ -216,11 +216,11 @@ router.post("/jobs", async (req: AuthRequest, res: Response) => {
 
     res.status(201).json({ job: serializeJob(result.job) });
 
-    // Auto-provision: start download container in background
+    // Auto-provision: start download in background
     // (after response is sent to client)
     if (process.env.AUTO_PROVISION !== "false") {
-      import("../lib/local-provisioner.js").then(({ provisionLocalDownload }) => {
-        provisionLocalDownload(result.job.id).catch((err) => {
+      import("../lib/provisioner.js").then(({ provisionDownload }) => {
+        provisionDownload(result.job.id).catch((err) => {
           console.error("[download-job] Auto-provision failed:", err);
         });
       });
