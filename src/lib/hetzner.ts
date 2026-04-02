@@ -319,6 +319,7 @@ export function generateCloudInit(params: {
   usenetSsl: boolean;
   usenetConnections: number;
   dockerImage: string;
+  hetznerToken: string;
 }): string {
   // Build env file content (written via write_files, not heredoc in runcmd)
   const envContent = [
@@ -386,6 +387,15 @@ runcmd:
     echo "openmedia-downloader exited with code $EXIT_CODE"
     docker logs openmedia-downloader > /var/log/openmedia-downloader.log 2>&1
     rm -f /opt/openmedia-env
-    echo "VPS ready for cleanup"
+
+    # Self-delete: get own server ID from Hetzner metadata and delete
+    SERVER_ID=$(curl -sf http://169.254.169.254/hetzner/v1/metadata/instance-id 2>/dev/null || echo "")
+    if [ -n "$SERVER_ID" ] && [ -n "${params.hetznerToken}" ]; then
+      echo "Deleting VPS $SERVER_ID..."
+      curl -sf -X DELETE "https://api.hetzner.cloud/v1/servers/$SERVER_ID" \\
+        -H "Authorization: Bearer ${params.hetznerToken}" || echo "Self-delete failed (zombie-cleanup will handle)"
+    else
+      echo "VPS ready for cleanup (no self-delete)"
+    fi
 `;
 }

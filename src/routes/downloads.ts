@@ -685,6 +685,7 @@ router.post("/jobs/:id/provision", async (req: AuthRequest, res: Response) => {
       usenetSsl: process.env.USENET_SSL !== "false",
       usenetConnections: parseInt(process.env.USENET_CONNECTIONS || "10", 10),
       dockerImage: process.env.DOWNLOADER_DOCKER_IMAGE || "ghcr.io/ichbinder/openmedia-downloader:latest",
+      hetznerToken: process.env.HETZNER_API_TOKEN || "",
     });
 
     const serverName = `dl-${job.id.slice(0, 8)}`;

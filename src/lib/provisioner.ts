@@ -113,6 +113,7 @@ async function provisionHetznerVPS(job: any): Promise<void> {
     usenetSsl: process.env.USENET_SSL !== "false" && process.env.USENET_SSL !== "0",
     usenetConnections: parseInt(process.env.USENET_CONNECTIONS || "10", 10),
     dockerImage,
+    hetznerToken: process.env.HETZNER_API_TOKEN || "",
   });
 
   const serverName = `dl-${job.id.slice(0, 8)}`;
