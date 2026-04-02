@@ -111,7 +111,7 @@ function mapServer(raw: any): HetznerServer {
  * Create a new Hetzner Cloud server.
  *
  * Default config optimized for download workloads:
- * - cax11: 2 vCPU ARM, 4GB RAM, 40GB disk (€0.0036/h ≈ €2.49/month)
+ * - cax11: 2 vCPU ARM, 4GB RAM, 40GB disk
  * - docker-ce: Ubuntu with Docker pre-installed
  * - hel1: Helsinki (same region as S3 bucket)
  */
