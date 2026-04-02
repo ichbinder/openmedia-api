@@ -571,17 +571,24 @@ router.get("/jobs/:id/link", async (req: AuthRequest, res: Response) => {
     // Verify file actually exists in S3 before generating a presigned URL
     try {
       await getFileMetadata(job.nzbFile.s3Key);
-    } catch {
-      // File doesn't exist in S3 — reset DB and tell user to re-download
-      await prisma.nzbFile.update({
-        where: { id: job.nzbFile.id },
-        data: { s3Key: null, s3Bucket: null, fileExtension: null, downloadedAt: null },
-      });
-      console.warn(`[download-job] S3 file missing for ${job.nzbFile.hash.slice(0, 12)}... — DB reset`);
-      res.status(410).json({
-        error: "Datei ist nicht mehr verfügbar. Bitte erneut herunterladen.",
-        code: "FILE_GONE",
-      });
+    } catch (s3Err: any) {
+      const statusCode = s3Err?.$metadata?.httpStatusCode || s3Err?.name;
+      if (statusCode === 404 || statusCode === "NotFound" || s3Err?.name === "NotFound") {
+        // File genuinely gone — reset DB
+        await prisma.nzbFile.update({
+          where: { id: job.nzbFile.id },
+          data: { s3Key: null, s3Bucket: null, fileExtension: null, downloadedAt: null },
+        });
+        console.warn(`[download-job] S3 file missing for ${job.nzbFile.hash.slice(0, 12)}... — DB reset`);
+        res.status(410).json({
+          error: "Datei ist nicht mehr verfügbar. Bitte erneut herunterladen.",
+          code: "FILE_GONE",
+        });
+      } else {
+        // Transient error (timeout, 5xx, auth) — don't touch DB
+        console.error(`[download-job] S3 HEAD failed for ${job.nzbFile.hash.slice(0, 12)}...:`, s3Err?.message || s3Err);
+        res.status(502).json({ error: "S3-Verbindung fehlgeschlagen. Bitte erneut versuchen." });
+      }
       return;
     }
 
