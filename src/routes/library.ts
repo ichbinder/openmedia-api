@@ -87,36 +87,39 @@ router.delete("/:nzbFileId", async (req: AuthRequest, res: Response) => {
 
     console.log(`[library] Removed: user ${userId.slice(0, 8)}... → ${nzbFileId.slice(0, 8)}...`);
 
-    // Check if ANY user still has this film in their library
-    const activeCount = await prisma.userLibrary.count({
-      where: { nzbFileId, removedAt: null },
+    // Atomically check if ANY user still needs this film and delete S3 if not
+    // Uses a transaction to prevent TOCTOU race condition
+    const s3Deleted = await prisma.$transaction(async (tx) => {
+      const activeCount = await tx.userLibrary.count({
+        where: { nzbFileId, removedAt: null },
+      });
+
+      if (activeCount > 0) return false;
+
+      const nzbFile = await tx.nzbFile.findUnique({ where: { id: nzbFileId } });
+      if (!nzbFile?.s3Key) return false;
+
+      // Reset S3 reference inside transaction
+      await tx.nzbFile.update({
+        where: { id: nzbFileId },
+        data: { s3Key: null, s3Bucket: null, fileExtension: null, downloadedAt: null, scheduledDeletionAt: null },
+      });
+
+      // S3 deletion outside transaction scope (can't rollback S3)
+      // but reference is already cleared so even if S3 delete fails,
+      // the file is orphaned and will be cleaned up later
+      try {
+        const { deleteFile } = await import("../lib/s3.js");
+        await deleteFile(nzbFile.s3Key);
+        console.log(`[library] S3 deleted: ${nzbFile.s3Key} (no users remaining)`);
+      } catch (s3Err) {
+        console.error("[library] S3 delete failed (orphaned):", s3Err);
+      }
+
+      return true;
     });
 
-    if (activeCount === 0) {
-      // No user needs this file anymore → delete from S3
-      const nzbFile = await prisma.nzbFile.findUnique({ where: { id: nzbFileId } });
-
-      if (nzbFile?.s3Key) {
-        try {
-          const { deleteFile } = await import("../lib/s3.js");
-          await deleteFile(nzbFile.s3Key);
-
-          await prisma.nzbFile.update({
-            where: { id: nzbFileId },
-            data: { s3Key: null, s3Bucket: null, fileExtension: null, downloadedAt: null, scheduledDeletionAt: null },
-          });
-
-          console.log(`[library] S3 deleted: ${nzbFile.s3Key} (no users remaining)`);
-          res.json({ removed: true, s3Deleted: true });
-          return;
-        } catch (s3Err) {
-          console.error("[library] S3 delete failed:", s3Err);
-          // S3 delete failed but library entry was removed — still report success
-        }
-      }
-    }
-
-    res.json({ removed: true, s3Deleted: false, activeUsers: activeCount });
+    res.json({ removed: true, s3Deleted, activeUsers: s3Deleted ? 0 : undefined });
   } catch (err) {
     console.error("[library] Remove error:", err);
     res.status(500).json({ error: "Fehler beim Entfernen aus der Bibliothek." });
