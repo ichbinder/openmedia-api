@@ -561,10 +561,27 @@ router.get("/jobs/:id/link", async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    const { isS3Configured, generatePresignedUrl, EXPIRY_PRESETS, MAX_PRESIGNED_EXPIRY_SECONDS } = await import("../lib/s3.js");
+    const { isS3Configured, generatePresignedUrl, getFileMetadata, EXPIRY_PRESETS, MAX_PRESIGNED_EXPIRY_SECONDS } = await import("../lib/s3.js");
 
     if (!isS3Configured()) {
       res.status(503).json({ error: "Object Storage ist nicht konfiguriert." });
+      return;
+    }
+
+    // Verify file actually exists in S3 before generating a presigned URL
+    try {
+      await getFileMetadata(job.nzbFile.s3Key);
+    } catch {
+      // File doesn't exist in S3 — reset DB and tell user to re-download
+      await prisma.nzbFile.update({
+        where: { id: job.nzbFile.id },
+        data: { s3Key: null, s3Bucket: null, fileExtension: null, downloadedAt: null },
+      });
+      console.warn(`[download-job] S3 file missing for ${job.nzbFile.hash.slice(0, 12)}... — DB reset`);
+      res.status(410).json({
+        error: "Datei ist nicht mehr verfügbar. Bitte erneut herunterladen.",
+        code: "FILE_GONE",
+      });
       return;
     }
 
