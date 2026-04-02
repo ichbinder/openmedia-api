@@ -44,7 +44,7 @@ export interface HetznerServer {
 
 export interface HetznerCreateServerOptions {
   name: string;
-  serverType?: string;     // default: cx22 (2 vCPU, 4GB RAM)
+  serverType?: string;     // default: cax11 (2 vCPU ARM, 4GB RAM)
   image?: string;          // default: docker-ce (Docker pre-installed)
   location?: string;       // default: hel1
   userData?: string;       // Cloud-Init script
@@ -111,7 +111,7 @@ function mapServer(raw: any): HetznerServer {
  * Create a new Hetzner Cloud server.
  *
  * Default config optimized for download workloads:
- * - cx22: 2 vCPU, 4GB RAM, 40GB disk (€0.0048/h ≈ €3.50/month)
+ * - cax11: 2 vCPU ARM, 4GB RAM, 40GB disk (€0.0036/h ≈ €2.49/month)
  * - docker-ce: Ubuntu with Docker pre-installed
  * - hel1: Helsinki (same region as S3 bucket)
  */
@@ -122,7 +122,7 @@ export async function createServer(
 
   const body: Record<string, any> = {
     name: options.name,
-    server_type: options.serverType || "cx22",
+    server_type: options.serverType || "cax11",
     image: options.image || "docker-ce",
     location: options.location || "hel1",
     labels: {
