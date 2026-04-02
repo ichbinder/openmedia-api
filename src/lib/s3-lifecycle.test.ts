@@ -1,5 +1,10 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { prisma } from "../test/setup.js";
+
+// Mock S3 deleteFile to avoid real S3 calls in tests
+vi.mock("../lib/s3.js", () => ({
+  deleteFile: vi.fn().mockResolvedValue(undefined),
+}));
 
 // Import lifecycle functions — they use prisma directly
 import {
@@ -147,6 +152,21 @@ describe("S3 Lifecycle", () => {
       const updated = await prisma.nzbFile.findUnique({ where: { id: file.id } });
       expect(updated!.scheduledDeletionAt).toBeNull();
       expect(updated!.s3Key).not.toBeNull(); // still in S3
+    });
+
+    it("löscht Dateien deren Grace Period abgelaufen ist", async () => {
+      const file = await createNzbFileInS3("expired-hash", {
+        scheduledDeletionAt: new Date("2020-01-01"), // expired, no users
+      });
+
+      const result = await executePendingDeletions();
+      expect(result.deleted).toBe(1);
+      expect(result.skipped).toBe(0);
+
+      // s3Key and scheduledDeletionAt should be cleared
+      const updated = await prisma.nzbFile.findUnique({ where: { id: file.id } });
+      expect(updated!.s3Key).toBeNull();
+      expect(updated!.scheduledDeletionAt).toBeNull();
     });
   });
 });

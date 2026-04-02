@@ -226,7 +226,8 @@ router.get("/usage", async (_req: AuthRequest, res: Response) => {
 // GET /storage/cleanup-candidates — LRU-sorted files for potential cleanup
 router.get("/cleanup-candidates", async (req: AuthRequest, res: Response) => {
   try {
-    const limit = Math.min(parseInt(String(req.query.limit) || "20", 10), 100);
+    const parsed = parseInt(String(req.query.limit || "20"), 10);
+    const limit = Math.min(Math.max(Number.isFinite(parsed) ? parsed : 20, 1), 100);
     const { getCleanupCandidates } = await import("../lib/s3-lifecycle.js");
     const candidates = await getCleanupCandidates(limit);
     res.json({ candidates });
@@ -237,8 +238,18 @@ router.get("/cleanup-candidates", async (req: AuthRequest, res: Response) => {
 });
 
 // POST /storage/cleanup — run full cleanup cycle (mark + execute)
-router.post("/cleanup", async (_req: AuthRequest, res: Response) => {
+// Protected: requires CRON_API_KEY header or authenticated admin
+router.post("/cleanup", async (req: AuthRequest, res: Response) => {
   try {
+    const cronKey = process.env.CRON_API_KEY;
+    if (cronKey) {
+      const provided = req.headers["x-cron-key"];
+      if (provided !== cronKey) {
+        res.status(403).json({ error: "Ungültiger Cron-API-Key." });
+        return;
+      }
+    }
+
     const { runCleanupCycle } = await import("../lib/s3-lifecycle.js");
     const result = await runCleanupCycle();
     res.json(result);
