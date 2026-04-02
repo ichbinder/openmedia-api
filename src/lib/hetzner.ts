@@ -44,7 +44,7 @@ export interface HetznerServer {
 
 export interface HetznerCreateServerOptions {
   name: string;
-  serverType?: string;     // default: cx22 (2 vCPU, 4GB RAM)
+  serverType?: string;     // default: cax11 (2 vCPU ARM, 4GB RAM)
   image?: string;          // default: docker-ce (Docker pre-installed)
   location?: string;       // default: hel1
   userData?: string;       // Cloud-Init script
@@ -111,7 +111,7 @@ function mapServer(raw: any): HetznerServer {
  * Create a new Hetzner Cloud server.
  *
  * Default config optimized for download workloads:
- * - cx22: 2 vCPU, 4GB RAM, 40GB disk (€0.0048/h ≈ €3.50/month)
+ * - cax11: 2 vCPU ARM, 4GB RAM, 40GB disk
  * - docker-ce: Ubuntu with Docker pre-installed
  * - hel1: Helsinki (same region as S3 bucket)
  */
@@ -122,7 +122,7 @@ export async function createServer(
 
   const body: Record<string, any> = {
     name: options.name,
-    server_type: options.serverType || "cx22",
+    server_type: options.serverType || "cax11",
     image: options.image || "docker-ce",
     location: options.location || "hel1",
     labels: {
@@ -320,15 +320,44 @@ export function generateCloudInit(params: {
   usenetConnections: number;
   dockerImage: string;
 }): string {
+  // Build env file content (written via write_files, not heredoc in runcmd)
+  const envContent = [
+    `JOB_ID=${params.jobId}`,
+    `JOB_HASH=${params.nzbHash}`,
+    `NZB_URL=${params.nzbUrl}`,
+    `API_BASE_URL=${params.apiBaseUrl}`,
+    `SERVICE_TOKEN=${params.apiToken}`,
+    `USENET_HOST=${params.usenetHost}`,
+    `USENET_PORT=${params.usenetPort}`,
+    `USENET_USER=${params.usenetUser}`,
+    `USENET_PASSWORD=${params.usenetPassword}`,
+    `USENET_SSL=${params.usenetSsl ? "1" : "0"}`,
+    `USENET_CONNECTIONS=${params.usenetConnections}`,
+    `S3_ACCESS_KEY=${params.s3AccessKey}`,
+    `S3_SECRET_KEY=${params.s3SecretKey}`,
+    `S3_ENDPOINT=${params.s3Endpoint}`,
+    `S3_BUCKET=${params.s3Bucket}`,
+    `S3_REGION=${params.s3Region}`,
+    `PUID=0`,
+    `PGID=0`,
+  ].join("\n");
+
+  // Base64-encode the env content to avoid YAML parsing issues
+  const envBase64 = Buffer.from(envContent).toString("base64");
+
   return `#cloud-config
 package_update: false
 
+write_files:
+  - path: /opt/openmedia-env
+    permissions: "0600"
+    encoding: b64
+    content: ${envBase64}
+
 runcmd:
-  # Pull and run the openmedia-downloader container
   - |
     set -e
 
-    # Signal failure to API if anything goes wrong
     fail_job() {
       curl -sf -X PATCH "${params.apiBaseUrl}/downloads/jobs/${params.jobId}/status" \\
         -H "Authorization: Bearer ${params.apiToken}" \\
@@ -341,29 +370,6 @@ runcmd:
       exit 1
     fi
 
-    # Write credentials to env file (avoids /proc/cmdline exposure)
-    cat > /opt/openmedia-env << 'ENVEOF'
-    JOB_ID=${params.jobId}
-    JOB_HASH=${params.nzbHash}
-    NZB_URL=${params.nzbUrl}
-    API_BASE_URL=${params.apiBaseUrl}
-    SERVICE_TOKEN=${params.apiToken}
-    USENET_HOST=${params.usenetHost}
-    USENET_PORT=${params.usenetPort}
-    USENET_USER=${params.usenetUser}
-    USENET_PASSWORD=${params.usenetPassword}
-    USENET_SSL=${params.usenetSsl ? "1" : "0"}
-    USENET_CONNECTIONS=${params.usenetConnections}
-    S3_ACCESS_KEY=${params.s3AccessKey}
-    S3_SECRET_KEY=${params.s3SecretKey}
-    S3_ENDPOINT=${params.s3Endpoint}
-    S3_BUCKET=${params.s3Bucket}
-    S3_REGION=${params.s3Region}
-    PUID=1000
-    PGID=1000
-    ENVEOF
-    chmod 600 /opt/openmedia-env
-
     if ! docker run -d --name openmedia-downloader \\
       --env-file /opt/openmedia-env \\
       "${params.dockerImage}"; then
@@ -371,15 +377,15 @@ runcmd:
       exit 1
     fi
 
-  # Monitor container — when it exits, clean up and signal VPS can be destroyed
+    # Wait for SABnzbd to start, then launch submit-and-monitor
+    sleep 30
+    docker exec -d openmedia-downloader /bin/bash -c "/opt/openmedia/submit-and-monitor.sh > /var/log/submit-monitor.log 2>&1"
+
   - |
     EXIT_CODE=$(docker wait openmedia-downloader)
     echo "openmedia-downloader exited with code $EXIT_CODE"
     docker logs openmedia-downloader > /var/log/openmedia-downloader.log 2>&1
-    # Clean up env file with credentials
     rm -f /opt/openmedia-env
-    # Signal to API that this server can be cleaned up
-    # (zombie-cleanup cron will also catch this as a fallback)
     echo "VPS ready for cleanup"
 `;
 }

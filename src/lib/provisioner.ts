@@ -121,6 +121,7 @@ async function provisionHetznerVPS(job: any): Promise<void> {
     const result = await createServer({
       name: serverName,
       userData: cloudInit,
+      sshKeys: process.env.HETZNER_SSH_KEY_NAME ? [process.env.HETZNER_SSH_KEY_NAME] : undefined,
       labels: { "job-id": job.id, purpose: "openmedia-download" },
     });
 
