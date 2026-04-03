@@ -18,12 +18,13 @@ api.mediatoken.de {
 		{env.DL_AUTH_USER} {env.DL_AUTH_HASH}
 	}
 
-	# Map subdomain to backend IP:port
-	# dl-a1b2c3d4.dl.mediatoken.de → {labels.3} = "dl-a1b2c3d4"
-	# The import file contains map entries like: dl-a1b2c3d4 10.0.0.3:8080
-	map {labels.3} {dl_backend} {
-		import /data/dl-backends.map
-		# fallback: empty string
+	# Extract subdomain from Host header: dl-a1b2c3d4.dl.mediatoken.de → "dl-a1b2c3d4"
+	@dl_client header_regexp dl_name Host ^([a-z0-9-]+)\.dl\.mediatoken\.de$
+
+	# Map extracted subdomain to backend IP:port from the mapping file
+	# File contains lines like: dl-a1b2c3d4 10.0.0.3:8080
+	map {re.dl_name.1} {dl_backend} {
+		import /etc/caddy/dl-backends.map
 	}
 
 	@has_backend expression `{dl_backend} != ""`

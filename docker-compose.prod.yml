@@ -14,7 +14,7 @@ services:
       DL_AUTH_HASH: ${DL_AUTH_HASH}
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - ./caddy/dl-backends.map:/data/dl-backends.map
+      - ./caddy/dl-backends.map:/etc/caddy/dl-backends.map
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
@@ -49,7 +49,7 @@ services:
       S3_REGION: ${S3_REGION}
       HETZNER_API_TOKEN: ${HETZNER_API_TOKEN}
       HETZNER_NETWORK_ID: ${HETZNER_NETWORK_ID}
-      ENCRYPTION_MASTER_KEY: ""
+      ENCRYPTION_MASTER_KEY: ${ENCRYPTION_MASTER_KEY:-}
       HETZNER_SSH_KEY_NAME: ${HETZNER_SSH_KEY_NAME}
       AUTO_PROVISION: ${AUTO_PROVISION}
       DOWNLOADER_DOCKER_IMAGE: ${DOWNLOADER_DOCKER_IMAGE}
@@ -64,13 +64,15 @@ services:
       USENET_CONNECTIONS: ${USENET_CONNECTIONS}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./caddy/dl-backends.map:/data/dl-backends.map
+      - ./caddy/dl-backends.map:/etc/caddy/dl-backends.map
     depends_on:
       - db
     restart: unless-stopped
 
   web:
     build:
+      # Absolute path to the openmedia-web repo checkout on the production server.
+      # This file is intended for use on the Hetzner production VPS only.
       context: /opt/openmedia-web
       args:
         BACKEND_URL: ${BACKEND_URL}

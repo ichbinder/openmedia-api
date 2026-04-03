@@ -14,8 +14,40 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { exec } from "node:child_process";
 
-/** Path to the mapping file (shared volume between API and Caddy containers) */
-const MAPPING_FILE = process.env.DL_MAPPING_FILE || "/data/dl-backends.map";
+// ---------------------------------------------------------------------------
+// Validation
+// ---------------------------------------------------------------------------
+
+const SUBDOMAIN_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
+const PRIVATE_IP_RE = /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
+
+function validateSubdomain(name: string): void {
+  if (!SUBDOMAIN_RE.test(name)) {
+    throw new Error(`Invalid subdomain: ${name}`);
+  }
+}
+
+function validatePrivateIp(ip: string): void {
+  if (!PRIVATE_IP_RE.test(ip)) {
+    throw new Error(`Invalid private IP (must be 10.x.x.x): ${ip}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Simple async mutex to prevent concurrent read-modify-write races
+// ---------------------------------------------------------------------------
+
+let mutexPromise: Promise<void> = Promise.resolve();
+
+function withMutex<T>(fn: () => Promise<T>): Promise<T> {
+  const prev = mutexPromise;
+  let resolve: () => void;
+  mutexPromise = new Promise<void>((r) => { resolve = r; });
+  return prev.then(fn).finally(() => resolve!());
+}
+
+/** Path to the mapping file (bind-mounted into both API and Caddy containers) */
+const MAPPING_FILE = process.env.DL_MAPPING_FILE || "/etc/caddy/dl-backends.map";
 
 /** SABnzbd UI port inside the download container */
 const SABNZBD_PORT = 8080;
@@ -91,16 +123,21 @@ function reloadCaddy(): Promise<void> {
  * @param privateIp   Private network IP of the VPS (e.g. "10.0.0.3")
  */
 export async function addMapping(serverName: string, privateIp: string): Promise<void> {
-  const mappings = readMappings();
+  validateSubdomain(serverName);
+  validatePrivateIp(privateIp);
 
-  // Remove existing mapping for this subdomain (idempotent)
-  const filtered = mappings.filter((m) => m.subdomain !== serverName);
-  filtered.push({ subdomain: serverName, backend: `${privateIp}:${SABNZBD_PORT}` });
+  return withMutex(async () => {
+    const mappings = readMappings();
 
-  writeMappings(filtered);
-  console.log(`[caddy-mapping] Added: ${serverName} → ${privateIp}:${SABNZBD_PORT}`);
+    // Remove existing mapping for this subdomain (idempotent)
+    const filtered = mappings.filter((m) => m.subdomain !== serverName);
+    filtered.push({ subdomain: serverName, backend: `${privateIp}:${SABNZBD_PORT}` });
 
-  await reloadCaddy();
+    writeMappings(filtered);
+    console.log(`[caddy-mapping] Added: ${serverName} → ${privateIp}:${SABNZBD_PORT}`);
+
+    await reloadCaddy();
+  });
 }
 
 /**
@@ -109,18 +146,20 @@ export async function addMapping(serverName: string, privateIp: string): Promise
  * @param serverName  VPS name / subdomain to remove
  */
 export async function removeMapping(serverName: string): Promise<void> {
-  const mappings = readMappings();
-  const filtered = mappings.filter((m) => m.subdomain !== serverName);
+  return withMutex(async () => {
+    const mappings = readMappings();
+    const filtered = mappings.filter((m) => m.subdomain !== serverName);
 
-  if (filtered.length === mappings.length) {
-    console.log(`[caddy-mapping] No mapping found for ${serverName} — nothing to remove`);
-    return;
-  }
+    if (filtered.length === mappings.length) {
+      console.log(`[caddy-mapping] No mapping found for ${serverName} — nothing to remove`);
+      return;
+    }
 
-  writeMappings(filtered);
-  console.log(`[caddy-mapping] Removed: ${serverName}`);
+    writeMappings(filtered);
+    console.log(`[caddy-mapping] Removed: ${serverName}`);
 
-  await reloadCaddy();
+    await reloadCaddy();
+  });
 }
 
 /**
@@ -136,17 +175,19 @@ export function listMappings(): BackendMapping[] {
  * @param activeServerNames  Set of currently active VPS names
  */
 export async function cleanupStaleMappings(activeServerNames: Set<string>): Promise<string[]> {
-  const mappings = readMappings();
-  const stale = mappings.filter((m) => !activeServerNames.has(m.subdomain));
+  return withMutex(async () => {
+    const mappings = readMappings();
+    const stale = mappings.filter((m) => !activeServerNames.has(m.subdomain));
 
-  if (stale.length === 0) return [];
+    if (stale.length === 0) return [];
 
-  const active = mappings.filter((m) => activeServerNames.has(m.subdomain));
-  writeMappings(active);
+    const active = mappings.filter((m) => activeServerNames.has(m.subdomain));
+    writeMappings(active);
 
-  const removed = stale.map((m) => m.subdomain);
-  console.log(`[caddy-mapping] Cleaned ${removed.length} stale mapping(s): ${removed.join(", ")}`);
+    const removed = stale.map((m) => m.subdomain);
+    console.log(`[caddy-mapping] Cleaned ${removed.length} stale mapping(s): ${removed.join(", ")}`);
 
-  await reloadCaddy();
-  return removed;
+    await reloadCaddy();
+    return removed;
+  });
 }
