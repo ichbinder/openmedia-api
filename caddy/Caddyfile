@@ -1,0 +1,37 @@
+# Main website
+mediatoken.de {
+	reverse_proxy web:3000
+}
+
+# API
+api.mediatoken.de {
+	reverse_proxy api:4000
+}
+
+# Download client reverse proxy — wildcard with DNS-01 challenge
+*.dl.mediatoken.de {
+	tls {
+		dns hetzner {env.HETZNER_API_TOKEN}
+	}
+
+	basicauth {
+		{env.DL_AUTH_USER} {env.DL_AUTH_HASH}
+	}
+
+	# Map subdomain to backend IP:port
+	# dl-a1b2c3d4.dl.mediatoken.de → {labels.3} = "dl-a1b2c3d4"
+	# The import file contains map entries like: dl-a1b2c3d4 10.0.0.3:8080
+	map {labels.3} {dl_backend} {
+		import /data/dl-backends.map
+		# fallback: empty string
+	}
+
+	@has_backend expression `{dl_backend} != ""`
+	handle @has_backend {
+		reverse_proxy http://{dl_backend}
+	}
+
+	handle {
+		respond "Download client not found" 404
+	}
+}

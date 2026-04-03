@@ -1,0 +1,90 @@
+services:
+  caddy:
+    build:
+      context: ./caddy
+    image: openmedia-caddy:latest
+    container_name: caddy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      HETZNER_API_TOKEN: ${HETZNER_API_TOKEN}
+      DL_AUTH_USER: ${DL_AUTH_USER}
+      DL_AUTH_HASH: ${DL_AUTH_HASH}
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy/dl-backends.map:/data/dl-backends.map
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+      - web
+    restart: unless-stopped
+
+  db:
+    image: postgres:16-alpine
+    container_name: openmedia-db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+    image: openmedia-api:latest
+    container_name: openmedia-api
+    environment:
+      PORT: "4000"
+      DATABASE_URL: ${DATABASE_URL}
+      JWT_SECRET: ${JWT_SECRET}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_ENDPOINT: ${S3_ENDPOINT}
+      S3_BUCKET: ${S3_BUCKET}
+      S3_REGION: ${S3_REGION}
+      HETZNER_API_TOKEN: ${HETZNER_API_TOKEN}
+      HETZNER_NETWORK_ID: ${HETZNER_NETWORK_ID}
+      ENCRYPTION_MASTER_KEY: ""
+      HETZNER_SSH_KEY_NAME: ${HETZNER_SSH_KEY_NAME}
+      AUTO_PROVISION: ${AUTO_PROVISION}
+      DOWNLOADER_DOCKER_IMAGE: ${DOWNLOADER_DOCKER_IMAGE}
+      NZB_SERVICE_URL: ${NZB_SERVICE_URL}
+      API_BASE_URL: ${API_BASE_URL}
+      SERVICE_API_TOKEN: ${SERVICE_API_TOKEN}
+      USENET_HOST: ${USENET_HOST}
+      USENET_PORT: ${USENET_PORT}
+      USENET_USER: ${USENET_USER}
+      USENET_PASSWORD: ${USENET_PASSWORD}
+      USENET_SSL: ${USENET_SSL}
+      USENET_CONNECTIONS: ${USENET_CONNECTIONS}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./caddy/dl-backends.map:/data/dl-backends.map
+    depends_on:
+      - db
+    restart: unless-stopped
+
+  web:
+    build:
+      context: /opt/openmedia-web
+      args:
+        BACKEND_URL: ${BACKEND_URL}
+        TMDB_API_KEY: ${TMDB_API_KEY}
+    image: openmedia-web:latest
+    container_name: openmedia-web
+    environment:
+      TMDB_API_KEY: ${TMDB_API_KEY}
+      BACKEND_URL: ${BACKEND_URL}
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:
+  pgdata:
