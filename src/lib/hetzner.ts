@@ -379,13 +379,38 @@ runcmd:
 
     # Wait for SABnzbd to start, then launch submit-and-monitor
     sleep 30
-    docker exec -d openmedia-downloader /bin/bash -c "/opt/openmedia/submit-and-monitor.sh > /var/log/submit-monitor.log 2>&1"
+    if ! docker exec -d openmedia-downloader /bin/bash -c "/opt/openmedia/submit-and-monitor.sh > /var/log/submit-monitor.log 2>&1"; then
+      fail_job "submit-and-monitor dispatch failed"
+      exit 1
+    fi
+
+    # Verify the script actually started (docker exec -d only checks dispatch).
+    # Retry loop: the script may need a few seconds to appear in the process list.
+    VERIFY_OK=0
+    for i in 1 2 3 4 5 6; do
+      sleep 5
+      if docker exec openmedia-downloader pgrep -f "submit-and-monitor" > /dev/null 2>&1; then
+        VERIFY_OK=1
+        break
+      fi
+    done
+    if [ "$VERIFY_OK" = "0" ]; then
+      fail_job "submit-and-monitor process not running after 30s"
+      exit 1
+    fi
 
   - |
     EXIT_CODE=$(docker wait openmedia-downloader)
     echo "openmedia-downloader exited with code $EXIT_CODE"
     docker logs openmedia-downloader > /var/log/openmedia-downloader.log 2>&1
     rm -f /opt/openmedia-env
-    echo "VPS ready for cleanup"
+
+    # Self-cleanup: ask the API to delete this VPS (no Hetzner token on the VM)
+    # apiBaseUrl and apiToken are baked in at template generation time — no env file needed.
+    # Always attempt cleanup regardless of metadata availability.
+    echo "Requesting self-cleanup via API..."
+    curl -sf --connect-timeout 5 --max-time 15 -X POST "${params.apiBaseUrl}/downloads/jobs/${params.jobId}/cleanup" \\
+      -H "Authorization: Bearer ${params.apiToken}" \\
+      -H "Content-Type: application/json" || echo "Self-cleanup request failed (reconciler will handle)"
 `;
 }

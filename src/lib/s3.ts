@@ -281,10 +281,10 @@ export async function listFiles(
 /**
  * Get metadata for a single file (HEAD request — no data transfer).
  */
-export async function getFileMetadata(key: string): Promise<S3FileMetadata> {
+export async function getFileMetadata(key: string, bucket?: string): Promise<S3FileMetadata> {
   const result = await getClient().send(
     new HeadObjectCommand({
-      Bucket: getBucket(),
+      Bucket: bucket || getBucket(),
       Key: key,
     }),
   );
@@ -301,9 +301,9 @@ export async function getFileMetadata(key: string): Promise<S3FileMetadata> {
 /**
  * Check if a file exists in S3.
  */
-export async function fileExists(key: string): Promise<boolean> {
+export async function fileExists(key: string, bucket?: string): Promise<boolean> {
   try {
-    await getFileMetadata(key);
+    await getFileMetadata(key, bucket);
     return true;
   } catch (err: any) {
     if (err.name === "NotFound" || err.$metadata?.httpStatusCode === 404) {
