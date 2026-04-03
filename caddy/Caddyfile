@@ -12,6 +12,8 @@ api.mediatoken.de {
 *.dl.mediatoken.de {
 	tls {
 		dns hetzner {env.HETZNER_API_TOKEN}
+		propagation_delay 30s
+		propagation_timeout 120s
 	}
 
 	basic_auth {
