@@ -31,10 +31,15 @@ const RECONCILE_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
 // ── Reconciliation Logic ────────────────────────────────────
 
+/** Result of a single reconciliation pass. */
 export interface ReconcileResult {
+  /** Number of active (non-terminal) jobs that were checked */
   checked: number;
+  /** Number of jobs transitioned to 'failed' */
   failed: number;
+  /** Number of orphaned Hetzner VPS instances deleted */
   zombiesDeleted: number;
+  /** Human-readable log lines describing each action taken */
   details: string[];
 }
 
@@ -211,16 +216,24 @@ export function startReconciler(): void {
   console.log(`[reconciler] Starting (check every ${RECONCILE_INTERVAL_MS / 1000}s, stale=${STALE_CHECK_HOURS}h, timeout=${HARD_TIMEOUT_HOURS}h)`);
 
   // Run once immediately
-  reconcileStaleJobs().then((r) => {
-    if (r.failed > 0 || r.zombiesDeleted > 0) {
-      console.log(`[reconciler] Initial run: ${r.failed} jobs failed, ${r.zombiesDeleted} zombies cleaned`);
-    }
-  });
+  reconcileStaleJobs()
+    .then((r) => {
+      if (r.failed > 0 || r.zombiesDeleted > 0) {
+        console.log(`[reconciler] Initial run: ${r.failed} jobs failed, ${r.zombiesDeleted} zombies cleaned`);
+      }
+    })
+    .catch((err) => {
+      console.error("[reconciler] Initial run failed:", err);
+    });
 
   intervalHandle = setInterval(async () => {
-    const r = await reconcileStaleJobs();
-    if (r.failed > 0 || r.zombiesDeleted > 0) {
-      console.log(`[reconciler] Periodic: ${r.failed} jobs failed, ${r.zombiesDeleted} zombies cleaned`);
+    try {
+      const r = await reconcileStaleJobs();
+      if (r.failed > 0 || r.zombiesDeleted > 0) {
+        console.log(`[reconciler] Periodic: ${r.failed} jobs failed, ${r.zombiesDeleted} zombies cleaned`);
+      }
+    } catch (err) {
+      console.error("[reconciler] Periodic run failed:", err);
     }
   }, RECONCILE_INTERVAL_MS);
 }
