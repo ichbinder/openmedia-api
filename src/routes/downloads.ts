@@ -845,4 +845,21 @@ router.post("/cleanup-zombies", async (req: AuthRequest, res: Response) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// Job Reconciliation (manual trigger)
+// ---------------------------------------------------------------------------
+
+import { reconcileStaleJobs } from "../lib/job-reconciler.js";
+
+// POST /downloads/reconcile — manually trigger stale job detection
+router.post("/reconcile", async (_req: AuthRequest, res: Response) => {
+  try {
+    const result = await reconcileStaleJobs();
+    res.json(result);
+  } catch (err: any) {
+    console.error("[download] Reconcile error:", err.message);
+    res.status(500).json({ error: "Fehler bei der Job-Bereinigung." });
+  }
+});
+
 export default router;

@@ -53,26 +53,37 @@ describe("Hetzner Service", () => {
       dockerImage: "ghcr.io/ichbinder/openmedia-downloader:latest",
     };
 
+    /** Extract and decode the base64-encoded env file from cloud-init */
+    function decodeEnvFromCloudInit(cloudInit: string): string {
+      const match = cloudInit.match(/content:\s*([A-Za-z0-9+/=]+)/);
+      if (!match) return "";
+      return Buffer.from(match[1], "base64").toString("utf-8");
+    }
+
     it("generates valid cloud-init YAML with docker run", () => {
       const cloudInit = generateCloudInit(defaultParams);
 
       expect(cloudInit).toContain("#cloud-config");
       expect(cloudInit).toContain("test-job-123");
       expect(cloudInit).toContain("api.example.com");
-      expect(cloudInit).toContain("openmedia-files");
       expect(cloudInit).toContain("docker pull");
       expect(cloudInit).toContain("docker run");
       expect(cloudInit).toContain("openmedia-downloader");
       expect(cloudInit).toContain("fail_job");
       expect(cloudInit).toContain("--env-file");
+
+      // Env vars are base64-encoded in write_files
+      const envContent = decodeEnvFromCloudInit(cloudInit);
+      expect(envContent).toContain("openmedia-files");
     });
 
     it("passes hash and NZB URL as env vars", () => {
       const cloudInit = generateCloudInit(defaultParams);
+      const envContent = decodeEnvFromCloudInit(cloudInit);
 
-      expect(cloudInit).toContain("JOB_HASH=");
-      expect(cloudInit).toContain("abc123hash");
-      expect(cloudInit).toContain("NZB_URL=");
+      expect(envContent).toContain("JOB_HASH=");
+      expect(envContent).toContain("abc123hash");
+      expect(envContent).toContain("NZB_URL=");
     });
 
     it("includes S3 and Usenet credentials", () => {
@@ -80,11 +91,12 @@ describe("Hetzner Service", () => {
         ...defaultParams,
         s3Bucket: "my-bucket",
       });
+      const envContent = decodeEnvFromCloudInit(cloudInit);
 
-      expect(cloudInit).toContain("S3_ACCESS_KEY=");
-      expect(cloudInit).toContain("S3_SECRET_KEY=");
-      expect(cloudInit).toContain("USENET_HOST=");
-      expect(cloudInit).toContain("my-bucket");
+      expect(envContent).toContain("S3_ACCESS_KEY=");
+      expect(envContent).toContain("S3_SECRET_KEY=");
+      expect(envContent).toContain("USENET_HOST=");
+      expect(envContent).toContain("my-bucket");
     });
   });
 });
