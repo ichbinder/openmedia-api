@@ -19,7 +19,8 @@ import { exec } from "node:child_process";
 // ---------------------------------------------------------------------------
 
 const SUBDOMAIN_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
-const PRIVATE_IP_RE = /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
+const OCTET = "(?:25[0-5]|2[0-4]\\d|1\\d{2}|[1-9]?\\d)";
+const PRIVATE_IP_RE = new RegExp(`^10\\.${OCTET}\\.${OCTET}\\.${OCTET}$`);
 
 function validateSubdomain(name: string): void {
   if (!SUBDOMAIN_RE.test(name)) {
@@ -29,7 +30,7 @@ function validateSubdomain(name: string): void {
 
 function validatePrivateIp(ip: string): void {
   if (!PRIVATE_IP_RE.test(ip)) {
-    throw new Error(`Invalid private IP (must be 10.x.x.x): ${ip}`);
+    throw new Error(`Invalid private IP (must be 10.x.x.x, octets 0-255): ${ip}`);
   }
 }
 
