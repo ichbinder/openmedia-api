@@ -401,7 +401,7 @@ runcmd:
     # apiBaseUrl and apiToken are baked in at template generation time — no env file needed.
     # Always attempt cleanup regardless of metadata availability.
     echo "Requesting self-cleanup via API..."
-    curl -sf -X POST "${params.apiBaseUrl}/downloads/jobs/${params.jobId}/cleanup" \\
+    curl -sf --connect-timeout 5 --max-time 15 -X POST "${params.apiBaseUrl}/downloads/jobs/${params.jobId}/cleanup" \\
       -H "Authorization: Bearer ${params.apiToken}" \\
       -H "Content-Type: application/json" || echo "Self-cleanup request failed (reconciler will handle)"
 `;
