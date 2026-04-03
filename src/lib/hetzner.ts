@@ -379,13 +379,25 @@ runcmd:
 
     # Wait for SABnzbd to start, then launch submit-and-monitor
     sleep 30
-    docker exec -d openmedia-downloader /bin/bash -c "/opt/openmedia/submit-and-monitor.sh > /var/log/submit-monitor.log 2>&1"
+    if ! docker exec -d openmedia-downloader /bin/bash -c "/opt/openmedia/submit-and-monitor.sh > /var/log/submit-monitor.log 2>&1"; then
+      fail_job "submit-and-monitor start failed"
+      exit 1
+    fi
 
   - |
     EXIT_CODE=$(docker wait openmedia-downloader)
     echo "openmedia-downloader exited with code $EXIT_CODE"
     docker logs openmedia-downloader > /var/log/openmedia-downloader.log 2>&1
     rm -f /opt/openmedia-env
-    echo "VPS ready for cleanup"
+
+    # Self-cleanup: ask the API to delete this VPS (no Hetzner token on the VM)
+    SERVER_ID=$(curl -sf http://169.254.169.254/hetzner/v1/metadata/instance-id 2>/dev/null || echo "")
+    if [ -n "$SERVER_ID" ]; then
+      source /opt/openmedia-env 2>/dev/null || true
+      echo "Requesting self-cleanup for server $SERVER_ID via API..."
+      curl -sf -X POST "${params.apiBaseUrl}/downloads/jobs/${params.jobId}/cleanup" \\
+        -H "Authorization: Bearer ${params.apiToken}" \\
+        -H "Content-Type: application/json" || echo "Self-cleanup request failed (reconciler will handle)"
+    fi
 `;
 }

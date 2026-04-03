@@ -561,10 +561,34 @@ router.get("/jobs/:id/link", async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    const { isS3Configured, generatePresignedUrl, EXPIRY_PRESETS, MAX_PRESIGNED_EXPIRY_SECONDS } = await import("../lib/s3.js");
+    const { isS3Configured, generatePresignedUrl, getFileMetadata, EXPIRY_PRESETS, MAX_PRESIGNED_EXPIRY_SECONDS } = await import("../lib/s3.js");
 
     if (!isS3Configured()) {
       res.status(503).json({ error: "Object Storage ist nicht konfiguriert." });
+      return;
+    }
+
+    // Verify file actually exists in S3 before generating a presigned URL
+    try {
+      await getFileMetadata(job.nzbFile.s3Key);
+    } catch (s3Err: any) {
+      const statusCode = s3Err?.$metadata?.httpStatusCode || s3Err?.name;
+      if (statusCode === 404 || statusCode === "NotFound" || s3Err?.name === "NotFound") {
+        // File genuinely gone — reset DB
+        await prisma.nzbFile.update({
+          where: { id: job.nzbFile.id },
+          data: { s3Key: null, s3Bucket: null, fileExtension: null, downloadedAt: null },
+        });
+        console.warn(`[download-job] S3 file missing for ${job.nzbFile.hash.slice(0, 12)}... — DB reset`);
+        res.status(410).json({
+          error: "Datei ist nicht mehr verfügbar. Bitte erneut herunterladen.",
+          code: "FILE_GONE",
+        });
+      } else {
+        // Transient error (timeout, 5xx, auth) — don't touch DB
+        console.error(`[download-job] S3 HEAD failed for ${job.nzbFile.hash.slice(0, 12)}...:`, s3Err?.message || s3Err);
+        res.status(502).json({ error: "S3-Verbindung fehlgeschlagen. Bitte erneut versuchen." });
+      }
       return;
     }
 
@@ -694,6 +718,7 @@ router.post("/jobs/:id/provision", async (req: AuthRequest, res: Response) => {
       result = await createServer({
         name: serverName,
         userData: cloudInit,
+        sshKeys: process.env.HETZNER_SSH_KEY_NAME ? [process.env.HETZNER_SSH_KEY_NAME] : undefined,
         labels: { "job-id": job.id },
       });
     } catch (err: any) {
