@@ -99,10 +99,18 @@ router.delete("/:nzbFileId", async (req: AuthRequest, res: Response) => {
       const nzbFile = await tx.nzbFile.findUnique({ where: { id: nzbFileId } });
       if (!nzbFile?.s3Key) return false;
 
-      // Reset S3 reference inside transaction
+      // Reset S3 reference and invalidate completed download jobs
       await tx.nzbFile.update({
         where: { id: nzbFileId },
         data: { s3Key: null, s3Bucket: null, fileExtension: null, downloadedAt: null, scheduledDeletionAt: null },
+      });
+
+      // Mark all completed jobs for this file as failed — the S3 file is gone,
+      // so the "completed" status is no longer valid. Without this, the frontend
+      // shows a green download button that leads to a 422 error.
+      await tx.downloadJob.updateMany({
+        where: { nzbFileId, status: "completed" },
+        data: { status: "failed", error: "S3-Datei wurde gelöscht (kein User in Bibliothek)" },
       });
 
       // S3 deletion outside transaction scope (can't rollback S3)
