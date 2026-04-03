@@ -384,10 +384,18 @@ runcmd:
       exit 1
     fi
 
-    # Verify the script actually started (docker exec -d only checks dispatch)
-    sleep 5
-    if ! docker exec openmedia-downloader pgrep -f "submit-and-monitor" > /dev/null 2>&1; then
-      fail_job "submit-and-monitor process not running after startup"
+    # Verify the script actually started (docker exec -d only checks dispatch).
+    # Retry loop: the script may need a few seconds to appear in the process list.
+    VERIFY_OK=0
+    for i in 1 2 3 4 5 6; do
+      sleep 5
+      if docker exec openmedia-downloader pgrep -f "submit-and-monitor" > /dev/null 2>&1; then
+        VERIFY_OK=1
+        break
+      fi
+    done
+    if [ "$VERIFY_OK" = "0" ]; then
+      fail_job "submit-and-monitor process not running after 30s"
       exit 1
     fi
 
