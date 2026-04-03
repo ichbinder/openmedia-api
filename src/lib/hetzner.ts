@@ -44,7 +44,7 @@ export interface HetznerServer {
 
 export interface HetznerCreateServerOptions {
   name: string;
-  serverType?: string;     // default: cax11 (2 vCPU ARM, 4GB RAM)
+  serverType?: string;     // default: cax21 (4 vCPU ARM, 8GB RAM)
   image?: string;          // default: docker-ce (Docker pre-installed)
   location?: string;       // default: hel1
   userData?: string;       // Cloud-Init script
@@ -111,7 +111,7 @@ function mapServer(raw: any): HetznerServer {
  * Create a new Hetzner Cloud server.
  *
  * Default config optimized for download workloads:
- * - cax11: 2 vCPU ARM, 4GB RAM, 40GB disk
+ * - cax21: 4 vCPU ARM, 8GB RAM, 80GB disk (upgraded from cax11 for faster S3 uploads)
  * - docker-ce: Ubuntu with Docker pre-installed
  * - hel1: Helsinki (same region as S3 bucket)
  */
@@ -122,7 +122,7 @@ export async function createServer(
 
   const body: Record<string, any> = {
     name: options.name,
-    server_type: options.serverType || "cax11",
+    server_type: options.serverType || "cax21",
     image: options.image || "docker-ce",
     location: options.location || "hel1",
     labels: {
