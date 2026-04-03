@@ -879,13 +879,18 @@ router.post("/cleanup-zombies", async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    // Delete zombies directly (avoid double listServers call)
+    // Delete zombies and clean up Caddy mappings
     const deletedIds: number[] = [];
     for (const server of zombies) {
       try {
         const deleted = await deleteServer(server.id);
         if (deleted) {
           deletedIds.push(server.id);
+          try {
+            await removeMapping(server.name);
+          } catch {
+            // Best-effort — mapping may not exist
+          }
           console.log(`[download-vps] Zombie cleaned: ${server.name} (id: ${server.id})`);
         }
       } catch (err: any) {
