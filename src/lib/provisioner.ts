@@ -12,6 +12,7 @@
 import { exec } from "node:child_process";
 import prisma from "./prisma.js";
 import { isHetznerConfigured, createServer, generateCloudInit } from "./hetzner.js";
+import { addMapping } from "./caddy-mapping.js";
 
 type ProvisionMode = "hetzner" | "local" | "false";
 
@@ -116,6 +117,7 @@ async function provisionHetznerVPS(job: any): Promise<void> {
   });
 
   const serverName = `dl-${job.id.slice(0, 8)}`;
+  const networkId = process.env.HETZNER_NETWORK_ID ? parseInt(process.env.HETZNER_NETWORK_ID, 10) : undefined;
 
   try {
     const result = await createServer({
@@ -123,18 +125,29 @@ async function provisionHetznerVPS(job: any): Promise<void> {
       userData: cloudInit,
       sshKeys: process.env.HETZNER_SSH_KEY_NAME ? [process.env.HETZNER_SSH_KEY_NAME] : undefined,
       labels: { "job-id": job.id, purpose: "openmedia-download" },
+      networks: networkId ? [networkId] : undefined,
     });
 
-    // Update job with server info
+    // Update job with server info (prefer private IP for internal routing, keep public for reference)
     await prisma.downloadJob.updateMany({
       where: { id: job.id, status: "provisioning" },
       data: {
         hetznerServerId: result.server.id,
-        hetznerServerIp: result.server.publicIpv4 || null,
+        hetznerServerIp: result.server.privateIp || result.server.publicIpv4 || null,
       },
     });
 
-    console.log(`[provision] Hetzner VPS created: ${serverName} (ID: ${result.server.id}, IP: ${result.server.publicIpv4})`);
+    // Register Caddy reverse proxy mapping for SABnzbd UI access
+    if (result.server.privateIp) {
+      try {
+        await addMapping(serverName, result.server.privateIp);
+      } catch (mappingErr: any) {
+        // Non-fatal: download works without UI access
+        console.error(`[provision] Caddy mapping failed (non-fatal): ${mappingErr.message}`);
+      }
+    }
+
+    console.log(`[provision] Hetzner VPS created: ${serverName} (ID: ${result.server.id}, public: ${result.server.publicIpv4}, private: ${result.server.privateIp})`);
   } catch (err: any) {
     const error = `Hetzner VPS creation failed: ${err.message}`;
     console.error(`[provision] ${error}`);

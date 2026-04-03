@@ -36,6 +36,7 @@ export interface HetznerServer {
   status: string; // initializing, starting, running, stopping, off, deleting, migrating, rebuilding, unknown
   publicIpv4: string | null;
   publicIpv6: string | null;
+  privateIp: string | null;
   serverType: string;
   location: string;
   labels: Record<string, string>;
@@ -50,6 +51,7 @@ export interface HetznerCreateServerOptions {
   userData?: string;       // Cloud-Init script
   sshKeys?: string[];      // SSH key names
   labels?: Record<string, string>;
+  networks?: number[];     // Private network IDs to attach
 }
 
 export interface HetznerCreateServerResult {
@@ -90,12 +92,18 @@ async function hetznerFetch(
 }
 
 function mapServer(raw: any): HetznerServer {
+  // Extract the first private network IP (if attached)
+  const privateNet = Array.isArray(raw.private_net) && raw.private_net.length > 0
+    ? raw.private_net[0]
+    : null;
+
   return {
     id: raw.id,
     name: raw.name,
     status: raw.status,
     publicIpv4: raw.public_net?.ipv4?.ip || null,
     publicIpv6: raw.public_net?.ipv6?.ip || null,
+    privateIp: privateNet?.ip || null,
     serverType: raw.server_type?.name || raw.server_type,
     location: raw.datacenter?.location?.name || raw.location,
     labels: raw.labels || {},
@@ -138,6 +146,10 @@ export async function createServer(
 
   if (options.sshKeys && options.sshKeys.length > 0) {
     body.ssh_keys = options.sshKeys;
+  }
+
+  if (options.networks && options.networks.length > 0) {
+    body.networks = options.networks;
   }
 
   const res = await hetznerFetch("/servers", {
