@@ -74,8 +74,11 @@ function readMappings(): BackendMapping[] {
         return { subdomain, backend };
       })
       .filter((m) => m.subdomain && m.backend);
-  } catch {
-    return [];
+  } catch (err: any) {
+    // File not found is expected (no mappings yet) — return empty
+    if (err?.code === "ENOENT") return [];
+    // Any other I/O error is unexpected — rethrow to avoid silent data loss
+    throw err;
   }
 }
 
