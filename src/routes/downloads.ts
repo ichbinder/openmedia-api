@@ -531,6 +531,7 @@ import {
   findZombieServers,
   generateCloudInit,
 } from "../lib/hetzner.js";
+import { addMapping, removeMapping } from "../lib/caddy-mapping.js";
 
 // GET /downloads/jobs/:id/link — generate presigned download URL for a completed job
 router.get("/jobs/:id/link", async (req: AuthRequest, res: Response) => {
@@ -721,6 +722,12 @@ router.post("/jobs/:id/provision", async (req: AuthRequest, res: Response) => {
 
     const serverName = `dl-${job.id.slice(0, 8)}`;
 
+    const rawNetworkId = process.env.HETZNER_NETWORK_ID;
+    const networkId = rawNetworkId ? parseInt(rawNetworkId, 10) : undefined;
+    if (rawNetworkId && (!networkId || isNaN(networkId))) {
+      console.warn(`[download-vps] HETZNER_NETWORK_ID is not a valid number: "${rawNetworkId}"`);
+    }
+
     let result;
     try {
       result = await createServer({
@@ -728,6 +735,7 @@ router.post("/jobs/:id/provision", async (req: AuthRequest, res: Response) => {
         userData: cloudInit,
         sshKeys: process.env.HETZNER_SSH_KEY_NAME ? [process.env.HETZNER_SSH_KEY_NAME] : undefined,
         labels: { "job-id": job.id },
+        networks: networkId ? [networkId] : undefined,
       });
     } catch (err: any) {
       // Rollback job status on server creation failure
@@ -738,16 +746,25 @@ router.post("/jobs/:id/provision", async (req: AuthRequest, res: Response) => {
       throw err;
     }
 
-    // Update job with server info
+    // Update job with server info (prefer private IP for internal routing)
     await prisma.downloadJob.update({
       where: { id: job.id },
       data: {
         hetznerServerId: result.server.id,
-        hetznerServerIp: result.server.publicIpv4,
+        hetznerServerIp: result.server.privateIp || result.server.publicIpv4,
       },
     });
 
-    console.log(`[download-vps] Provisioned: ${serverName} (id: ${result.server.id}) for job ${job.id}`);
+    // Register Caddy reverse proxy mapping for SABnzbd UI access
+    if (result.server.privateIp) {
+      try {
+        await addMapping(serverName, result.server.privateIp);
+      } catch (mappingErr: any) {
+        console.error(`[download-vps] Caddy mapping failed (non-fatal): ${mappingErr.message}`);
+      }
+    }
+
+    console.log(`[download-vps] Provisioned: ${serverName} (id: ${result.server.id}, private: ${result.server.privateIp}) for job ${job.id}`);
 
     res.status(201).json({
       server: {
@@ -755,6 +772,7 @@ router.post("/jobs/:id/provision", async (req: AuthRequest, res: Response) => {
         name: result.server.name,
         status: result.server.status,
         ip: result.server.publicIpv4,
+        privateIp: result.server.privateIp,
         location: result.server.location,
       },
       job: { id: job.id, status: "provisioning" },
@@ -787,7 +805,15 @@ router.post("/jobs/:id/cleanup", async (req: AuthRequest, res: Response) => {
       return;
     }
 
+    const serverName = `dl-${job.id.slice(0, 8)}`;
     const deleted = await deleteServer(job.hetznerServerId);
+
+    // Remove Caddy reverse proxy mapping
+    try {
+      await removeMapping(serverName);
+    } catch (mappingErr: any) {
+      console.error(`[download-vps] Caddy mapping removal failed (non-fatal): ${mappingErr.message}`);
+    }
 
     // Clear server reference from job
     await prisma.downloadJob.update({
@@ -853,13 +879,18 @@ router.post("/cleanup-zombies", async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    // Delete zombies directly (avoid double listServers call)
+    // Delete zombies and clean up Caddy mappings
     const deletedIds: number[] = [];
     for (const server of zombies) {
       try {
         const deleted = await deleteServer(server.id);
         if (deleted) {
           deletedIds.push(server.id);
+          try {
+            await removeMapping(server.name);
+          } catch {
+            // Best-effort — mapping may not exist
+          }
           console.log(`[download-vps] Zombie cleaned: ${server.name} (id: ${server.id})`);
         }
       } catch (err: any) {

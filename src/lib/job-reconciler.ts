@@ -17,6 +17,7 @@
 
 import prisma from "./prisma.js";
 import { getServer, deleteServer, listServers, isHetznerConfigured } from "./hetzner.js";
+import { removeMapping } from "./caddy-mapping.js";
 
 // ── Configuration ───────────────────────────────────────────
 
@@ -176,6 +177,13 @@ export async function reconcileStaleJobs(): Promise<ReconcileResult> {
                 const msg = `Zombie VPS deleted: ${server.name} (id: ${server.id}) — job ${jobId?.slice(0, 8) || "?"}`;
                 result.details.push(msg);
                 console.log(`[reconciler] ${msg}`);
+
+                // Clean up Caddy reverse proxy mapping
+                try {
+                  await removeMapping(server.name);
+                } catch {
+                  // Best-effort — mapping may not exist
+                }
               }
             } catch (delErr: any) {
               console.warn(`[reconciler] Zombie delete failed: ${server.id} — ${delErr.message}`);
