@@ -35,7 +35,8 @@ services:
 
   api:
     build:
-      context: .
+      # Absolute path to the openmedia-api repo checkout on the production server.
+      context: /opt/openmedia-api
     image: openmedia-api:latest
     container_name: openmedia-api
     environment:
