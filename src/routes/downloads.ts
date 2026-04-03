@@ -722,7 +722,11 @@ router.post("/jobs/:id/provision", async (req: AuthRequest, res: Response) => {
 
     const serverName = `dl-${job.id.slice(0, 8)}`;
 
-    const networkId = process.env.HETZNER_NETWORK_ID ? parseInt(process.env.HETZNER_NETWORK_ID, 10) : undefined;
+    const rawNetworkId = process.env.HETZNER_NETWORK_ID;
+    const networkId = rawNetworkId ? parseInt(rawNetworkId, 10) : undefined;
+    if (rawNetworkId && (!networkId || isNaN(networkId))) {
+      console.warn(`[download-vps] HETZNER_NETWORK_ID is not a valid number: "${rawNetworkId}"`);
+    }
 
     let result;
     try {

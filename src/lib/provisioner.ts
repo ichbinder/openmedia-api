@@ -117,7 +117,11 @@ async function provisionHetznerVPS(job: any): Promise<void> {
   });
 
   const serverName = `dl-${job.id.slice(0, 8)}`;
-  const networkId = process.env.HETZNER_NETWORK_ID ? parseInt(process.env.HETZNER_NETWORK_ID, 10) : undefined;
+  const rawNetworkId = process.env.HETZNER_NETWORK_ID;
+  const networkId = rawNetworkId ? parseInt(rawNetworkId, 10) : undefined;
+  if (rawNetworkId && (!networkId || isNaN(networkId))) {
+    console.warn(`[provision] HETZNER_NETWORK_ID is not a valid number: "${rawNetworkId}" — VPS will not be attached to private network`);
+  }
 
   try {
     const result = await createServer({
