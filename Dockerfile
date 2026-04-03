@@ -11,6 +11,9 @@ RUN npm run build
 
 FROM node:22-alpine AS runner
 
+# Docker CLI needed for caddy reload via docker exec
+RUN apk add --no-cache docker-cli
+
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci --omit=dev
