@@ -700,6 +700,8 @@ router.post("/jobs/:id/provision", async (req: AuthRequest, res: Response) => {
       return;
     }
 
+    const serverName = `dl-${job.id.slice(0, 8)}`;
+
     const cloudInit = generateCloudInit({
       jobId: job.id,
       nzbHash: job.nzbFile.hash,
@@ -718,9 +720,8 @@ router.post("/jobs/:id/provision", async (req: AuthRequest, res: Response) => {
       usenetSsl: process.env.USENET_SSL !== "false",
       usenetConnections: parseInt(process.env.USENET_CONNECTIONS || "10", 10),
       dockerImage: process.env.DOWNLOADER_DOCKER_IMAGE || "ghcr.io/ichbinder/openmedia-downloader:latest",
+      serverName,
     });
-
-    const serverName = `dl-${job.id.slice(0, 8)}`;
 
     const rawNetworkId = process.env.HETZNER_NETWORK_ID;
     const networkId = rawNetworkId ? parseInt(rawNetworkId, 10) : undefined;

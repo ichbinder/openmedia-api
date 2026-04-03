@@ -331,6 +331,7 @@ export function generateCloudInit(params: {
   usenetSsl: boolean;
   usenetConnections: number;
   dockerImage: string;
+  serverName: string;
 }): string {
   // Build env file content (written via write_files, not heredoc in runcmd)
   const envContent = [
@@ -352,6 +353,7 @@ export function generateCloudInit(params: {
     `S3_REGION=${params.s3Region}`,
     `PUID=0`,
     `PGID=0`,
+    `DL_HOSTNAME=${params.serverName}`,
   ].join("\n");
 
   // Base64-encode the env content to avoid YAML parsing issues

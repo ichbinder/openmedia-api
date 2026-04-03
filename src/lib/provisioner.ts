@@ -96,6 +96,8 @@ async function provisionHetznerVPS(job: any): Promise<void> {
   const nzbServiceUrl = process.env.NZB_SERVICE_URL!;
   const dockerImage = process.env.DOWNLOADER_DOCKER_IMAGE || "ghcr.io/ichbinder/openmedia-downloader:latest";
 
+  const serverName = `dl-${job.id.slice(0, 8)}`;
+
   const cloudInit = generateCloudInit({
     jobId: job.id,
     nzbHash: job.nzbFile.hash,
@@ -114,9 +116,8 @@ async function provisionHetznerVPS(job: any): Promise<void> {
     usenetSsl: process.env.USENET_SSL !== "false" && process.env.USENET_SSL !== "0",
     usenetConnections: parseInt(process.env.USENET_CONNECTIONS || "10", 10),
     dockerImage,
+    serverName,
   });
-
-  const serverName = `dl-${job.id.slice(0, 8)}`;
   const rawNetworkId = process.env.HETZNER_NETWORK_ID;
   const networkId = rawNetworkId ? parseInt(rawNetworkId, 10) : undefined;
   if (rawNetworkId && (!networkId || isNaN(networkId))) {

@@ -51,6 +51,7 @@ describe("Hetzner Service", () => {
       usenetSsl: true,
       usenetConnections: 10,
       dockerImage: "ghcr.io/ichbinder/openmedia-downloader:latest",
+      serverName: "dl-test1234",
     };
 
     /** Extract and decode the base64-encoded env file from cloud-init */
