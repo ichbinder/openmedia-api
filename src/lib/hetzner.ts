@@ -383,6 +383,7 @@ runcmd:
     fi
 
     if ! docker run -d --name openmedia-downloader \\
+      -p 8080:8080 \\
       --env-file /opt/openmedia-env \\
       "${params.dockerImage}"; then
       fail_job "Docker run failed"
