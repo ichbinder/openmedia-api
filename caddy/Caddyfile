@@ -14,7 +14,7 @@ api.mediatoken.de {
 		dns hetzner {env.HETZNER_API_TOKEN}
 	}
 
-	basicauth {
+	basic_auth {
 		{env.DL_AUTH_USER} {env.DL_AUTH_HASH}
 	}
 
@@ -29,7 +29,7 @@ api.mediatoken.de {
 
 	@has_backend expression `{dl_backend} != ""`
 	handle @has_backend {
-		reverse_proxy http://{dl_backend}
+		reverse_proxy {dl_backend}
 	}
 
 	handle {
