@@ -380,7 +380,14 @@ runcmd:
     # Wait for SABnzbd to start, then launch submit-and-monitor
     sleep 30
     if ! docker exec -d openmedia-downloader /bin/bash -c "/opt/openmedia/submit-and-monitor.sh > /var/log/submit-monitor.log 2>&1"; then
-      fail_job "submit-and-monitor start failed"
+      fail_job "submit-and-monitor dispatch failed"
+      exit 1
+    fi
+
+    # Verify the script actually started (docker exec -d only checks dispatch)
+    sleep 5
+    if ! docker exec openmedia-downloader pgrep -f "submit-and-monitor" > /dev/null 2>&1; then
+      fail_job "submit-and-monitor process not running after startup"
       exit 1
     fi
 
@@ -391,13 +398,11 @@ runcmd:
     rm -f /opt/openmedia-env
 
     # Self-cleanup: ask the API to delete this VPS (no Hetzner token on the VM)
-    SERVER_ID=$(curl -sf http://169.254.169.254/hetzner/v1/metadata/instance-id 2>/dev/null || echo "")
-    if [ -n "$SERVER_ID" ]; then
-      source /opt/openmedia-env 2>/dev/null || true
-      echo "Requesting self-cleanup for server $SERVER_ID via API..."
-      curl -sf -X POST "${params.apiBaseUrl}/downloads/jobs/${params.jobId}/cleanup" \\
-        -H "Authorization: Bearer ${params.apiToken}" \\
-        -H "Content-Type: application/json" || echo "Self-cleanup request failed (reconciler will handle)"
-    fi
+    # apiBaseUrl and apiToken are baked in at template generation time — no env file needed.
+    # Always attempt cleanup regardless of metadata availability.
+    echo "Requesting self-cleanup via API..."
+    curl -sf -X POST "${params.apiBaseUrl}/downloads/jobs/${params.jobId}/cleanup" \\
+      -H "Authorization: Bearer ${params.apiToken}" \\
+      -H "Content-Type: application/json" || echo "Self-cleanup request failed (reconciler will handle)"
 `;
 }

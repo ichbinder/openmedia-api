@@ -281,10 +281,10 @@ export async function listFiles(
 /**
  * Get metadata for a single file (HEAD request — no data transfer).
  */
-export async function getFileMetadata(key: string): Promise<S3FileMetadata> {
+export async function getFileMetadata(key: string, bucket?: string): Promise<S3FileMetadata> {
   const result = await getClient().send(
     new HeadObjectCommand({
-      Bucket: getBucket(),
+      Bucket: bucket || getBucket(),
       Key: key,
     }),
   );
