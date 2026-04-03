@@ -1,0 +1,7 @@
+# Download client backend mapping
+# Format: <subdomain> <private-ip:port>
+# Managed automatically by the openmedia-api provisioner.
+# After editing, reload Caddy: docker exec caddy caddy reload --config /etc/caddy/Caddyfile
+#
+# Example:
+# dl-a1b2c3d4 10.0.0.3:8080
