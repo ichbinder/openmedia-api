@@ -348,6 +348,33 @@ describe("Downloads Routes", () => {
       expect(updatedNzb!.brokenReason).toContain("incomplete download");
     });
 
+    it("inkrementiert failedAttempts nicht bei doppeltem failed-Callback", async () => {
+      const { nzbFile } = await createTestNzbFile();
+
+      // Create job and fail it
+      const createRes = await request(app)
+        .post("/downloads/jobs")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ nzbFileId: nzbFile.id });
+      const jobId = createRes.body.job.id;
+
+      // First failed callback
+      await request(app)
+        .patch(`/downloads/jobs/${jobId}/status`)
+        .set("Authorization", `Bearer ${token}`)
+        .send({ status: "failed", error: "timeout" });
+
+      // Second failed callback (retry) — should NOT increment
+      const res = await request(app)
+        .patch(`/downloads/jobs/${jobId}/status`)
+        .set("Authorization", `Bearer ${token}`)
+        .send({ status: "failed", error: "timeout retry" });
+
+      // The second call succeeds (same-status update is allowed) but doesn't increment
+      const updatedNzb = await prisma.nzbFile.findUnique({ where: { id: nzbFile.id } });
+      expect(updatedNzb!.failedAttempts).toBe(1); // still 1, not 2
+    });
+
     it("setzt brokenReason nicht wenn NZB bereits broken ist", async () => {
       const { nzbFile } = await createTestNzbFile();
       // Pre-set as broken with a custom reason

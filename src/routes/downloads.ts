@@ -452,7 +452,10 @@ router.patch("/jobs/:id/status", async (req: AuthRequest, res: Response) => {
     }
 
     // On failed: increment failedAttempts on NzbFile, auto-mark as broken at 3+
+    // Only count the failure if this is a real state transition (not a retry of failed→failed)
     if (status === "failed") {
+      const isNewFailure = currentJob.status !== "failed";
+
       const failureResult = await prisma.$transaction(async (tx) => {
         const casResult = await tx.downloadJob.updateMany({
           where: { id: String(req.params.id), status: currentJob.status },
@@ -463,22 +466,27 @@ router.patch("/jobs/:id/status", async (req: AuthRequest, res: Response) => {
           return { conflict: true as const, nzbFile: null };
         }
 
-        // Increment failed attempts
-        const updatedNzb = await tx.nzbFile.update({
-          where: { id: currentJob.nzbFileId },
-          data: { failedAttempts: { increment: 1 } },
-        });
+        // Only increment failedAttempts on a real state transition
+        const updatedNzb = isNewFailure
+          ? await tx.nzbFile.update({
+              where: { id: currentJob.nzbFileId },
+              data: { failedAttempts: { increment: 1 } },
+            })
+          : await tx.nzbFile.findUniqueOrThrow({
+              where: { id: currentJob.nzbFileId },
+            });
 
         // Auto-mark as broken after 3 failed attempts
-        if (updatedNzb.failedAttempts >= 3 && updatedNzb.status !== "broken") {
+        if (isNewFailure && updatedNzb.failedAttempts >= 3 && updatedNzb.status !== "broken") {
+          const count = updatedNzb.failedAttempts;
           const reason = errorMsg
-            ? `Download 3x fehlgeschlagen: ${String(errorMsg).slice(0, 200)}`
-            : "Download 3x fehlgeschlagen";
+            ? `Download ${count}x fehlgeschlagen: ${String(errorMsg).slice(0, 200)}`
+            : `Download ${count}x fehlgeschlagen`;
           await tx.nzbFile.update({
             where: { id: currentJob.nzbFileId },
             data: { status: "broken", brokenReason: reason },
           });
-          console.log(`[download-job] NZB auto-broken: ${updatedNzb.hash.slice(0, 12)}... (${updatedNzb.failedAttempts} failures)`);
+          console.log(`[download-job] NZB auto-broken: ${updatedNzb.hash.slice(0, 12)}... (${count} failures)`);
         }
 
         return { conflict: false as const, nzbFile: updatedNzb };
