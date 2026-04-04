@@ -782,11 +782,11 @@ router.post("/jobs/:id/provision", async (req: AuthRequest, res: Response) => {
       usenetSsl: process.env.USENET_SSL !== "false",
       usenetConnections: parseInt(process.env.USENET_CONNECTIONS || "10", 10),
       usenetBackupHost: process.env.USENET_BACKUP_HOST || undefined,
-      usenetBackupPort: process.env.USENET_BACKUP_PORT ? parseInt(process.env.USENET_BACKUP_PORT, 10) : undefined,
+      usenetBackupPort: (() => { const p = parseInt(process.env.USENET_BACKUP_PORT || "", 10); return Number.isInteger(p) && p >= 1 && p <= 65535 ? p : undefined; })(),
       usenetBackupUser: process.env.USENET_BACKUP_USER || undefined,
       usenetBackupPassword: process.env.USENET_BACKUP_PASSWORD || undefined,
       usenetBackupSsl: process.env.USENET_BACKUP_SSL !== "false",
-      usenetBackupConnections: process.env.USENET_BACKUP_CONNECTIONS ? parseInt(process.env.USENET_BACKUP_CONNECTIONS, 10) : undefined,
+      usenetBackupConnections: (() => { const c = parseInt(process.env.USENET_BACKUP_CONNECTIONS || "", 10); return Number.isInteger(c) && c >= 1 ? c : undefined; })(),
       dockerImage: process.env.DOWNLOADER_DOCKER_IMAGE || "ghcr.io/ichbinder/openmedia-downloader:latest",
       serverName,
     });
