@@ -5,6 +5,7 @@ import { requireAuth, type AuthRequest } from "../middleware/auth.js";
 import { parseNzbName, calculateHash } from "../lib/nzb-parser.js";
 
 // Select fields for NzbFile responses
+/** Full NzbFile projection — used for detail endpoints */
 const nzbFileSelect = {
   id: true, hash: true, originalFilename: true, fileSize: true,
   resolution: true, audioLanguages: true, subtitleLanguages: true,
@@ -12,6 +13,13 @@ const nzbFileSelect = {
   failedAttempts: true,
   s3Key: true, s3Bucket: true, fileExtension: true, downloadedAt: true,
   createdAt: true, updatedAt: true, movieId: true,
+} as const;
+
+/** Lightweight NzbFile projection — used for list endpoints */
+const nzbFileListSelect = {
+  id: true, hash: true, resolution: true, audioLanguages: true,
+  status: true, brokenReason: true, failedAttempts: true,
+  s3Key: true, downloadedAt: true,
 } as const;
 import { searchTmdbMovie } from "../lib/tmdb.js";
 
@@ -36,7 +44,7 @@ function serializeMovieWithFiles(movie: any) {
 router.get("/movies", async (_req: AuthRequest, res: Response) => {
   try {
     const movies = await prisma.nzbMovie.findMany({
-      include: { nzbFiles: { select: { id: true, hash: true, resolution: true, audioLanguages: true, status: true, brokenReason: true, failedAttempts: true, s3Key: true, downloadedAt: true } } },
+      include: { nzbFiles: { select: nzbFileListSelect } },
       orderBy: { updatedAt: "desc" },
     });
     res.json({ movies: movies.map(serializeMovieWithFiles) });
