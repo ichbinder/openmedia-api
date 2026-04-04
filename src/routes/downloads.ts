@@ -248,7 +248,7 @@ router.get("/jobs", async (req: AuthRequest, res: Response) => {
       where: statusFilter ? { status: statusFilter } : undefined,
       include: {
         nzbFile: {
-          include: { movie: { select: { id: true, titleDe: true, titleEn: true, year: true, posterPath: true } } },
+          include: { movie: { select: { id: true, tmdbId: true, titleDe: true, titleEn: true, year: true, posterPath: true } } },
         },
       },
       orderBy: { createdAt: "desc" },
@@ -602,7 +602,7 @@ router.get("/jobs/:id/link", async (req: AuthRequest, res: Response) => {
       where: { id: String(req.params.id) },
       include: {
         nzbFile: {
-          include: { movie: { select: { id: true, titleDe: true, titleEn: true, year: true } } },
+          include: { movie: { select: { id: true, tmdbId: true, titleDe: true, titleEn: true, year: true, posterPath: true } } },
         },
       },
     });

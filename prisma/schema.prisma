@@ -15,8 +15,9 @@ model User {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  watchlist  WatchlistItem[]
-  library   UserLibrary[]
+  watchlist      WatchlistItem[]
+  library        UserLibrary[]
+  searchHistory  SearchHistory[]
 
   @@map("users")
 }
@@ -135,6 +136,23 @@ model DownloadJob {
   @@index([nzbFileId])
   @@index([status])
   @@map("download_jobs")
+}
+
+model SearchHistory {
+  id          String   @id @default(uuid())
+  movieId     Int      @map("movie_id")
+  title       String
+  posterPath  String?  @map("poster_path")
+  voteAverage Float    @default(0) @map("vote_average")
+  releaseDate String   @default("") @map("release_date")
+  searchedAt  DateTime @default(now()) @map("searched_at")
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String @map("user_id")
+
+  @@unique([userId, movieId])
+  @@index([userId, searchedAt])
+  @@map("search_history")
 }
 
 model EncryptedConfig {

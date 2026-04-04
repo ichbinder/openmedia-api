@@ -8,6 +8,7 @@ import downloadsRoutes from "./routes/downloads.js";
 import storageRoutes from "./routes/storage.js";
 import configRoutes from "./routes/config.js";
 import libraryRoutes from "./routes/library.js";
+import searchHistoryRoutes from "./routes/search-history.js";
 import { errorHandler } from "./middleware/error-handler.js";
 
 export function createApp() {
@@ -23,6 +24,7 @@ export function createApp() {
   app.use("/storage", storageRoutes);
   app.use("/config", configRoutes);
   app.use("/library", libraryRoutes);
+  app.use("/search-history", searchHistoryRoutes);
 
   // Health check with DB status
 app.get("/health", async (_req, res) => {
