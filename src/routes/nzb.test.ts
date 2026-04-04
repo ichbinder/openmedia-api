@@ -90,6 +90,36 @@ describe("NZB Routes", () => {
       expect(res.body.movie.titleEn).toBe("The Godfather");
     });
 
+    it("by-tmdb liefert NZB status/brokenReason/failedAttempts", async () => {
+      const created = await createMovie(token, { tmdbId: 999111 });
+      const movieId = created.body.movie.id;
+      // Add an NZB file
+      const fileRes = await request(app)
+        .post("/nzb/files")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ movieId, hash: `test-tmdb-fields-${Date.now()}`, originalFilename: "test.nzb", resolution: "1080p" });
+      expect(fileRes.status).toBe(201);
+
+      // Mark as broken
+      await request(app)
+        .patch(`/nzb/files/${fileRes.body.nzbFile.id}/status`)
+        .set("Authorization", `Bearer ${token}`)
+        .send({ status: "broken", brokenReason: "Missing articles" });
+
+      // Set failedAttempts via direct DB update (simulating 3 failures)
+      await prisma.nzbFile.update({ where: { id: fileRes.body.nzbFile.id }, data: { failedAttempts: 3 } });
+
+      const res = await request(app)
+        .get("/nzb/movies/by-tmdb/999111")
+        .set("Authorization", `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      const nzb = res.body.movie.nzbFiles[0];
+      expect(nzb.status).toBe("broken");
+      expect(nzb.brokenReason).toBe("Missing articles");
+      expect(nzb.failedAttempts).toBe(3);
+    });
+
     it("aktualisiert einen Film", async () => {
       const created = await createMovie(token);
       const res = await request(app)

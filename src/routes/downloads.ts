@@ -451,7 +451,61 @@ router.patch("/jobs/:id/status", async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    // Non-completed status: compare-and-swap update
+    // On failed: increment failedAttempts on NzbFile, auto-mark as broken at 3+
+    if (status === "failed") {
+      const failureResult = await prisma.$transaction(async (tx) => {
+        const casResult = await tx.downloadJob.updateMany({
+          where: { id: String(req.params.id), status: currentJob.status },
+          data: updateData,
+        });
+
+        if (casResult.count === 0) {
+          return { conflict: true as const, nzbFile: null };
+        }
+
+        // Increment failed attempts
+        const updatedNzb = await tx.nzbFile.update({
+          where: { id: currentJob.nzbFileId },
+          data: { failedAttempts: { increment: 1 } },
+        });
+
+        // Auto-mark as broken after 3 failed attempts
+        if (updatedNzb.failedAttempts >= 3 && updatedNzb.status !== "broken") {
+          const reason = errorMsg
+            ? `Download 3x fehlgeschlagen: ${String(errorMsg).slice(0, 200)}`
+            : "Download 3x fehlgeschlagen";
+          await tx.nzbFile.update({
+            where: { id: currentJob.nzbFileId },
+            data: { status: "broken", brokenReason: reason },
+          });
+          console.log(`[download-job] NZB auto-broken: ${updatedNzb.hash.slice(0, 12)}... (${updatedNzb.failedAttempts} failures)`);
+        }
+
+        return { conflict: false as const, nzbFile: updatedNzb };
+      });
+
+      if (failureResult.conflict) {
+        res.status(409).json({ error: "Status wurde zwischenzeitlich geändert (Konflikt)." });
+        return;
+      }
+
+      console.log(`[download-job] Failed: ${currentJob.id} (attempt ${failureResult.nzbFile?.failedAttempts})`);
+
+      const fullJob = await prisma.downloadJob.findUnique({
+        where: { id: currentJob.id },
+        include: { nzbFile: { include: { movie: true } } },
+      });
+
+      if (!fullJob) {
+        res.status(404).json({ error: "Job wurde zwischenzeitlich gelöscht." });
+        return;
+      }
+
+      res.json({ job: serializeJob(fullJob) });
+      return;
+    }
+
+    // Non-completed/non-failed status: compare-and-swap update
     const casResult = await prisma.downloadJob.updateMany({
       where: { id: String(req.params.id), status: currentJob.status },
       data: updateData,

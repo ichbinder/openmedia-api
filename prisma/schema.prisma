@@ -66,6 +66,7 @@ model NzbFile {
   source            String?
   status            String   @default("untested")
   brokenReason      String?  @map("broken_reason")
+  failedAttempts    Int      @default(0) @map("failed_attempts")
 
   // S3 storage reference (set after successful download + upload)
   s3Key             String?  @map("s3_key")

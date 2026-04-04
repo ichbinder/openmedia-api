@@ -308,6 +308,67 @@ describe("Downloads Routes", () => {
       expect(res.body.job.error).toBe("VPS konnte nicht erstellt werden");
       expect(res.body.job.completedAt).toBeDefined();
     });
+
+    it("inkrementiert failedAttempts bei failure", async () => {
+      const { nzbFile } = await createTestNzbFile();
+
+      // Create job and fail it
+      const createRes = await request(app)
+        .post("/downloads/jobs")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ nzbFileId: nzbFile.id });
+      await request(app)
+        .patch(`/downloads/jobs/${createRes.body.job.id}/status`)
+        .set("Authorization", `Bearer ${token}`)
+        .send({ status: "failed", error: "SABnzbd: missing articles" });
+
+      const updatedNzb = await prisma.nzbFile.findUnique({ where: { id: nzbFile.id } });
+      expect(updatedNzb!.failedAttempts).toBe(1);
+      expect(updatedNzb!.status).toBe("untested"); // not yet broken
+    });
+
+    it("markiert NZB als broken nach 3 failures", async () => {
+      const { nzbFile } = await createTestNzbFile();
+
+      for (let i = 0; i < 3; i++) {
+        const createRes = await request(app)
+          .post("/downloads/jobs")
+          .set("Authorization", `Bearer ${token}`)
+          .send({ nzbFileId: nzbFile.id });
+        await request(app)
+          .patch(`/downloads/jobs/${createRes.body.job.id}/status`)
+          .set("Authorization", `Bearer ${token}`)
+          .send({ status: "failed", error: "SABnzbd: incomplete download" });
+      }
+
+      const updatedNzb = await prisma.nzbFile.findUnique({ where: { id: nzbFile.id } });
+      expect(updatedNzb!.failedAttempts).toBe(3);
+      expect(updatedNzb!.status).toBe("broken");
+      expect(updatedNzb!.brokenReason).toContain("3x fehlgeschlagen");
+      expect(updatedNzb!.brokenReason).toContain("incomplete download");
+    });
+
+    it("setzt brokenReason nicht wenn NZB bereits broken ist", async () => {
+      const { nzbFile } = await createTestNzbFile();
+      // Pre-set as broken with a custom reason
+      await prisma.nzbFile.update({
+        where: { id: nzbFile.id },
+        data: { status: "broken", brokenReason: "Manuell markiert", failedAttempts: 5 },
+      });
+
+      const createRes = await request(app)
+        .post("/downloads/jobs")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ nzbFileId: nzbFile.id });
+      await request(app)
+        .patch(`/downloads/jobs/${createRes.body.job.id}/status`)
+        .set("Authorization", `Bearer ${token}`)
+        .send({ status: "failed", error: "another error" });
+
+      const updatedNzb = await prisma.nzbFile.findUnique({ where: { id: nzbFile.id } });
+      expect(updatedNzb!.failedAttempts).toBe(6); // still incremented
+      expect(updatedNzb!.brokenReason).toBe("Manuell markiert"); // not overwritten
+    });
   });
 
   describe("GET /downloads/jobs/:id/link", () => {
