@@ -451,7 +451,69 @@ router.patch("/jobs/:id/status", async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    // Non-completed status: compare-and-swap update
+    // On failed: increment failedAttempts on NzbFile, auto-mark as broken at 3+
+    // Only count the failure if this is a real state transition (not a retry of failed→failed)
+    if (status === "failed") {
+      const isNewFailure = currentJob.status !== "failed";
+
+      const failureResult = await prisma.$transaction(async (tx) => {
+        const casResult = await tx.downloadJob.updateMany({
+          where: { id: String(req.params.id), status: currentJob.status },
+          data: updateData,
+        });
+
+        if (casResult.count === 0) {
+          return { conflict: true as const, nzbFile: null };
+        }
+
+        // Only increment failedAttempts on a real state transition
+        const updatedNzb = isNewFailure
+          ? await tx.nzbFile.update({
+              where: { id: currentJob.nzbFileId },
+              data: { failedAttempts: { increment: 1 } },
+            })
+          : await tx.nzbFile.findUniqueOrThrow({
+              where: { id: currentJob.nzbFileId },
+            });
+
+        // Auto-mark as broken after 3 failed attempts
+        if (isNewFailure && updatedNzb.failedAttempts >= 3 && updatedNzb.status !== "broken") {
+          const count = updatedNzb.failedAttempts;
+          const reason = errorMsg
+            ? `Download ${count}x fehlgeschlagen: ${String(errorMsg).slice(0, 200)}`
+            : `Download ${count}x fehlgeschlagen`;
+          await tx.nzbFile.update({
+            where: { id: currentJob.nzbFileId },
+            data: { status: "broken", brokenReason: reason },
+          });
+          console.log(`[download-job] NZB auto-broken: ${updatedNzb.hash.slice(0, 12)}... (${count} failures)`);
+        }
+
+        return { conflict: false as const, nzbFile: updatedNzb };
+      });
+
+      if (failureResult.conflict) {
+        res.status(409).json({ error: "Status wurde zwischenzeitlich geändert (Konflikt)." });
+        return;
+      }
+
+      console.log(`[download-job] Failed: ${currentJob.id} (attempt ${failureResult.nzbFile?.failedAttempts})`);
+
+      const fullJob = await prisma.downloadJob.findUnique({
+        where: { id: currentJob.id },
+        include: { nzbFile: { include: { movie: true } } },
+      });
+
+      if (!fullJob) {
+        res.status(404).json({ error: "Job wurde zwischenzeitlich gelöscht." });
+        return;
+      }
+
+      res.json({ job: serializeJob(fullJob) });
+      return;
+    }
+
+    // Non-completed/non-failed status: compare-and-swap update
     const casResult = await prisma.downloadJob.updateMany({
       where: { id: String(req.params.id), status: currentJob.status },
       data: updateData,
