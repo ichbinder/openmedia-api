@@ -330,11 +330,17 @@ export function generateCloudInit(params: {
   usenetPassword: string;
   usenetSsl: boolean;
   usenetConnections: number;
+  usenetBackupHost?: string;
+  usenetBackupPort?: number;
+  usenetBackupUser?: string;
+  usenetBackupPassword?: string;
+  usenetBackupSsl?: boolean;
+  usenetBackupConnections?: number;
   dockerImage: string;
   serverName: string;
 }): string {
   // Build env file content (written via write_files, not heredoc in runcmd)
-  const envContent = [
+  const envLines = [
     `JOB_ID=${params.jobId}`,
     `JOB_HASH=${params.nzbHash}`,
     `NZB_URL=${params.nzbUrl}`,
@@ -354,7 +360,21 @@ export function generateCloudInit(params: {
     `PUID=0`,
     `PGID=0`,
     `DL_HOSTNAME=${params.serverName}`,
-  ].join("\n");
+  ];
+
+  // Append backup server credentials if configured
+  if (params.usenetBackupHost && params.usenetBackupUser) {
+    envLines.push(
+      `USENET_BACKUP_HOST=${params.usenetBackupHost}`,
+      `USENET_BACKUP_PORT=${params.usenetBackupPort ?? 563}`,
+      `USENET_BACKUP_USER=${params.usenetBackupUser}`,
+      `USENET_BACKUP_PASSWORD=${params.usenetBackupPassword ?? ""}`,
+      `USENET_BACKUP_SSL=${params.usenetBackupSsl !== false ? "1" : "0"}`,
+      `USENET_BACKUP_CONNECTIONS=${params.usenetBackupConnections ?? 10}`,
+    );
+  }
+
+  const envContent = envLines.join("\n");
 
   // Base64-encode the env content to avoid YAML parsing issues
   const envBase64 = Buffer.from(envContent).toString("base64");
