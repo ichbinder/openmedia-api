@@ -115,6 +115,12 @@ async function provisionHetznerVPS(job: any): Promise<void> {
     usenetPassword: process.env.USENET_PASSWORD || "",
     usenetSsl: process.env.USENET_SSL !== "false" && process.env.USENET_SSL !== "0",
     usenetConnections: parseInt(process.env.USENET_CONNECTIONS || "10", 10),
+    usenetBackupHost: process.env.USENET_BACKUP_HOST || undefined,
+    usenetBackupPort: (() => { const p = parseInt(process.env.USENET_BACKUP_PORT || "", 10); return Number.isInteger(p) && p >= 1 && p <= 65535 ? p : undefined; })(),
+    usenetBackupUser: process.env.USENET_BACKUP_USER || undefined,
+    usenetBackupPassword: process.env.USENET_BACKUP_PASSWORD || undefined,
+    usenetBackupSsl: process.env.USENET_BACKUP_SSL !== "false",
+    usenetBackupConnections: (() => { const c = parseInt(process.env.USENET_BACKUP_CONNECTIONS || "", 10); return Number.isInteger(c) && c >= 1 ? c : undefined; })(),
     dockerImage,
     serverName,
   });
