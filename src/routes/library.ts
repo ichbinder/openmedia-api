@@ -16,7 +16,7 @@ router.get("/", async (req: AuthRequest, res: Response) => {
         nzbFile: {
           select: {
             id: true, hash: true, resolution: true, fileExtension: true,
-            s3Key: true, s3Bucket: true, downloadedAt: true,
+            s3Key: true, s3StreamKey: true, s3Bucket: true, downloadedAt: true,
             lastAccessedAt: true, scheduledDeletionAt: true,
             movie: { select: { id: true, tmdbId: true, titleDe: true, titleEn: true, year: true, posterPath: true } },
           },
@@ -99,10 +99,10 @@ router.delete("/:nzbFileId", async (req: AuthRequest, res: Response) => {
       const nzbFile = await tx.nzbFile.findUnique({ where: { id: nzbFileId } });
       if (!nzbFile?.s3Key) return false;
 
-      // Reset S3 reference and invalidate completed download jobs
+      // Reset S3 references and invalidate completed download jobs
       await tx.nzbFile.update({
         where: { id: nzbFileId },
-        data: { s3Key: null, s3Bucket: null, fileExtension: null, downloadedAt: null, scheduledDeletionAt: null },
+        data: { s3Key: null, s3StreamKey: null, s3Bucket: null, fileExtension: null, downloadedAt: null, scheduledDeletionAt: null },
       });
 
       // Mark all completed jobs for this file as failed — the S3 file is gone,
@@ -119,6 +119,11 @@ router.delete("/:nzbFileId", async (req: AuthRequest, res: Response) => {
       try {
         const { deleteFile } = await import("../lib/s3.js");
         await deleteFile(nzbFile.s3Key);
+        // Also delete stream version if it exists
+        if (nzbFile.s3StreamKey) {
+          await deleteFile(nzbFile.s3StreamKey);
+          console.log(`[library] S3 stream deleted: ${nzbFile.s3StreamKey}`);
+        }
         console.log(`[library] S3 deleted: ${nzbFile.s3Key} (no users remaining)`);
       } catch (s3Err) {
         console.error("[library] S3 delete failed (orphaned):", s3Err);

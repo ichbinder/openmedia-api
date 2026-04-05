@@ -137,7 +137,7 @@ export async function executePendingDeletions(): Promise<{
       scheduledDeletionAt: { lte: new Date() },
       s3Key: { not: null },
     },
-    select: { id: true, hash: true, s3Key: true },
+    select: { id: true, hash: true, s3Key: true, s3StreamKey: true },
   });
 
   let deleted = 0;
@@ -163,6 +163,7 @@ export async function executePendingDeletions(): Promise<{
 
     try {
       const s3Key = file.s3Key!;
+      const s3StreamKey = file.s3StreamKey;
 
       // DB update first — clear reference before S3 delete
       // Safer: orphaned S3 file > DB ref pointing to deleted S3 object
@@ -170,6 +171,7 @@ export async function executePendingDeletions(): Promise<{
         where: { id: file.id },
         data: {
           s3Key: null,
+          s3StreamKey: null,
           s3Bucket: null,
           fileExtension: null,
           downloadedAt: null,
@@ -179,6 +181,10 @@ export async function executePendingDeletions(): Promise<{
 
       try {
         await deleteFile(s3Key);
+        if (s3StreamKey) {
+          await deleteFile(s3StreamKey);
+          console.log(`[s3-lifecycle] Stream version deleted: ${file.hash.slice(0, 16)}...`);
+        }
       } catch (s3Err) {
         console.error(`[s3-lifecycle] S3 delete failed (orphaned): ${file.hash.slice(0, 16)}...`, s3Err);
       }
