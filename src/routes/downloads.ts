@@ -406,7 +406,7 @@ router.patch("/jobs/:id/status", async (req: AuthRequest, res: Response) => {
           where: { id: currentJob.nzbFileId },
           data: {
             s3Key: String(s3Key),
-            s3StreamKey: s3StreamKey ? String(s3StreamKey) : null,
+            s3StreamKey: (typeof s3StreamKey === "string" && s3StreamKey.trim().length > 0) ? s3StreamKey.trim() : null,
             s3Bucket: effectiveBucket,
             fileExtension: fileExtension ? String(fileExtension) : null,
             downloadedAt: new Date(),

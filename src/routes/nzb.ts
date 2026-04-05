@@ -543,7 +543,7 @@ router.get("/files/:id/download-link", async (req: AuthRequest, res: Response) =
     }
 
     const cappedExpires = Math.min(expiryResult.expiresIn, MAX_PRESIGNED_EXPIRY_SECONDS);
-    const url = await generatePresignedUrl(nzbFile.s3Key, cappedExpires);
+    const url = await generatePresignedUrl(nzbFile.s3Key, cappedExpires, undefined, nzbFile.s3Bucket || undefined);
     const expiresAt = new Date(Date.now() + cappedExpires * 1000).toISOString();
 
     console.log(`[nzb] Download link generated: ${nzbFile.hash.slice(0, 12)}... (expires: ${cappedExpires}s)`);
@@ -605,7 +605,7 @@ router.get("/files/:id/stream-link", async (req: AuthRequest, res: Response) => 
 
     const cappedExpires = Math.min(expiryResult.expiresIn, MAX_PRESIGNED_EXPIRY_SECONDS);
     // Set ResponseContentType so browsers stream the MP4 correctly
-    const url = await generatePresignedUrl(nzbFile.s3StreamKey, cappedExpires, "video/mp4");
+    const url = await generatePresignedUrl(nzbFile.s3StreamKey, cappedExpires, "video/mp4", nzbFile.s3Bucket || undefined);
     const expiresAt = new Date(Date.now() + cappedExpires * 1000).toISOString();
 
     console.log(`[nzb] Stream link generated: ${nzbFile.hash.slice(0, 12)}... (expires: ${cappedExpires}s)`);

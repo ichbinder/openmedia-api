@@ -202,11 +202,12 @@ export async function generatePresignedUrl(
   key: string,
   expiresIn: number = MAX_PRESIGNED_EXPIRY_SECONDS,
   responseContentType?: string,
+  s3Bucket?: string,
 ): Promise<string> {
   const effectiveExpiry = Math.min(expiresIn, MAX_PRESIGNED_EXPIRY_SECONDS);
 
   const commandInput: { Bucket: string; Key: string; ResponseContentType?: string } = {
-    Bucket: getBucket(),
+    Bucket: s3Bucket || getBucket(),
     Key: key,
   };
 
