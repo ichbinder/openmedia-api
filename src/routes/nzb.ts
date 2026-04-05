@@ -10,7 +10,7 @@ const nzbFileSelect = {
   resolution: true, audioLanguages: true, subtitleLanguages: true,
   codec: true, source: true, status: true, brokenReason: true,
   failedAttempts: true,
-  s3Key: true, s3Bucket: true, fileExtension: true, downloadedAt: true,
+  s3Key: true, s3StreamKey: true, s3Bucket: true, fileExtension: true, downloadedAt: true,
   createdAt: true, updatedAt: true, movieId: true,
 } as const;
 import { searchTmdbMovie } from "../lib/tmdb.js";
@@ -36,7 +36,7 @@ function serializeMovieWithFiles(movie: any) {
 router.get("/movies", async (_req: AuthRequest, res: Response) => {
   try {
     const movies = await prisma.nzbMovie.findMany({
-      include: { nzbFiles: { select: { id: true, hash: true, resolution: true, audioLanguages: true, status: true, brokenReason: true, failedAttempts: true, s3Key: true, downloadedAt: true } } },
+      include: { nzbFiles: { select: { id: true, hash: true, resolution: true, audioLanguages: true, status: true, brokenReason: true, failedAttempts: true, s3Key: true, s3StreamKey: true, downloadedAt: true } } },
       orderBy: { updatedAt: "desc" },
     });
     res.json({ movies: movies.map(serializeMovieWithFiles) });
@@ -562,6 +562,80 @@ router.get("/files/:id/download-link", async (req: AuthRequest, res: Response) =
   } catch (err) {
     console.error("[nzb] Download link error:", err);
     res.status(500).json({ error: "Fehler beim Erstellen des Download-Links." });
+  }
+});
+
+// GET /nzb/files/:id/stream-link — generate presigned URL for the browser-streamable MP4 version
+router.get("/files/:id/stream-link", async (req: AuthRequest, res: Response) => {
+  try {
+    const nzbFile = await prisma.nzbFile.findUnique({
+      where: { id: String(req.params.id) },
+      include: { movie: { select: { id: true, titleDe: true, titleEn: true, year: true } } },
+    });
+
+    if (!nzbFile) {
+      res.status(404).json({ error: "NZB-Datei nicht gefunden." });
+      return;
+    }
+
+    if (!nzbFile.s3StreamKey) {
+      res.status(422).json({ error: "Keine Stream-Version verfügbar (kein s3StreamKey vorhanden)." });
+      return;
+    }
+
+    if (!isS3Configured()) {
+      res.status(503).json({ error: "Object Storage ist nicht konfiguriert." });
+      return;
+    }
+
+    // Parse expiry — same logic as download-link
+    const rawExpires = req.query.expires;
+    if (Array.isArray(rawExpires)) {
+      res.status(400).json({ error: "Nur ein expires-Wert erlaubt." });
+      return;
+    }
+    const expiresParam = typeof rawExpires === "string" ? rawExpires : "7d";
+    let expiresIn: number;
+    if (Object.hasOwn(EXPIRY_PRESETS, expiresParam)) {
+      expiresIn = EXPIRY_PRESETS[expiresParam];
+    } else if (/^\d+$/.test(expiresParam)) {
+      expiresIn = parseInt(expiresParam, 10);
+      if (expiresIn < 60) {
+        res.status(400).json({ error: "Ungültiger expires-Wert. Verwende 1h, 1d, 3d, 7d oder Sekunden (min 60)." });
+        return;
+      }
+    } else {
+      res.status(400).json({ error: "Ungültiger expires-Wert. Verwende 1h, 1d, 3d, 7d oder Sekunden (min 60)." });
+      return;
+    }
+
+    const cappedExpires = Math.min(expiresIn, MAX_PRESIGNED_EXPIRY_SECONDS);
+    const url = await generatePresignedUrl(nzbFile.s3StreamKey, cappedExpires);
+    const expiresAt = new Date(Date.now() + cappedExpires * 1000).toISOString();
+
+    console.log(`[nzb] Stream link generated: ${nzbFile.hash.slice(0, 12)}... (expires: ${expiresParam})`);
+
+    // Update lastAccessedAt for LRU lifecycle tracking
+    prisma.nzbFile.update({
+      where: { id: String(req.params.id) },
+      data: { lastAccessedAt: new Date() },
+    }).catch(() => {}); // fire-and-forget
+
+    res.json({
+      url,
+      expiresIn: cappedExpires,
+      expiresAt,
+      nzbFile: {
+        id: nzbFile.id,
+        hash: nzbFile.hash,
+        s3StreamKey: nzbFile.s3StreamKey,
+        resolution: nzbFile.resolution,
+      },
+      movie: nzbFile.movie,
+    });
+  } catch (err) {
+    console.error("[nzb] Stream link error:", err);
+    res.status(500).json({ error: "Fehler beim Erstellen des Stream-Links." });
   }
 });
 

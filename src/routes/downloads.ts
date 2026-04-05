@@ -289,7 +289,7 @@ router.get("/jobs/:id", async (req: AuthRequest, res: Response) => {
 // PATCH /downloads/jobs/:id/status — update job status (callback from VPS)
 router.patch("/jobs/:id/status", async (req: AuthRequest, res: Response) => {
   try {
-    const { status, error: errorMsg, progress, s3Key, s3Bucket, fileExtension, hetznerServerId, hetznerServerIp } = req.body;
+    const { status, error: errorMsg, progress, s3Key, s3StreamKey, s3Bucket, fileExtension, hetznerServerId, hetznerServerIp } = req.body;
 
     if (!status || typeof status !== "string") {
       res.status(400).json({ error: "status ist erforderlich (string)." });
@@ -406,6 +406,7 @@ router.patch("/jobs/:id/status", async (req: AuthRequest, res: Response) => {
           where: { id: currentJob.nzbFileId },
           data: {
             s3Key: String(s3Key),
+            s3StreamKey: s3StreamKey ? String(s3StreamKey) : null,
             s3Bucket: effectiveBucket,
             fileExtension: fileExtension ? String(fileExtension) : null,
             downloadedAt: new Date(),

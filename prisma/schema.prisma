@@ -71,6 +71,7 @@ model NzbFile {
 
   // S3 storage reference (set after successful download + upload)
   s3Key             String?  @map("s3_key")
+  s3StreamKey       String?  @map("s3_stream_key")  // browser-streamable MP4 version
   s3Bucket          String?  @map("s3_bucket")
   fileExtension     String?  @map("file_extension")
   downloadedAt      DateTime? @map("downloaded_at")
