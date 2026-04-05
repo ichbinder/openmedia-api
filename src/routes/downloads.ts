@@ -593,6 +593,7 @@ import {
   findZombieServers,
   generateCloudInit,
 } from "../lib/hetzner.js";
+import { parseUsenetServersFromEnv } from "../lib/usenet-config.js";
 import { addMapping, removeMapping } from "../lib/caddy-mapping.js";
 
 // GET /downloads/jobs/:id/link — generate presigned download URL for a completed job
@@ -775,18 +776,7 @@ router.post("/jobs/:id/provision", async (req: AuthRequest, res: Response) => {
       s3Endpoint: process.env.S3_ENDPOINT!,
       s3Bucket: process.env.S3_BUCKET!,
       s3Region: process.env.S3_REGION || "hel1",
-      usenetHost: process.env.USENET_HOST || "",
-      usenetPort: parseInt(process.env.USENET_PORT || "563", 10),
-      usenetUser: process.env.USENET_USER || "",
-      usenetPassword: process.env.USENET_PASSWORD || "",
-      usenetSsl: process.env.USENET_SSL !== "false",
-      usenetConnections: parseInt(process.env.USENET_CONNECTIONS || "10", 10),
-      usenetBackupHost: process.env.USENET_BACKUP_HOST || undefined,
-      usenetBackupPort: (() => { const p = parseInt(process.env.USENET_BACKUP_PORT || "", 10); return Number.isInteger(p) && p >= 1 && p <= 65535 ? p : undefined; })(),
-      usenetBackupUser: process.env.USENET_BACKUP_USER || undefined,
-      usenetBackupPassword: process.env.USENET_BACKUP_PASSWORD || undefined,
-      usenetBackupSsl: process.env.USENET_BACKUP_SSL !== "false",
-      usenetBackupConnections: (() => { const c = parseInt(process.env.USENET_BACKUP_CONNECTIONS || "", 10); return Number.isInteger(c) && c >= 1 ? c : undefined; })(),
+      usenetServers: parseUsenetServersFromEnv(),
       dockerImage: process.env.DOWNLOADER_DOCKER_IMAGE || "ghcr.io/ichbinder/openmedia-downloader:latest",
       serverName,
     });

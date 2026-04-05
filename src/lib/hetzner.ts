@@ -313,6 +313,18 @@ export async function cleanupZombieServers(
  * 3. Sets up post-processing: hash files → upload to S3 → callback to API
  * 4. Triggers self-destruction after completion
  */
+/** Usenet server configuration for SABnzbd */
+export interface UsenetServer {
+  host: string;
+  port?: number;
+  username: string;
+  password: string;
+  ssl?: boolean;
+  connections?: number;
+  optional?: number;
+  priority?: number;
+}
+
 export function generateCloudInit(params: {
   jobId: string;
   nzbHash: string;
@@ -324,12 +336,16 @@ export function generateCloudInit(params: {
   s3Endpoint: string;
   s3Bucket: string;
   s3Region: string;
-  usenetHost: string;
-  usenetPort: number;
-  usenetUser: string;
-  usenetPassword: string;
-  usenetSsl: boolean;
-  usenetConnections: number;
+  /** Preferred: array of Usenet servers with individual priorities */
+  usenetServers?: UsenetServer[];
+  /** Legacy: single primary server */
+  usenetHost?: string;
+  usenetPort?: number;
+  usenetUser?: string;
+  usenetPassword?: string;
+  usenetSsl?: boolean;
+  usenetConnections?: number;
+  /** Legacy: single backup server */
   usenetBackupHost?: string;
   usenetBackupPort?: number;
   usenetBackupUser?: string;
@@ -339,19 +355,45 @@ export function generateCloudInit(params: {
   dockerImage: string;
   serverName: string;
 }): string {
-  // Build env file content (written via write_files, not heredoc in runcmd)
+  // Build Usenet server list — prefer usenetServers array, fall back to legacy ENV vars
+  let servers: UsenetServer[] = [];
+
+  if (params.usenetServers && params.usenetServers.length > 0) {
+    servers = params.usenetServers;
+  } else if (params.usenetHost && params.usenetUser) {
+    // Legacy: build from individual params
+    servers.push({
+      host: params.usenetHost,
+      port: params.usenetPort ?? 563,
+      username: params.usenetUser,
+      password: params.usenetPassword ?? "",
+      ssl: params.usenetSsl ?? true,
+      connections: params.usenetConnections ?? 10,
+      optional: 0,
+      priority: 0,
+    });
+
+    if (params.usenetBackupHost && params.usenetBackupUser) {
+      servers.push({
+        host: params.usenetBackupHost,
+        port: params.usenetBackupPort ?? 563,
+        username: params.usenetBackupUser,
+        password: params.usenetBackupPassword ?? "",
+        ssl: params.usenetBackupSsl !== false,
+        connections: params.usenetBackupConnections ?? 10,
+        optional: 1,
+        priority: 1,
+      });
+    }
+  }
+
+  // Build env file content
   const envLines = [
     `JOB_ID=${params.jobId}`,
     `JOB_HASH=${params.nzbHash}`,
     `NZB_URL=${params.nzbUrl}`,
     `API_BASE_URL=${params.apiBaseUrl}`,
     `SERVICE_TOKEN=${params.apiToken}`,
-    `USENET_HOST=${params.usenetHost}`,
-    `USENET_PORT=${params.usenetPort}`,
-    `USENET_USER=${params.usenetUser}`,
-    `USENET_PASSWORD=${params.usenetPassword}`,
-    `USENET_SSL=${params.usenetSsl ? "1" : "0"}`,
-    `USENET_CONNECTIONS=${params.usenetConnections}`,
     `S3_ACCESS_KEY=${params.s3AccessKey}`,
     `S3_SECRET_KEY=${params.s3SecretKey}`,
     `S3_ENDPOINT=${params.s3Endpoint}`,
@@ -362,16 +404,19 @@ export function generateCloudInit(params: {
     `DL_HOSTNAME=${params.serverName}`,
   ];
 
-  // Append backup server credentials if configured
-  if (params.usenetBackupHost && params.usenetBackupUser) {
-    envLines.push(
-      `USENET_BACKUP_HOST=${params.usenetBackupHost}`,
-      `USENET_BACKUP_PORT=${params.usenetBackupPort ?? 563}`,
-      `USENET_BACKUP_USER=${params.usenetBackupUser}`,
-      `USENET_BACKUP_PASSWORD=${params.usenetBackupPassword ?? ""}`,
-      `USENET_BACKUP_SSL=${params.usenetBackupSsl !== false ? "1" : "0"}`,
-      `USENET_BACKUP_CONNECTIONS=${params.usenetBackupConnections ?? 10}`,
-    );
+  // Pass servers as JSON array — the downloader parses this with jq
+  if (servers.length > 0) {
+    const serversJson = JSON.stringify(servers.map((s, i) => ({
+      host: s.host,
+      port: s.port ?? 563,
+      username: s.username,
+      password: s.password,
+      ssl: s.ssl !== false,
+      connections: s.connections ?? 10,
+      optional: s.optional ?? (i > 0 ? 1 : 0),
+      priority: s.priority ?? i,
+    })));
+    envLines.push(`USENET_SERVERS=${serversJson}`);
   }
 
   const envContent = envLines.join("\n");

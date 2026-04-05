@@ -96,7 +96,8 @@ describe("Hetzner Service", () => {
 
       expect(envContent).toContain("S3_ACCESS_KEY=");
       expect(envContent).toContain("S3_SECRET_KEY=");
-      expect(envContent).toContain("USENET_HOST=");
+      expect(envContent).toContain("USENET_SERVERS=");
+      expect(envContent).toContain("news.example.com");
       expect(envContent).toContain("my-bucket");
     });
   });
