@@ -487,6 +487,28 @@ router.post("/import", upload.single("nzb"), async (req: AuthRequest, res: Respo
 
 import { isS3Configured, generatePresignedUrl, EXPIRY_PRESETS, MAX_PRESIGNED_EXPIRY_SECONDS } from "../lib/s3.js";
 
+/** Parse and validate the ?expires query parameter. Returns expiresIn (seconds) or an error string. */
+function parseExpiryParam(rawExpires: unknown): { expiresIn: number } | { error: string } {
+  if (Array.isArray(rawExpires)) {
+    return { error: "Nur ein expires-Wert erlaubt." };
+  }
+  const expiresParam = typeof rawExpires === "string" ? rawExpires : "7d";
+
+  if (Object.hasOwn(EXPIRY_PRESETS, expiresParam)) {
+    return { expiresIn: EXPIRY_PRESETS[expiresParam] };
+  }
+
+  if (/^\d+$/.test(expiresParam)) {
+    const expiresIn = parseInt(expiresParam, 10);
+    if (expiresIn < 60) {
+      return { error: "Ungültiger expires-Wert. Verwende 1h, 1d, 3d, 7d oder Sekunden (min 60)." };
+    }
+    return { expiresIn };
+  }
+
+  return { error: "Ungültiger expires-Wert. Verwende 1h, 1d, 3d, 7d oder Sekunden (min 60)." };
+}
+
 // NOTE: NZB raw files are served by the openmedia-nzb service (separate microservice),
 // not by this API. The download container fetches NZBs directly from openmedia-nzb.
 
@@ -513,32 +535,18 @@ router.get("/files/:id/download-link", async (req: AuthRequest, res: Response) =
       return;
     }
 
-    // Parse expiry — reject arrays and non-pure-digit strings
-    const rawExpires = req.query.expires;
-    if (Array.isArray(rawExpires)) {
-      res.status(400).json({ error: "Nur ein expires-Wert erlaubt." });
-      return;
-    }
-    const expiresParam = typeof rawExpires === "string" ? rawExpires : "7d";
-    let expiresIn: number;
-    if (Object.hasOwn(EXPIRY_PRESETS, expiresParam)) {
-      expiresIn = EXPIRY_PRESETS[expiresParam];
-    } else if (/^\d+$/.test(expiresParam)) {
-      expiresIn = parseInt(expiresParam, 10);
-      if (expiresIn < 60) {
-        res.status(400).json({ error: "Ungültiger expires-Wert. Verwende 1h, 1d, 3d, 7d oder Sekunden (min 60)." });
-        return;
-      }
-    } else {
-      res.status(400).json({ error: "Ungültiger expires-Wert. Verwende 1h, 1d, 3d, 7d oder Sekunden (min 60)." });
+    // Parse expiry
+    const expiryResult = parseExpiryParam(req.query.expires);
+    if ("error" in expiryResult) {
+      res.status(400).json({ error: expiryResult.error });
       return;
     }
 
-    const cappedExpires = Math.min(expiresIn, MAX_PRESIGNED_EXPIRY_SECONDS);
+    const cappedExpires = Math.min(expiryResult.expiresIn, MAX_PRESIGNED_EXPIRY_SECONDS);
     const url = await generatePresignedUrl(nzbFile.s3Key, cappedExpires);
     const expiresAt = new Date(Date.now() + cappedExpires * 1000).toISOString();
 
-    console.log(`[nzb] Download link generated: ${nzbFile.hash.slice(0, 12)}... (expires: ${expiresParam})`);
+    console.log(`[nzb] Download link generated: ${nzbFile.hash.slice(0, 12)}... (expires: ${cappedExpires}s)`);
 
     // Update lastAccessedAt for LRU lifecycle tracking
     prisma.nzbFile.update({
@@ -588,32 +596,19 @@ router.get("/files/:id/stream-link", async (req: AuthRequest, res: Response) => 
       return;
     }
 
-    // Parse expiry — same logic as download-link
-    const rawExpires = req.query.expires;
-    if (Array.isArray(rawExpires)) {
-      res.status(400).json({ error: "Nur ein expires-Wert erlaubt." });
-      return;
-    }
-    const expiresParam = typeof rawExpires === "string" ? rawExpires : "7d";
-    let expiresIn: number;
-    if (Object.hasOwn(EXPIRY_PRESETS, expiresParam)) {
-      expiresIn = EXPIRY_PRESETS[expiresParam];
-    } else if (/^\d+$/.test(expiresParam)) {
-      expiresIn = parseInt(expiresParam, 10);
-      if (expiresIn < 60) {
-        res.status(400).json({ error: "Ungültiger expires-Wert. Verwende 1h, 1d, 3d, 7d oder Sekunden (min 60)." });
-        return;
-      }
-    } else {
-      res.status(400).json({ error: "Ungültiger expires-Wert. Verwende 1h, 1d, 3d, 7d oder Sekunden (min 60)." });
+    // Parse expiry
+    const expiryResult = parseExpiryParam(req.query.expires);
+    if ("error" in expiryResult) {
+      res.status(400).json({ error: expiryResult.error });
       return;
     }
 
-    const cappedExpires = Math.min(expiresIn, MAX_PRESIGNED_EXPIRY_SECONDS);
-    const url = await generatePresignedUrl(nzbFile.s3StreamKey, cappedExpires);
+    const cappedExpires = Math.min(expiryResult.expiresIn, MAX_PRESIGNED_EXPIRY_SECONDS);
+    // Set ResponseContentType so browsers stream the MP4 correctly
+    const url = await generatePresignedUrl(nzbFile.s3StreamKey, cappedExpires, "video/mp4");
     const expiresAt = new Date(Date.now() + cappedExpires * 1000).toISOString();
 
-    console.log(`[nzb] Stream link generated: ${nzbFile.hash.slice(0, 12)}... (expires: ${expiresParam})`);
+    console.log(`[nzb] Stream link generated: ${nzbFile.hash.slice(0, 12)}... (expires: ${cappedExpires}s)`);
 
     // Update lastAccessedAt for LRU lifecycle tracking
     prisma.nzbFile.update({
