@@ -82,8 +82,12 @@ async function provisionHetznerVPS(job: any): Promise<void> {
   }
 
   // Validate required env vars
-  const required = ["S3_ACCESS_KEY", "S3_SECRET_KEY", "S3_ENDPOINT", "S3_BUCKET", "API_BASE_URL", "NZB_SERVICE_URL", "USENET_HOST", "USENET_USER", "USENET_PASSWORD", "SERVICE_API_TOKEN"];
+  const required = ["S3_ACCESS_KEY", "S3_SECRET_KEY", "S3_ENDPOINT", "S3_BUCKET", "API_BASE_URL", "NZB_SERVICE_URL", "SERVICE_API_TOKEN"];
   const missing = required.filter((v) => !process.env[v]);
+  // At least one Usenet source required
+  if (!process.env.USENET_SERVERS && !process.env.USENET_HOST) {
+    missing.push("USENET_SERVERS or USENET_HOST");
+  }
   if (missing.length > 0) {
     const error = `Missing config: ${missing.join(", ")}`;
     console.error(`[provision] ${error}`);
@@ -165,18 +169,14 @@ async function provisionLocalDocker(job: any): Promise<void> {
   const containerName = `dl-${job.id.slice(0, 8)}`;
   const hash = job.nzbFile.hash;
 
+  const servers = parseUsenetServersFromEnv();
   const envVars = [
     `JOB_ID=${job.id}`,
     `JOB_HASH=${hash}`,
     `NZB_URL=${process.env.NZB_SERVICE_URL}/nzb/${hash}.nzb`,
     `API_BASE_URL=${process.env.API_BASE_URL}`,
     `SERVICE_TOKEN=${process.env.SERVICE_API_TOKEN || ""}`,
-    `USENET_HOST=${process.env.USENET_HOST}`,
-    `USENET_PORT=${process.env.USENET_PORT || "563"}`,
-    `USENET_USER=${process.env.USENET_USER}`,
-    `USENET_PASSWORD=${process.env.USENET_PASSWORD}`,
-    `USENET_SSL=${process.env.USENET_SSL || "1"}`,
-    `USENET_CONNECTIONS=${process.env.USENET_CONNECTIONS || "10"}`,
+    `USENET_SERVERS=${JSON.stringify(servers)}`,
     `S3_ACCESS_KEY=${process.env.S3_ACCESS_KEY}`,
     `S3_SECRET_KEY=${process.env.S3_SECRET_KEY}`,
     `S3_ENDPOINT=${process.env.S3_ENDPOINT}`,
