@@ -201,15 +201,22 @@ export async function deleteFile(key: string): Promise<void> {
 export async function generatePresignedUrl(
   key: string,
   expiresIn: number = MAX_PRESIGNED_EXPIRY_SECONDS,
+  responseContentType?: string,
 ): Promise<string> {
   const effectiveExpiry = Math.min(expiresIn, MAX_PRESIGNED_EXPIRY_SECONDS);
 
+  const commandInput: { Bucket: string; Key: string; ResponseContentType?: string } = {
+    Bucket: getBucket(),
+    Key: key,
+  };
+
+  if (responseContentType) {
+    commandInput.ResponseContentType = responseContentType;
+  }
+
   const url = await getSignedUrl(
     getClient(),
-    new GetObjectCommand({
-      Bucket: getBucket(),
-      Key: key,
-    }),
+    new GetObjectCommand(commandInput),
     { expiresIn: effectiveExpiry },
   );
 

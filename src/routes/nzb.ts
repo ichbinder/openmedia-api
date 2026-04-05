@@ -10,7 +10,7 @@ const nzbFileSelect = {
   resolution: true, audioLanguages: true, subtitleLanguages: true,
   codec: true, source: true, status: true, brokenReason: true,
   failedAttempts: true,
-  s3Key: true, s3Bucket: true, fileExtension: true, downloadedAt: true,
+  s3Key: true, s3StreamKey: true, s3Bucket: true, fileExtension: true, downloadedAt: true,
   createdAt: true, updatedAt: true, movieId: true,
 } as const;
 import { searchTmdbMovie } from "../lib/tmdb.js";
@@ -36,7 +36,7 @@ function serializeMovieWithFiles(movie: any) {
 router.get("/movies", async (_req: AuthRequest, res: Response) => {
   try {
     const movies = await prisma.nzbMovie.findMany({
-      include: { nzbFiles: { select: { id: true, hash: true, resolution: true, audioLanguages: true, status: true, brokenReason: true, failedAttempts: true, s3Key: true, downloadedAt: true } } },
+      include: { nzbFiles: { select: { id: true, hash: true, resolution: true, audioLanguages: true, status: true, brokenReason: true, failedAttempts: true, s3Key: true, s3StreamKey: true, downloadedAt: true } } },
       orderBy: { updatedAt: "desc" },
     });
     res.json({ movies: movies.map(serializeMovieWithFiles) });
@@ -487,6 +487,28 @@ router.post("/import", upload.single("nzb"), async (req: AuthRequest, res: Respo
 
 import { isS3Configured, generatePresignedUrl, EXPIRY_PRESETS, MAX_PRESIGNED_EXPIRY_SECONDS } from "../lib/s3.js";
 
+/** Parse and validate the ?expires query parameter. Returns expiresIn (seconds) or an error string. */
+function parseExpiryParam(rawExpires: unknown): { expiresIn: number } | { error: string } {
+  if (Array.isArray(rawExpires)) {
+    return { error: "Nur ein expires-Wert erlaubt." };
+  }
+  const expiresParam = typeof rawExpires === "string" ? rawExpires : "7d";
+
+  if (Object.hasOwn(EXPIRY_PRESETS, expiresParam)) {
+    return { expiresIn: EXPIRY_PRESETS[expiresParam] };
+  }
+
+  if (/^\d+$/.test(expiresParam)) {
+    const expiresIn = parseInt(expiresParam, 10);
+    if (expiresIn < 60) {
+      return { error: "Ungültiger expires-Wert. Verwende 1h, 1d, 3d, 7d oder Sekunden (min 60)." };
+    }
+    return { expiresIn };
+  }
+
+  return { error: "Ungültiger expires-Wert. Verwende 1h, 1d, 3d, 7d oder Sekunden (min 60)." };
+}
+
 // NOTE: NZB raw files are served by the openmedia-nzb service (separate microservice),
 // not by this API. The download container fetches NZBs directly from openmedia-nzb.
 
@@ -513,32 +535,18 @@ router.get("/files/:id/download-link", async (req: AuthRequest, res: Response) =
       return;
     }
 
-    // Parse expiry — reject arrays and non-pure-digit strings
-    const rawExpires = req.query.expires;
-    if (Array.isArray(rawExpires)) {
-      res.status(400).json({ error: "Nur ein expires-Wert erlaubt." });
-      return;
-    }
-    const expiresParam = typeof rawExpires === "string" ? rawExpires : "7d";
-    let expiresIn: number;
-    if (Object.hasOwn(EXPIRY_PRESETS, expiresParam)) {
-      expiresIn = EXPIRY_PRESETS[expiresParam];
-    } else if (/^\d+$/.test(expiresParam)) {
-      expiresIn = parseInt(expiresParam, 10);
-      if (expiresIn < 60) {
-        res.status(400).json({ error: "Ungültiger expires-Wert. Verwende 1h, 1d, 3d, 7d oder Sekunden (min 60)." });
-        return;
-      }
-    } else {
-      res.status(400).json({ error: "Ungültiger expires-Wert. Verwende 1h, 1d, 3d, 7d oder Sekunden (min 60)." });
+    // Parse expiry
+    const expiryResult = parseExpiryParam(req.query.expires);
+    if ("error" in expiryResult) {
+      res.status(400).json({ error: expiryResult.error });
       return;
     }
 
-    const cappedExpires = Math.min(expiresIn, MAX_PRESIGNED_EXPIRY_SECONDS);
+    const cappedExpires = Math.min(expiryResult.expiresIn, MAX_PRESIGNED_EXPIRY_SECONDS);
     const url = await generatePresignedUrl(nzbFile.s3Key, cappedExpires);
     const expiresAt = new Date(Date.now() + cappedExpires * 1000).toISOString();
 
-    console.log(`[nzb] Download link generated: ${nzbFile.hash.slice(0, 12)}... (expires: ${expiresParam})`);
+    console.log(`[nzb] Download link generated: ${nzbFile.hash.slice(0, 12)}... (expires: ${cappedExpires}s)`);
 
     // Update lastAccessedAt for LRU lifecycle tracking
     prisma.nzbFile.update({
@@ -562,6 +570,67 @@ router.get("/files/:id/download-link", async (req: AuthRequest, res: Response) =
   } catch (err) {
     console.error("[nzb] Download link error:", err);
     res.status(500).json({ error: "Fehler beim Erstellen des Download-Links." });
+  }
+});
+
+// GET /nzb/files/:id/stream-link — generate presigned URL for the browser-streamable MP4 version
+router.get("/files/:id/stream-link", async (req: AuthRequest, res: Response) => {
+  try {
+    const nzbFile = await prisma.nzbFile.findUnique({
+      where: { id: String(req.params.id) },
+      include: { movie: { select: { id: true, titleDe: true, titleEn: true, year: true } } },
+    });
+
+    if (!nzbFile) {
+      res.status(404).json({ error: "NZB-Datei nicht gefunden." });
+      return;
+    }
+
+    if (!nzbFile.s3StreamKey) {
+      res.status(422).json({ error: "Keine Stream-Version verfügbar (kein s3StreamKey vorhanden)." });
+      return;
+    }
+
+    if (!isS3Configured()) {
+      res.status(503).json({ error: "Object Storage ist nicht konfiguriert." });
+      return;
+    }
+
+    // Parse expiry
+    const expiryResult = parseExpiryParam(req.query.expires);
+    if ("error" in expiryResult) {
+      res.status(400).json({ error: expiryResult.error });
+      return;
+    }
+
+    const cappedExpires = Math.min(expiryResult.expiresIn, MAX_PRESIGNED_EXPIRY_SECONDS);
+    // Set ResponseContentType so browsers stream the MP4 correctly
+    const url = await generatePresignedUrl(nzbFile.s3StreamKey, cappedExpires, "video/mp4");
+    const expiresAt = new Date(Date.now() + cappedExpires * 1000).toISOString();
+
+    console.log(`[nzb] Stream link generated: ${nzbFile.hash.slice(0, 12)}... (expires: ${cappedExpires}s)`);
+
+    // Update lastAccessedAt for LRU lifecycle tracking
+    prisma.nzbFile.update({
+      where: { id: String(req.params.id) },
+      data: { lastAccessedAt: new Date() },
+    }).catch(() => {}); // fire-and-forget
+
+    res.json({
+      url,
+      expiresIn: cappedExpires,
+      expiresAt,
+      nzbFile: {
+        id: nzbFile.id,
+        hash: nzbFile.hash,
+        s3StreamKey: nzbFile.s3StreamKey,
+        resolution: nzbFile.resolution,
+      },
+      movie: nzbFile.movie,
+    });
+  } catch (err) {
+    console.error("[nzb] Stream link error:", err);
+    res.status(500).json({ error: "Fehler beim Erstellen des Stream-Links." });
   }
 });
 
