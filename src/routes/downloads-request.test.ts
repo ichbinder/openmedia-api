@@ -1,7 +1,16 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import request from "supertest";
 import { createApp } from "../app.js";
 import { prisma } from "../test/setup.js";
+
+// Mock the S3 module for the alreadyAvailable tests
+vi.mock("../lib/s3.js", async (importOriginal) => {
+  const original = await importOriginal() as Record<string, unknown>;
+  return {
+    ...original,
+    fileExists: vi.fn().mockResolvedValue(true),
+  };
+});
 
 const app = createApp();
 
@@ -171,5 +180,79 @@ describe("POST /downloads/request", () => {
       .send({ nzbContent: VALID_NZB, title: "No Auth" });
 
     expect(res.status).toBe(401);
+  });
+
+  it("gibt alreadyAvailable zurück wenn Film schon auf S3 liegt", async () => {
+    // Create NzbFile with s3Key directly in DB (simulates completed download)
+    const movie = await prisma.nzbMovie.create({
+      data: { titleDe: "Matrix", titleEn: "The Matrix", year: 1999 },
+    });
+
+    const { createHash } = await import("crypto");
+    const hash = createHash("sha256").update(VALID_NZB).digest("hex");
+
+    await prisma.nzbFile.create({
+      data: {
+        movieId: movie.id,
+        hash,
+        originalFilename: "matrix.nzb",
+        s3Key: `${hash}/${hash}.mkv`,
+        s3StreamKey: `${hash}/${hash}.mp4`,
+        s3Bucket: "openmedia-files",
+        fileExtension: ".mkv",
+        downloadedAt: new Date(),
+      },
+    });
+
+    // fileExists is mocked to return true
+    const res = await request(app)
+      .post("/downloads/request")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ nzbContent: VALID_NZB, title: "The Matrix" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.alreadyAvailable).toBe(true);
+    expect(res.body.message).toContain("bereits");
+    expect(res.body.movie.titleEn).toBe("The Matrix");
+    expect(res.body.nzbFile.s3Key).toContain(hash);
+  });
+
+  it("startet Download wenn s3Key gesetzt aber Datei weg (S3 mock returns false)", async () => {
+    // Override the mock for this specific test
+    const s3Module = await import("../lib/s3.js");
+    vi.mocked(s3Module.fileExists).mockResolvedValueOnce(false);
+
+    const movie = await prisma.nzbMovie.create({
+      data: { titleDe: "Gone Film", titleEn: "Gone Film", year: 2020 },
+    });
+
+    const { createHash } = await import("crypto");
+    const hash = createHash("sha256").update(VALID_NZB_2).digest("hex");
+
+    await prisma.nzbFile.create({
+      data: {
+        movieId: movie.id,
+        hash,
+        originalFilename: "gone.nzb",
+        s3Key: `${hash}/${hash}.mkv`,
+        s3Bucket: "openmedia-files",
+        downloadedAt: new Date(),
+      },
+    });
+
+    const res = await request(app)
+      .post("/downloads/request")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ nzbContent: VALID_NZB_2, title: "Gone Film" });
+
+    // Should create a new download job (file was "gone" from S3)
+    expect(res.status).toBe(201);
+    expect(res.body.reused).toBe(true);
+    expect(res.body.job.status).toBe("queued");
+
+    // Verify DB was cleaned up (s3Key reset)
+    const updatedFile = await prisma.nzbFile.findUnique({ where: { hash } });
+    expect(updatedFile?.s3Key).toBeNull();
+    expect(updatedFile?.downloadedAt).toBeNull();
   });
 });
