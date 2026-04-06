@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from "express";
 import bcrypt from "bcryptjs";
 import prisma from "../lib/prisma.js";
 import { signToken, requireAuth, type AuthRequest } from "../middleware/auth.js";
+import { generateApiToken, ALLOWED_EXPIRY_DAYS, MAX_TOKENS_PER_USER, type ExpiryDays } from "../lib/api-token.js";
 
 const router = Router();
 
@@ -116,6 +117,133 @@ router.get("/me", requireAuth, async (req: AuthRequest, res: Response) => {
 // POST /auth/logout — client-side only (clear cookie), but endpoint exists for completeness
 router.post("/logout", (_req: Request, res: Response) => {
   res.json({ success: true });
+});
+
+// ---------------------------------------------------------------------------
+// API Token Management
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /auth/api-tokens — Create a new API token.
+ * Body: { name: string, expiresInDays: 30 | 60 | 90 }
+ * Returns the plaintext token ONCE. It is never stored or returned again.
+ */
+router.post("/api-tokens", requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const { name, expiresInDays } = req.body;
+
+    if (!name || typeof name !== "string" || name.trim().length === 0) {
+      res.status(400).json({ error: "Name ist erforderlich." });
+      return;
+    }
+
+    if (name.trim().length > 100) {
+      res.status(400).json({ error: "Name darf maximal 100 Zeichen lang sein." });
+      return;
+    }
+
+    const days = Number(expiresInDays);
+    if (!ALLOWED_EXPIRY_DAYS.includes(days as ExpiryDays)) {
+      res.status(400).json({ error: `expiresInDays muss einer von ${ALLOWED_EXPIRY_DAYS.join(", ")} sein.` });
+      return;
+    }
+
+    // Enforce per-user token limit
+    const activeCount = await prisma.apiToken.count({
+      where: { userId: req.user!.userId, revokedAt: null },
+    });
+    if (activeCount >= MAX_TOKENS_PER_USER) {
+      res.status(400).json({ error: `Maximal ${MAX_TOKENS_PER_USER} aktive Tokens erlaubt. Bitte einen bestehenden widerrufen.` });
+      return;
+    }
+
+    const { plaintext, hash, prefix } = generateApiToken();
+    const expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+
+    const token = await prisma.apiToken.create({
+      data: {
+        userId: req.user!.userId,
+        tokenHash: hash,
+        tokenPrefix: prefix,
+        name: name.trim(),
+        expiresAt,
+      },
+    });
+
+    console.log(`[auth] API token created: ${prefix}... for user ${req.user!.userId.slice(0, 8)}... (expires ${expiresAt.toISOString().slice(0, 10)})`);
+
+    res.status(201).json({
+      token: plaintext, // shown ONCE — never returned again
+      id: token.id,
+      name: token.name,
+      prefix: token.tokenPrefix,
+      expiresAt: token.expiresAt,
+      createdAt: token.createdAt,
+    });
+  } catch (err) {
+    console.error("[auth] Create API token error:", err);
+    res.status(500).json({ error: "Token-Erstellung fehlgeschlagen." });
+  }
+});
+
+/**
+ * GET /auth/api-tokens — List all API tokens for the current user.
+ * Returns metadata only — never the hash or plaintext.
+ */
+router.get("/api-tokens", requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const tokens = await prisma.apiToken.findMany({
+      where: { userId: req.user!.userId },
+      select: {
+        id: true,
+        tokenPrefix: true,
+        name: true,
+        expiresAt: true,
+        lastUsedAt: true,
+        revokedAt: true,
+        createdAt: true,
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    res.json({ tokens });
+  } catch (err) {
+    console.error("[auth] List API tokens error:", err);
+    res.status(500).json({ error: "Token-Liste konnte nicht geladen werden." });
+  }
+});
+
+/**
+ * DELETE /auth/api-tokens/:id — Revoke an API token (soft-delete via revokedAt).
+ */
+router.delete("/api-tokens/:id", requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const id = req.params.id as string;
+
+    const token = await prisma.apiToken.findUnique({ where: { id } });
+
+    if (!token || token.userId !== req.user!.userId) {
+      res.status(404).json({ error: "Token nicht gefunden." });
+      return;
+    }
+
+    if (token.revokedAt) {
+      res.status(400).json({ error: "Token ist bereits widerrufen." });
+      return;
+    }
+
+    await prisma.apiToken.update({
+      where: { id },
+      data: { revokedAt: new Date() },
+    });
+
+    console.log(`[auth] API token revoked: ${token.tokenPrefix}... for user ${req.user!.userId.slice(0, 8)}...`);
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("[auth] Revoke API token error:", err);
+    res.status(500).json({ error: "Token konnte nicht widerrufen werden." });
+  }
 });
 
 export default router;
