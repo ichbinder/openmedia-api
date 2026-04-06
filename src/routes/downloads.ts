@@ -340,6 +340,45 @@ router.post("/request", async (req: AuthRequest, res: Response) => {
     });
 
     if (existingFile) {
+      // --- Check if file is already on S3 (no download needed) ---
+      if (existingFile.s3Key) {
+        try {
+          const { fileExists } = await import("../lib/s3.js");
+          const onS3 = await fileExists(existingFile.s3Key, existingFile.s3Bucket || undefined);
+
+          if (onS3) {
+            console.log(
+              `[nzb-request] Already on S3: ${hash.slice(0, 12)}... → ${existingFile.s3Key} — skipping download`
+            );
+            res.status(200).json({
+              alreadyAvailable: true,
+              message: "Film ist bereits heruntergeladen und verfügbar.",
+              movie: existingFile.movie,
+              nzbFile: {
+                id: existingFile.id,
+                hash: existingFile.hash,
+                resolution: existingFile.resolution,
+                s3Key: existingFile.s3Key,
+                s3StreamKey: existingFile.s3StreamKey,
+              },
+            });
+            return;
+          }
+
+          // S3 key set but file gone (LRU cleanup) — reset DB and continue with download
+          console.warn(
+            `[nzb-request] S3 key set but file gone: ${hash.slice(0, 12)}... → resetting and re-downloading`
+          );
+          await prisma.nzbFile.update({
+            where: { id: existingFile.id },
+            data: { s3Key: null, s3StreamKey: null, s3Bucket: null, fileExtension: null, downloadedAt: null },
+          });
+        } catch (err: any) {
+          // S3 not configured or unreachable — continue with download as fallback
+          console.warn(`[nzb-request] S3 check failed: ${err.message} — continuing with download`);
+        }
+      }
+
       // File already known — atomic check-and-create inside a transaction
       let reuseResult;
       try {
