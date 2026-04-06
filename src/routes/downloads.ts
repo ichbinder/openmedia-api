@@ -314,13 +314,17 @@ router.post("/request", async (req: AuthRequest, res: Response) => {
       res.status(400).json({ error: "title ist erforderlich (string)." });
       return;
     }
+    if (filename !== undefined && (typeof filename !== "string" || filename.length === 0)) {
+      res.status(400).json({ error: "filename muss ein nicht-leerer String sein." });
+      return;
+    }
     if (nzbContent.length < 50) {
       res.status(400).json({ error: "nzbContent ist zu kurz — ungültiges NZB." });
       return;
     }
 
-    // Basic XML sanity check
-    if (!nzbContent.includes("<nzb") && !nzbContent.includes("<?xml")) {
+    // NZB XML sanity check — must contain an <nzb root element
+    if (!nzbContent.includes("<nzb")) {
       res.status(400).json({ error: "nzbContent scheint kein gültiges NZB-XML zu sein." });
       return;
     }
@@ -390,6 +394,8 @@ router.post("/request", async (req: AuthRequest, res: Response) => {
           provisionDownload(reuseResult.job.id).catch((err) => {
             console.error("[nzb-request] Auto-provision failed:", err);
           });
+        }).catch((err) => {
+          console.error("[nzb-request] Failed to load provisioner module:", err);
         });
       }
       return;
@@ -461,6 +467,8 @@ router.post("/request", async (req: AuthRequest, res: Response) => {
         provisionDownload(result.job.id).catch((err) => {
           console.error("[nzb-request] Auto-provision failed:", err);
         });
+      }).catch((err) => {
+        console.error("[nzb-request] Failed to load provisioner module:", err);
       });
     }
   } catch (err: any) {
