@@ -1,6 +1,8 @@
+import { createHash } from "crypto";
 import { Router, type Response } from "express";
 import prisma from "../lib/prisma.js";
 import { requireAuth, type AuthRequest } from "../middleware/auth.js";
+import { parseNzbName } from "../lib/nzb-parser.js";
 import { sendToSabnzbd, getSabnzbdStatus, getSabnzbdConfigSummary } from "../lib/sabnzbd.js";
 
 const router = Router();
@@ -228,6 +230,255 @@ router.post("/jobs", async (req: AuthRequest, res: Response) => {
   } catch (err) {
     console.error("[download-job] Create error:", err);
     res.status(500).json({ error: "Fehler beim Erstellen des Download-Jobs." });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// NZB Storage helper — forward NZB content to the NZB service
+// ---------------------------------------------------------------------------
+
+/**
+ * Store NZB content in the NZB service (nzb.nettoken.de).
+ * Non-blocking: logs a warning on failure but does not throw.
+ */
+async function storeNzbInService(hash: string, nzbContent: string): Promise<boolean> {
+  const serviceToken = process.env.SERVICE_API_TOKEN;
+
+  if (!serviceToken) {
+    console.warn(`[nzb-request] SERVICE_API_TOKEN not set — skipping NZB storage`);
+    return false;
+  }
+
+  try {
+    // Check if file already exists (HEAD request)
+    const headRes = await fetch(`${NZB_API_URL}/files/${hash}`, {
+      method: "HEAD",
+      headers: { Authorization: `Bearer ${serviceToken}` },
+      signal: AbortSignal.timeout(10_000),
+    });
+
+    if (headRes.ok) {
+      console.log(`[nzb-request] NZB ${hash.slice(0, 12)}... already exists on NZB service — skipping upload`);
+      return true;
+    }
+
+    // Upload the NZB content
+    const putRes = await fetch(`${NZB_API_URL}/files/${hash}`, {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${serviceToken}`,
+        "Content-Type": "application/x-nzb",
+      },
+      body: nzbContent,
+      signal: AbortSignal.timeout(30_000),
+    });
+
+    if (putRes.ok) {
+      const data = await putRes.json() as { size?: number };
+      console.log(`[nzb-request] Stored NZB ${hash.slice(0, 12)}... on NZB service (${data.size ?? "?"} bytes)`);
+      return true;
+    }
+
+    const errorText = await putRes.text().catch(() => "");
+    console.error(`[nzb-request] NZB service PUT failed: HTTP ${putRes.status} — ${errorText}`);
+    return false;
+  } catch (err: any) {
+    console.error(`[nzb-request] NZB service unreachable: ${err.message}`);
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// NZB Request — accept raw NZB content from browser extension
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /downloads/request
+ *
+ * Accepts NZB file content directly (as JSON string), creates the necessary
+ * DB records (NzbMovie + NzbFile + DownloadJob), and triggers auto-provisioning.
+ * Designed for the OpenMedia browser extension which sends NZBs found on indexer sites.
+ *
+ * Body: { nzbContent: string, title: string, password?: string, filename?: string }
+ */
+router.post("/request", async (req: AuthRequest, res: Response) => {
+  try {
+    const { nzbContent, title, password, filename } = req.body;
+
+    // --- Validation ---
+    if (!nzbContent || typeof nzbContent !== "string") {
+      res.status(400).json({ error: "nzbContent ist erforderlich (string)." });
+      return;
+    }
+    if (!title || typeof title !== "string") {
+      res.status(400).json({ error: "title ist erforderlich (string)." });
+      return;
+    }
+    if (filename !== undefined && (typeof filename !== "string" || filename.length === 0)) {
+      res.status(400).json({ error: "filename muss ein nicht-leerer String sein." });
+      return;
+    }
+    if (nzbContent.length < 50) {
+      res.status(400).json({ error: "nzbContent ist zu kurz — ungültiges NZB." });
+      return;
+    }
+
+    // NZB XML sanity check — must contain an <nzb root element
+    if (!nzbContent.includes("<nzb")) {
+      res.status(400).json({ error: "nzbContent scheint kein gültiges NZB-XML zu sein." });
+      return;
+    }
+
+    // --- Hash for deduplication ---
+    const hash = createHash("sha256").update(nzbContent).digest("hex");
+    console.log(`[nzb-request] Processing: "${title}" (hash: ${hash.slice(0, 12)}...)`);
+
+    // --- Check for existing NzbFile with same hash (serializable to prevent race conditions) ---
+    const existingFile = await prisma.nzbFile.findUnique({
+      where: { hash },
+      include: { movie: true },
+    });
+
+    if (existingFile) {
+      // File already known — atomic check-and-create inside a transaction
+      let reuseResult;
+      try {
+        reuseResult = await prisma.$transaction(async (tx) => {
+          const activeJob = await tx.downloadJob.findFirst({
+            where: {
+              nzbFileId: existingFile.id,
+              status: { in: ["queued", "provisioning", "downloading", "uploading"] },
+            },
+          });
+
+          if (activeJob) {
+            return { conflict: true as const, activeJob };
+          }
+
+          const job = await tx.downloadJob.create({
+            data: { nzbFileId: existingFile.id, userId: req.user?.userId || null },
+            include: { nzbFile: { include: { movie: true } } },
+          });
+
+          return { conflict: false as const, job };
+        }, { isolationLevel: "Serializable" });
+      } catch (err: any) {
+        if (err?.code === "P2034" || err?.code === "40001") {
+          res.status(409).json({ error: "Gleichzeitiger Request — bitte erneut versuchen." });
+          return;
+        }
+        throw err;
+      }
+
+      if (reuseResult.conflict) {
+        res.status(409).json({
+          error: "Es läuft bereits ein Download für diese Datei.",
+          existingJobId: reuseResult.activeJob.id,
+          existingStatus: reuseResult.activeJob.status,
+        });
+        return;
+      }
+
+      console.log(`[nzb-request] Reusing existing NzbFile ${hash.slice(0, 12)}... → new job ${reuseResult.job.id}`);
+
+      // Ensure NZB exists on NZB service (may have been imported without it)
+      storeNzbInService(hash, nzbContent).catch((err) => {
+        console.error(`[nzb-request] Unexpected error storing NZB: ${err}`);
+      });
+
+      res.status(201).json({ job: serializeJob(reuseResult.job), reused: true });
+
+      // Trigger auto-provisioner
+      if (process.env.AUTO_PROVISION !== "false") {
+        import("../lib/provisioner.js").then(({ provisionDownload }) => {
+          provisionDownload(reuseResult.job.id).catch((err) => {
+            console.error("[nzb-request] Auto-provision failed:", err);
+          });
+        }).catch((err) => {
+          console.error("[nzb-request] Failed to load provisioner module:", err);
+        });
+      }
+      return;
+    }
+
+    // --- Parse filename for metadata (if provided) ---
+    const effectiveFilename = filename || `${title}.nzb`;
+    const parsed = parseNzbName(effectiveFilename);
+
+    // --- Create NzbMovie + NzbFile + DownloadJob in one transaction ---
+    const result = await prisma.$transaction(async (tx) => {
+      const movie = await tx.nzbMovie.create({
+        data: {
+          titleDe: title,
+          titleEn: title,
+          year: parsed.year,
+        },
+      });
+
+      const nzbFile = await tx.nzbFile.create({
+        data: {
+          movieId: movie.id,
+          hash,
+          originalFilename: effectiveFilename,
+          fileSize: BigInt(Buffer.byteLength(nzbContent, "utf-8")),
+          resolution: parsed.resolution,
+          audioLanguages: parsed.audioLanguages,
+          codec: parsed.codec,
+          source: parsed.source,
+        },
+      });
+
+      const job = await tx.downloadJob.create({
+        data: {
+          nzbFileId: nzbFile.id,
+          userId: req.user?.userId || null,
+        },
+      });
+
+      return { movie, nzbFile, job };
+    });
+
+    console.log(
+      `[nzb-request] Created: movie=${result.movie.id} file=${result.nzbFile.id} job=${result.job.id} ` +
+      `"${title}" (${parsed.resolution || "unknown"})`
+    );
+
+    // --- Store NZB in NZB service (non-blocking) ---
+    storeNzbInService(hash, nzbContent).catch((err) => {
+      console.error(`[nzb-request] Unexpected error storing NZB: ${err}`);
+    });
+
+    // Reload job with relations for response
+    const fullJob = await prisma.downloadJob.findUnique({
+      where: { id: result.job.id },
+      include: { nzbFile: { include: { movie: true } } },
+    });
+
+    if (!fullJob) {
+      res.status(500).json({ error: "Job wurde erstellt, konnte aber nicht geladen werden." });
+      return;
+    }
+
+    res.status(201).json({ job: serializeJob(fullJob), reused: false });
+
+    // Trigger auto-provisioner
+    if (process.env.AUTO_PROVISION !== "false") {
+      import("../lib/provisioner.js").then(({ provisionDownload }) => {
+        provisionDownload(result.job.id).catch((err) => {
+          console.error("[nzb-request] Auto-provision failed:", err);
+        });
+      }).catch((err) => {
+        console.error("[nzb-request] Failed to load provisioner module:", err);
+      });
+    }
+  } catch (err: any) {
+    // Handle hash uniqueness race condition
+    if (err?.code === "P2002") {
+      res.status(409).json({ error: "NZB-Datei wurde gleichzeitig von einem anderen Request erstellt." });
+      return;
+    }
+    console.error("[nzb-request] Error:", err);
+    res.status(500).json({ error: "Fehler beim Verarbeiten des NZB-Uploads." });
   }
 });
 
