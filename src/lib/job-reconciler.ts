@@ -21,8 +21,9 @@ import { removeMapping } from "./caddy-mapping.js";
 
 // ── Configuration ───────────────────────────────────────────
 
-/** Hours after which a job is considered potentially stale */
-const STALE_CHECK_HOURS = 1;
+/** Hours after which a job is considered potentially stale.
+ * Set low (10 min) so manually deleted VPS are detected quickly. */
+const STALE_CHECK_HOURS = 10 / 60; // 10 minutes
 
 /** Hours after which a job is force-failed regardless */
 const HARD_TIMEOUT_HOURS = 4;
