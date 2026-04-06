@@ -18,8 +18,26 @@ model User {
   watchlist      WatchlistItem[]
   library        UserLibrary[]
   searchHistory  SearchHistory[]
+  apiTokens      ApiToken[]
 
   @@map("users")
+}
+
+model ApiToken {
+  id          String    @id @default(uuid())
+  tokenHash   String    @unique @map("token_hash")   // SHA-256 hash — plaintext never stored
+  tokenPrefix String    @map("token_prefix")          // "om_aBcDeFgH" — first 11 chars for display
+  name        String                                   // user-given label: "Meine Extension"
+  expiresAt   DateTime  @map("expires_at")
+  lastUsedAt  DateTime? @map("last_used_at")
+  revokedAt   DateTime? @map("revoked_at")            // null = active, set = revoked
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String @map("user_id")
+
+  @@index([userId])
+  @@map("api_tokens")
 }
 
 model WatchlistItem {
