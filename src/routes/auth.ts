@@ -2,7 +2,7 @@ import { Router, type Request, type Response } from "express";
 import bcrypt from "bcryptjs";
 import prisma from "../lib/prisma.js";
 import { signToken, requireAuth, type AuthRequest } from "../middleware/auth.js";
-import { generateApiToken, ALLOWED_EXPIRY_DAYS, type ExpiryDays } from "../lib/api-token.js";
+import { generateApiToken, ALLOWED_EXPIRY_DAYS, MAX_TOKENS_PER_USER, type ExpiryDays } from "../lib/api-token.js";
 
 const router = Router();
 
@@ -148,6 +148,15 @@ router.post("/api-tokens", requireAuth, async (req: AuthRequest, res: Response) 
       return;
     }
 
+    // Enforce per-user token limit
+    const activeCount = await prisma.apiToken.count({
+      where: { userId: req.user!.userId, revokedAt: null },
+    });
+    if (activeCount >= MAX_TOKENS_PER_USER) {
+      res.status(400).json({ error: `Maximal ${MAX_TOKENS_PER_USER} aktive Tokens erlaubt. Bitte einen bestehenden widerrufen.` });
+      return;
+    }
+
     const { plaintext, hash, prefix } = generateApiToken();
     const expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
 
@@ -161,7 +170,7 @@ router.post("/api-tokens", requireAuth, async (req: AuthRequest, res: Response) 
       },
     });
 
-    console.log(`[auth] API token created: ${prefix}... for user ${req.user!.email} (expires ${expiresAt.toISOString().slice(0, 10)})`);
+    console.log(`[auth] API token created: ${prefix}... for user ${req.user!.userId.slice(0, 8)}... (expires ${expiresAt.toISOString().slice(0, 10)})`);
 
     res.status(201).json({
       token: plaintext, // shown ONCE — never returned again
@@ -228,7 +237,7 @@ router.delete("/api-tokens/:id", requireAuth, async (req: AuthRequest, res: Resp
       data: { revokedAt: new Date() },
     });
 
-    console.log(`[auth] API token revoked: ${token.tokenPrefix}... for user ${req.user!.email}`);
+    console.log(`[auth] API token revoked: ${token.tokenPrefix}... for user ${req.user!.userId.slice(0, 8)}...`);
 
     res.json({ success: true });
   } catch (err) {

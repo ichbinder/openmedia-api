@@ -26,10 +26,14 @@ export function hashToken(plaintext: string): string {
 
 /**
  * Check whether a string looks like an OpenMedia API token.
+ * Real tokens are ~67 chars (om_ + 64 base64url chars from 48 random bytes).
  */
 export function isApiToken(value: string): boolean {
-  return value.startsWith(TOKEN_PREFIX) && value.length > 20;
+  return value.startsWith(TOKEN_PREFIX) && value.length >= 60;
 }
+
+/** Maximum number of active (non-revoked) API tokens per user. */
+export const MAX_TOKENS_PER_USER = 10;
 
 /** Allowed expiration durations in days. */
 export const ALLOWED_EXPIRY_DAYS = [30, 60, 90] as const;

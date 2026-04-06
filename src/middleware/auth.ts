@@ -100,7 +100,7 @@ async function authenticateApiToken(
       .update({ where: { id: apiToken.id }, data: { lastUsedAt: new Date() } })
       .catch((err) => console.error(`[auth] Failed to update lastUsedAt: ${err.message}`));
 
-    console.log(`[auth] API-Token auth: ${apiToken.user.email} via ${apiToken.tokenPrefix}...`);
+    console.log(`[auth] API-Token auth: user ${apiToken.user.id.slice(0, 8)}... via ${apiToken.tokenPrefix}...`);
     next();
   } catch (err) {
     console.error("[auth] API token auth error:", err);

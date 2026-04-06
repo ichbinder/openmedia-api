@@ -195,11 +195,14 @@ describe("API Token Management", () => {
       .get("/auth/me")
       .set("Authorization", `Bearer ${plaintext}`);
 
-    // Small delay for fire-and-forget update
-    await new Promise((r) => setTimeout(r, 100));
-
+    // Poll for fire-and-forget update with timeout
     const tokenHash = hashToken(plaintext);
-    const dbToken = await prisma.apiToken.findUnique({ where: { tokenHash } });
+    let dbToken;
+    for (let i = 0; i < 20; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+      dbToken = await prisma.apiToken.findUnique({ where: { tokenHash } });
+      if (dbToken?.lastUsedAt) break;
+    }
     expect(dbToken?.lastUsedAt).not.toBeNull();
   });
 
