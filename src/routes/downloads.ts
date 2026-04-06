@@ -242,7 +242,6 @@ router.post("/jobs", async (req: AuthRequest, res: Response) => {
  * Non-blocking: logs a warning on failure but does not throw.
  */
 async function storeNzbInService(hash: string, nzbContent: string): Promise<boolean> {
-  const nzbApiUrl = process.env.NZB_API_URL || "http://localhost:4100";
   const serviceToken = process.env.SERVICE_API_TOKEN;
 
   if (!serviceToken) {
@@ -252,7 +251,7 @@ async function storeNzbInService(hash: string, nzbContent: string): Promise<bool
 
   try {
     // Check if file already exists (HEAD request)
-    const headRes = await fetch(`${nzbApiUrl}/files/${hash}`, {
+    const headRes = await fetch(`${NZB_API_URL}/files/${hash}`, {
       method: "HEAD",
       headers: { Authorization: `Bearer ${serviceToken}` },
       signal: AbortSignal.timeout(10_000),
@@ -264,7 +263,7 @@ async function storeNzbInService(hash: string, nzbContent: string): Promise<bool
     }
 
     // Upload the NZB content
-    const putRes = await fetch(`${nzbApiUrl}/files/${hash}`, {
+    const putRes = await fetch(`${NZB_API_URL}/files/${hash}`, {
       method: "PUT",
       headers: {
         Authorization: `Bearer ${serviceToken}`,
@@ -330,46 +329,65 @@ router.post("/request", async (req: AuthRequest, res: Response) => {
     const hash = createHash("sha256").update(nzbContent).digest("hex");
     console.log(`[nzb-request] Processing: "${title}" (hash: ${hash.slice(0, 12)}...)`);
 
-    // --- Check for existing NzbFile with same hash ---
+    // --- Check for existing NzbFile with same hash (serializable to prevent race conditions) ---
     const existingFile = await prisma.nzbFile.findUnique({
       where: { hash },
-      include: { movie: true, downloadJobs: { orderBy: { createdAt: "desc" }, take: 1 } },
+      include: { movie: true },
     });
 
     if (existingFile) {
-      // File already known — check for active download job
-      const activeJob = existingFile.downloadJobs.find((j) =>
-        ["queued", "provisioning", "downloading", "uploading"].includes(j.status)
-      );
+      // File already known — atomic check-and-create inside a transaction
+      let reuseResult;
+      try {
+        reuseResult = await prisma.$transaction(async (tx) => {
+          const activeJob = await tx.downloadJob.findFirst({
+            where: {
+              nzbFileId: existingFile.id,
+              status: { in: ["queued", "provisioning", "downloading", "uploading"] },
+            },
+          });
 
-      if (activeJob) {
+          if (activeJob) {
+            return { conflict: true as const, activeJob };
+          }
+
+          const job = await tx.downloadJob.create({
+            data: { nzbFileId: existingFile.id, userId: req.user?.userId || null },
+            include: { nzbFile: { include: { movie: true } } },
+          });
+
+          return { conflict: false as const, job };
+        }, { isolationLevel: "Serializable" });
+      } catch (err: any) {
+        if (err?.code === "P2034" || err?.code === "40001") {
+          res.status(409).json({ error: "Gleichzeitiger Request — bitte erneut versuchen." });
+          return;
+        }
+        throw err;
+      }
+
+      if (reuseResult.conflict) {
         res.status(409).json({
           error: "Es läuft bereits ein Download für diese Datei.",
-          existingJobId: activeJob.id,
-          existingStatus: activeJob.status,
+          existingJobId: reuseResult.activeJob.id,
+          existingStatus: reuseResult.activeJob.status,
         });
         return;
       }
 
-      // No active job — create a new one for the existing file
-      const job = await prisma.downloadJob.create({
-        data: { nzbFileId: existingFile.id, userId: req.user?.userId || null },
-        include: { nzbFile: { include: { movie: true } } },
-      });
-
-      console.log(`[nzb-request] Reusing existing NzbFile ${hash.slice(0, 12)}... → new job ${job.id}`);
+      console.log(`[nzb-request] Reusing existing NzbFile ${hash.slice(0, 12)}... → new job ${reuseResult.job.id}`);
 
       // Ensure NZB exists on NZB service (may have been imported without it)
       storeNzbInService(hash, nzbContent).catch((err) => {
         console.error(`[nzb-request] Unexpected error storing NZB: ${err}`);
       });
 
-      res.status(201).json({ job: serializeJob(job), reused: true });
+      res.status(201).json({ job: serializeJob(reuseResult.job), reused: true });
 
       // Trigger auto-provisioner
       if (process.env.AUTO_PROVISION !== "false") {
         import("../lib/provisioner.js").then(({ provisionDownload }) => {
-          provisionDownload(job.id).catch((err) => {
+          provisionDownload(reuseResult.job.id).catch((err) => {
             console.error("[nzb-request] Auto-provision failed:", err);
           });
         });
@@ -429,6 +447,11 @@ router.post("/request", async (req: AuthRequest, res: Response) => {
       where: { id: result.job.id },
       include: { nzbFile: { include: { movie: true } } },
     });
+
+    if (!fullJob) {
+      res.status(500).json({ error: "Job wurde erstellt, konnte aber nicht geladen werden." });
+      return;
+    }
 
     res.status(201).json({ job: serializeJob(fullJob), reused: false });
 
