@@ -22,10 +22,14 @@ const DEFAULT_TMDB_INITIAL_RETRY_DELAY_SECONDS = 60;
 /**
  * Read REVIEW_RETENTION_DAYS from env, clamped to a sane range.
  * Returns the default (3) if the env var is missing or invalid.
+ *
+ * Strict parsing: only raw digit strings are accepted. "3days", "1e2",
+ * "90.5", " 3 " etc. fall back to the default rather than being silently
+ * parsed by Number.parseInt (which would happily return 3, 1, 90...).
  */
 export function getReviewRetentionDays(): number {
   const raw = process.env.REVIEW_RETENTION_DAYS;
-  if (!raw) return DEFAULT_RETENTION_DAYS;
+  if (!raw || !/^\d+$/.test(raw)) return DEFAULT_RETENTION_DAYS;
 
   const parsed = Number.parseInt(raw, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) {

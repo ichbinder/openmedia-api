@@ -430,6 +430,11 @@ describe("POST /downloads/request", () => {
 
     const NZB = `<?xml version="1.0"?><nzb xmlns="http://www.newzbin.com/DTD/2003/nzb"><file poster="x@x.com" date="1" subject="Xyzzy.Random.String [1/1] &quot;u.rar&quot; yEnc"><groups><group>g</group></groups><segments><segment bytes="1" number="1">xyzzy@b.com</segment></segments></file></nzb>`;
 
+    // Snapshot the movie count so we can assert nothing was created,
+    // regardless of whether the phantom title would have been "Xyzzy..."
+    // or something else derived from the parsed filename.
+    const movieCountBefore = await prisma.nzbMovie.count();
+
     const res = await request(app)
       .post("/downloads/request")
       .set("Authorization", `Bearer ${token}`)
@@ -448,11 +453,12 @@ describe("POST /downloads/request", () => {
     expect(res.body.job.nzbFile.movie).toBeNull();
     expect(res.body.job.nzbFile.movieId).toBeNull();
 
-    // Verify NO NzbMovie was created with the cryptic title
-    const phantom = await prisma.nzbMovie.findFirst({
-      where: { titleEn: "Xyzzy Random String 2099" },
-    });
-    expect(phantom).toBeNull();
+    // Robust phantom-movie assertion: the total NzbMovie count must not have
+    // changed at all. Narrow title-based lookups would miss phantoms whose
+    // title was derived from the parsed filename rather than the user-supplied
+    // title field.
+    const movieCountAfter = await prisma.nzbMovie.count();
+    expect(movieCountAfter).toBe(movieCountBefore);
   });
 
   it("erstellt needs_review Job mit tmdbRetryAfter bei TMDB-Error", async () => {
