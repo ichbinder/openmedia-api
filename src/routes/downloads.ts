@@ -4,10 +4,64 @@ import prisma from "../lib/prisma.js";
 import { requireAuth, type AuthRequest } from "../middleware/auth.js";
 import { parseNzbName } from "../lib/nzb-parser.js";
 import { sendToSabnzbd, getSabnzbdStatus, getSabnzbdConfigSummary } from "../lib/sabnzbd.js";
+import { searchTmdbMovie, type TmdbMovieResult } from "../lib/tmdb.js";
 
 const router = Router();
 
 router.use(requireAuth);
+
+/**
+ * Resolve a movie via TMDB lookup or fallback.
+ * Returns existing NzbMovie (reused via tmdbId) or fresh data for creation.
+ *
+ * Three cases:
+ * 1. TMDB found + movie with this tmdbId exists → reuse existing
+ * 2. TMDB found + no existing movie → return TMDB data for create
+ * 3. TMDB not found / error → return fallback data with user-supplied title
+ */
+async function resolveMovieFromTmdb(
+  parsedTitle: string,
+  parsedYear: number | null,
+  fallbackTitle: string,
+): Promise<
+  | { source: "tmdb-reuse"; existingMovieId: string; tmdb: TmdbMovieResult }
+  | { source: "tmdb-create"; tmdb: TmdbMovieResult }
+  | { source: "fallback"; titleDe: string; titleEn: string; year: number | null }
+> {
+  // Use parsed title if available, fallback to user-supplied title
+  const searchTitle = parsedTitle || fallbackTitle;
+
+  if (!searchTitle) {
+    return { source: "fallback", titleDe: fallbackTitle, titleEn: fallbackTitle, year: parsedYear };
+  }
+
+  const result = await searchTmdbMovie(searchTitle, parsedYear);
+
+  if (result.status !== "found") {
+    console.log(
+      `[matching] No TMDB match for "${searchTitle}" (${parsedYear || "?"}) — using fallback`
+    );
+    return { source: "fallback", titleDe: fallbackTitle, titleEn: fallbackTitle, year: parsedYear };
+  }
+
+  // Check if a movie with this tmdbId already exists
+  const existing = await prisma.nzbMovie.findUnique({
+    where: { tmdbId: result.movie.tmdbId },
+    select: { id: true },
+  });
+
+  if (existing) {
+    console.log(
+      `[matching] TMDB ${result.movie.tmdbId} → reusing existing NzbMovie ${existing.id.slice(0, 8)}... (${result.movie.titleEn})`
+    );
+    return { source: "tmdb-reuse", existingMovieId: existing.id, tmdb: result.movie };
+  }
+
+  console.log(
+    `[matching] TMDB ${result.movie.tmdbId} → creating new NzbMovie (${result.movie.titleEn})`
+  );
+  return { source: "tmdb-create", tmdb: result.movie };
+}
 
 const NZB_API_URL = process.env.NZB_API_URL || "http://localhost:4100";
 
@@ -444,19 +498,48 @@ router.post("/request", async (req: AuthRequest, res: Response) => {
     const effectiveFilename = filename || `${title}.nzb`;
     const parsed = parseNzbName(effectiveFilename);
 
-    // --- Create NzbMovie + NzbFile + DownloadJob in one transaction ---
+    // --- Resolve movie via TMDB (with fallback) ---
+    const movieResolution = await resolveMovieFromTmdb(parsed.title, parsed.year, title);
+
+    // --- Create NzbMovie (or reuse existing) + NzbFile + DownloadJob in one transaction ---
     const result = await prisma.$transaction(async (tx) => {
-      const movie = await tx.nzbMovie.create({
-        data: {
-          titleDe: title,
-          titleEn: title,
-          year: parsed.year,
-        },
-      });
+      let movieId: string;
+      let movie;
+
+      if (movieResolution.source === "tmdb-reuse") {
+        // Reuse existing movie — just fetch it for the response
+        movieId = movieResolution.existingMovieId;
+        movie = await tx.nzbMovie.findUniqueOrThrow({ where: { id: movieId } });
+      } else if (movieResolution.source === "tmdb-create") {
+        // Create with full TMDB metadata
+        const t = movieResolution.tmdb;
+        movie = await tx.nzbMovie.create({
+          data: {
+            tmdbId: t.tmdbId,
+            imdbId: t.imdbId,
+            titleDe: t.titleDe,
+            titleEn: t.titleEn,
+            description: t.description,
+            year: t.year,
+            posterPath: t.posterPath,
+          },
+        });
+        movieId = movie.id;
+      } else {
+        // Fallback — no TMDB data available
+        movie = await tx.nzbMovie.create({
+          data: {
+            titleDe: movieResolution.titleDe,
+            titleEn: movieResolution.titleEn,
+            year: movieResolution.year,
+          },
+        });
+        movieId = movie.id;
+      }
 
       const nzbFile = await tx.nzbFile.create({
         data: {
-          movieId: movie.id,
+          movieId,
           hash,
           originalFilename: effectiveFilename,
           fileSize: BigInt(Buffer.byteLength(nzbContent, "utf-8")),
