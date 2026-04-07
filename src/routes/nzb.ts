@@ -363,11 +363,14 @@ router.post("/import", upload.single("nzb"), async (req: AuthRequest, res: Respo
     });
 
     if (existing) {
-      console.log(`[nzb-import] Already exists: ${hash.slice(0, 12)}... → ${existing.movie.titleEn}`);
+      const movieLabel = existing.movie?.titleEn ?? "(needs_review)";
+      console.log(`[nzb-import] Already exists: ${hash.slice(0, 12)}... → ${movieLabel}`);
       res.status(200).json({
         imported: false,
         message: "NZB-Datei existiert bereits.",
-        movie: serializeMovieWithFiles({ ...existing.movie, nzbFiles: [existing] }),
+        movie: existing.movie
+          ? serializeMovieWithFiles({ ...existing.movie, nzbFiles: [existing] })
+          : null,
         nzbFile: serializeNzbFile(existing),
       });
       return;

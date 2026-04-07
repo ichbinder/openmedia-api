@@ -101,8 +101,11 @@ model NzbFile {
   createdAt         DateTime @default(now()) @map("created_at")
   updatedAt         DateTime @updatedAt @map("updated_at")
 
-  movie   NzbMovie @relation(fields: [movieId], references: [id], onDelete: Cascade)
-  movieId String   @map("movie_id")
+  // Nullable: when a NZB upload cannot be matched to a TMDB movie (not_found or transient error),
+  // the NzbFile is created without a movie. The DownloadJob enters status='needs_review' and waits
+  // for the user to assign a movie manually, or for the background TMDB retry to succeed.
+  movie   NzbMovie? @relation(fields: [movieId], references: [id], onDelete: Cascade)
+  movieId String?   @map("movie_id")
 
   downloadJobs DownloadJob[]
   libraryUsers UserLibrary[]
@@ -130,7 +133,9 @@ model UserLibrary {
 model DownloadJob {
   id              String   @id @default(uuid())
 
-  // Status: queued → provisioning → downloading → uploading → completed | failed
+  // Status: needs_review → queued → provisioning → downloading → uploading → completed | failed
+  // needs_review: NzbFile has no movieId (TMDB lookup failed). Waiting for manual assignment
+  //               or background TMDB retry. Provisioning is skipped for this status.
   status          String   @default("queued")
   progress        Int      @default(0)      // 0-100 percentage
   error           String?                    // error message if failed
@@ -141,6 +146,11 @@ model DownloadJob {
   // Hetzner VPS tracking
   hetznerServerId Int?     @map("hetzner_server_id")
   hetznerServerIp String?  @map("hetzner_server_ip")
+
+  // Review flow (only relevant when status='needs_review')
+  reviewExpiresAt DateTime? @map("review_expires_at") // job is failed + cleaned up after this moment
+  tmdbRetryCount  Int      @default(0) @map("tmdb_retry_count")
+  tmdbRetryAfter  DateTime? @map("tmdb_retry_after")  // reconciler attempts TMDB lookup again after this moment
 
   // Timing
   startedAt       DateTime? @map("started_at")

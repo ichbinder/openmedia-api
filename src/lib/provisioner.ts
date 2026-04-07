@@ -49,6 +49,17 @@ export async function provisionDownload(jobId: string): Promise<void> {
     return;
   }
 
+  // Defensive: NzbFile without movieId means the upload is still in review.
+  // The /request path should never route such jobs here, but if something slips
+  // through (e.g. manual DB edit), skip cleanly rather than crash or start a
+  // download without a movie context.
+  if (!job.nzbFile.movieId || !job.nzbFile.movie) {
+    console.log(
+      `[provision] Skipping job ${jobId}: NzbFile ${job.nzbFile.hash.slice(0, 12)}... has no movie (needs_review)`
+    );
+    return;
+  }
+
   // CAS: set to provisioning
   const updated = await prisma.downloadJob.updateMany({
     where: { id: jobId, status: "queued" },
