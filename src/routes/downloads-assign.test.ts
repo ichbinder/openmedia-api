@@ -81,34 +81,35 @@ async function createNeedsReviewJob(token: string, nzb: string, title: string): 
 }
 
 describe("POST /downloads/jobs/:id/assign-movie", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
-    // Re-install default mocks (clearAllMocks removes them)
-    import("../lib/tmdb.js").then((tmdbModule) => {
-      vi.mocked(tmdbModule.searchTmdbMovie).mockResolvedValue({
-        status: "found",
-        movie: {
-          tmdbId: 888_001,
-          imdbId: "tt8880001",
-          titleDe: "Seed Movie",
-          titleEn: "Seed Movie",
-          description: "default",
-          year: 2024,
-          posterPath: "/seed.jpg",
-        },
-      });
-      vi.mocked(tmdbModule.searchTmdbMovieById).mockResolvedValue({
-        status: "found",
-        movie: {
-          tmdbId: 603,
-          imdbId: "tt0133093",
-          titleDe: "Matrix",
-          titleEn: "The Matrix",
-          description: "default",
-          year: 1999,
-          posterPath: "/matrix.jpg",
-        },
-      });
+    // Re-install default mocks (clearAllMocks removes them). Awaited so the
+    // mocks are in place before the test body runs — fire-and-forget .then()
+    // raced in an earlier version.
+    const tmdbModule = await import("../lib/tmdb.js");
+    vi.mocked(tmdbModule.searchTmdbMovie).mockResolvedValue({
+      status: "found",
+      movie: {
+        tmdbId: 888_001,
+        imdbId: "tt8880001",
+        titleDe: "Seed Movie",
+        titleEn: "Seed Movie",
+        description: "default",
+        year: 2024,
+        posterPath: "/seed.jpg",
+      },
+    });
+    vi.mocked(tmdbModule.searchTmdbMovieById).mockResolvedValue({
+      status: "found",
+      movie: {
+        tmdbId: 603,
+        imdbId: "tt0133093",
+        titleDe: "Matrix",
+        titleEn: "The Matrix",
+        description: "default",
+        year: 1999,
+        posterPath: "/matrix.jpg",
+      },
     });
   });
 

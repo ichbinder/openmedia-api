@@ -361,9 +361,11 @@ describe("cleanupExpiredReviews", () => {
     const job = await prisma.downloadJob.findUnique({ where: { id: jobId } });
     expect(job).toBeNull();
 
-    // Physical NZB delete triggered (wait for fire-and-forget to settle)
-    await new Promise((r) => setTimeout(r, 50));
-    expect(mockDeleteNzbFromService).toHaveBeenCalledWith(hash);
+    // Physical NZB delete triggered (fire-and-forget — use waitFor so the
+    // test doesn't race on slow CI).
+    await vi.waitFor(() => {
+      expect(mockDeleteNzbFromService).toHaveBeenCalledWith(hash);
+    });
   });
 
   it("expires one job but keeps the NzbFile when another active job remains", async () => {
@@ -401,8 +403,9 @@ describe("cleanupExpiredReviews", () => {
     const nzbFile = await prisma.nzbFile.findUnique({ where: { id: nzbFileId } });
     expect(nzbFile).not.toBeNull();
 
-    // Physical NZB NOT deleted
-    await new Promise((r) => setTimeout(r, 50));
+    // Physical NZB NOT deleted — the fire-and-forget branch is never even
+    // reached when the cleanup keeps the NzbFile, so this is a synchronous
+    // negative assertion, no waiting needed.
     expect(mockDeleteNzbFromService).not.toHaveBeenCalled();
   });
 
@@ -443,7 +446,6 @@ describe("cleanupExpiredReviews", () => {
     const nzbFile = await prisma.nzbFile.findUniqueOrThrow({ where: { id: nzbFileId } });
     expect(nzbFile.movieId).toBe(movie.id);
 
-    await new Promise((r) => setTimeout(r, 50));
     expect(mockDeleteNzbFromService).not.toHaveBeenCalled();
   });
 
@@ -474,7 +476,6 @@ describe("cleanupExpiredReviews", () => {
     const nzbFile = await prisma.nzbFile.findUnique({ where: { id: nzbFileId } });
     expect(nzbFile).not.toBeNull();
 
-    await new Promise((r) => setTimeout(r, 50));
     expect(mockDeleteNzbFromService).not.toHaveBeenCalled();
   });
 

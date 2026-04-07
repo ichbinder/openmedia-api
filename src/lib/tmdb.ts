@@ -1,5 +1,6 @@
 const TMDB_API_KEY = process.env.TMDB_API_KEY || "";
 const TMDB_BASE = "https://api.themoviedb.org/3";
+const TMDB_REQUEST_TIMEOUT_MS = 10_000;
 
 export interface TmdbMovieResult {
   tmdbId: number;
@@ -34,21 +35,28 @@ async function fetchTmdbMovieDetails(
   fallbackOriginalTitle?: string,
   fallbackPosterPath?: string | null,
 ): Promise<TmdbMovieResult | null> {
+  // Both fetches get their own AbortSignal — a signal can only be used for
+  // one request, so this must not be hoisted out.
   const detailRes = await fetch(
-    `${TMDB_BASE}/movie/${tmdbId}?api_key=${TMDB_API_KEY}&language=de-DE`
+    `${TMDB_BASE}/movie/${tmdbId}?api_key=${TMDB_API_KEY}&language=de-DE`,
+    { signal: AbortSignal.timeout(TMDB_REQUEST_TIMEOUT_MS) }
   );
   const detailDe = detailRes.ok ? (await detailRes.json()) as Record<string, any> : null;
 
   const detailEnRes = await fetch(
-    `${TMDB_BASE}/movie/${tmdbId}?api_key=${TMDB_API_KEY}&language=en-US`
+    `${TMDB_BASE}/movie/${tmdbId}?api_key=${TMDB_API_KEY}&language=en-US`,
+    { signal: AbortSignal.timeout(TMDB_REQUEST_TIMEOUT_MS) }
   );
   const detailEn = detailEnRes.ok ? (await detailEnRes.json()) as Record<string, any> : null;
 
   // If neither endpoint succeeded, the ID is invalid.
   if (!detailDe && !detailEn) return null;
 
+  // Defensive year parsing: empty string → null, malformed string → null,
+  // valid 4-digit prefix → integer.
   const releaseDate = detailDe?.release_date || detailEn?.release_date || "";
-  const releaseYear = releaseDate ? Number(releaseDate.slice(0, 4)) : null;
+  const parsedYear = releaseDate ? Number(releaseDate.slice(0, 4)) : NaN;
+  const releaseYear = Number.isFinite(parsedYear) ? parsedYear : null;
 
   return {
     tmdbId,
@@ -87,7 +95,10 @@ export async function searchTmdbMovie(
       ...(year ? { year: String(year) } : {}),
     });
 
-    const searchRes = await fetch(`${TMDB_BASE}/search/movie?${searchParams}`);
+    const searchRes = await fetch(
+      `${TMDB_BASE}/search/movie?${searchParams}`,
+      { signal: AbortSignal.timeout(TMDB_REQUEST_TIMEOUT_MS) }
+    );
 
     if (searchRes.status === 429) {
       return { status: "error", reason: "TMDB rate limit exceeded" };

@@ -55,14 +55,16 @@ const RECONCILE_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
  * needs_review job waits for manual assignment only. */
 const MAX_TMDB_RETRIES = 5;
 
-/** Exponential-ish backoff schedule in milliseconds. Index = retry count AFTER
- * this attempt. 5 entries matches MAX_TMDB_RETRIES. */
+/** Exponential-ish backoff schedule in milliseconds. Index = the delay that
+ * applies AFTER the N-th failed attempt BEFORE the (N+1)-th attempt.
+ * Five entries matches MAX_TMDB_RETRIES=5. BACKOFF[newCount - 1] gives the
+ * delay to schedule after incrementing the retry counter. */
 const TMDB_RETRY_BACKOFF_MS: readonly number[] = [
-  60 * 1000,          //  1 min  — first retry
-  5 * 60 * 1000,      //  5 min
-  30 * 60 * 1000,     // 30 min
-  2 * 60 * 60 * 1000, //  2 h
-  6 * 60 * 60 * 1000, //  6 h
+  60 * 1000,          //  1 min  — after 1st failure → 2nd attempt
+  5 * 60 * 1000,      //  5 min  — after 2nd failure → 3rd attempt
+  30 * 60 * 1000,     // 30 min  — after 3rd failure → 4th attempt
+  2 * 60 * 60 * 1000, //  2 h    — after 4th failure → 5th attempt
+  6 * 60 * 60 * 1000, //  6 h    — reserved (unused at MAX_TMDB_RETRIES=5)
 ];
 
 // ── Reconciliation Logic ────────────────────────────────────
@@ -150,10 +152,13 @@ export async function retryTmdbForPendingReviews(
     // the next attempt. Apply to ALL jobs on this NzbFile that are still in
     // needs_review and still under the retry cap.
     const newCount = job.tmdbRetryCount + 1;
+    // BACKOFF[newCount - 1] = delay after this failure before the next attempt.
+    // Clamped defensively in case the schedule is ever shorter than MAX.
+    const backoffIndex = Math.min(Math.max(newCount - 1, 0), TMDB_RETRY_BACKOFF_MS.length - 1);
     const newRetryAfter =
       newCount >= MAX_TMDB_RETRIES
         ? null
-        : new Date(now.getTime() + TMDB_RETRY_BACKOFF_MS[Math.min(newCount, TMDB_RETRY_BACKOFF_MS.length - 1)]);
+        : new Date(now.getTime() + TMDB_RETRY_BACKOFF_MS[backoffIndex]);
 
     await prisma.downloadJob.updateMany({
       where: {
