@@ -12,20 +12,18 @@ router.use(requireAuth);
 
 /**
  * Resolve a movie via TMDB lookup or fallback.
- * Returns existing NzbMovie (reused via tmdbId) or fresh data for creation.
  *
- * Three cases:
- * 1. TMDB found + movie with this tmdbId exists → reuse existing
- * 2. TMDB found + no existing movie → return TMDB data for create
- * 3. TMDB not found / error → return fallback data with user-supplied title
+ * Two cases:
+ * 1. TMDB found → return TMDB data; reuse vs create is decided inside the
+ *    transaction to avoid a TOCTOU race on the tmdbId unique constraint.
+ * 2. TMDB not found / error → return fallback data with user-supplied title.
  */
 async function resolveMovieFromTmdb(
   parsedTitle: string,
   parsedYear: number | null,
   fallbackTitle: string,
 ): Promise<
-  | { source: "tmdb-reuse"; existingMovieId: string; tmdb: TmdbMovieResult }
-  | { source: "tmdb-create"; tmdb: TmdbMovieResult }
+  | { source: "tmdb-found"; tmdb: TmdbMovieResult }
   | { source: "fallback"; titleDe: string; titleEn: string; year: number | null }
 > {
   // Use parsed title if available, fallback to user-supplied title
@@ -37,30 +35,26 @@ async function resolveMovieFromTmdb(
 
   const result = await searchTmdbMovie(searchTitle, parsedYear);
 
-  if (result.status !== "found") {
+  if (result.status === "error") {
+    console.warn(
+      `[matching] TMDB error for "${searchTitle}" (${parsedYear || "?"}): ${result.reason} — using fallback`
+    );
+    return { source: "fallback", titleDe: fallbackTitle, titleEn: fallbackTitle, year: parsedYear };
+  }
+
+  if (result.status === "not_found") {
     console.log(
       `[matching] No TMDB match for "${searchTitle}" (${parsedYear || "?"}) — using fallback`
     );
     return { source: "fallback", titleDe: fallbackTitle, titleEn: fallbackTitle, year: parsedYear };
   }
 
-  // Check if a movie with this tmdbId already exists
-  const existing = await prisma.nzbMovie.findUnique({
-    where: { tmdbId: result.movie.tmdbId },
-    select: { id: true },
-  });
-
-  if (existing) {
-    console.log(
-      `[matching] TMDB ${result.movie.tmdbId} → reusing existing NzbMovie ${existing.id.slice(0, 8)}... (${result.movie.titleEn})`
-    );
-    return { source: "tmdb-reuse", existingMovieId: existing.id, tmdb: result.movie };
-  }
-
+  // TMDB found the movie — return the data; reuse vs create decided inside the
+  // transaction to avoid TOCTOU races on the tmdbId unique constraint.
   console.log(
-    `[matching] TMDB ${result.movie.tmdbId} → creating new NzbMovie (${result.movie.titleEn})`
+    `[matching] TMDB ${result.movie.tmdbId} matched "${result.movie.titleEn}" — will reuse or create inside tx`
   );
-  return { source: "tmdb-create", tmdb: result.movie };
+  return { source: "tmdb-found", tmdb: result.movie };
 }
 
 const NZB_API_URL = process.env.NZB_API_URL || "http://localhost:4100";
@@ -506,24 +500,45 @@ router.post("/request", async (req: AuthRequest, res: Response) => {
       let movieId: string;
       let movie;
 
-      if (movieResolution.source === "tmdb-reuse") {
-        // Reuse existing movie — just fetch it for the response
-        movieId = movieResolution.existingMovieId;
-        movie = await tx.nzbMovie.findUniqueOrThrow({ where: { id: movieId } });
-      } else if (movieResolution.source === "tmdb-create") {
-        // Create with full TMDB metadata
+      if (movieResolution.source === "tmdb-found") {
+        // Atomic reuse-or-create on the tmdbId unique constraint.
+        // Handles TOCTOU race: if findUnique returns null but another request
+        // creates the same tmdbId between findUnique and create, we catch P2002
+        // and re-fetch the winner.
         const t = movieResolution.tmdb;
-        movie = await tx.nzbMovie.create({
-          data: {
-            tmdbId: t.tmdbId,
-            imdbId: t.imdbId,
-            titleDe: t.titleDe,
-            titleEn: t.titleEn,
-            description: t.description,
-            year: t.year,
-            posterPath: t.posterPath,
-          },
-        });
+        const existing = await tx.nzbMovie.findUnique({ where: { tmdbId: t.tmdbId } });
+
+        if (existing) {
+          movie = existing;
+          console.log(
+            `[matching] TMDB ${t.tmdbId} → reusing existing NzbMovie ${existing.id.slice(0, 8)}...`
+          );
+        } else {
+          try {
+            movie = await tx.nzbMovie.create({
+              data: {
+                tmdbId: t.tmdbId,
+                imdbId: t.imdbId,
+                titleDe: t.titleDe,
+                titleEn: t.titleEn,
+                description: t.description,
+                year: t.year,
+                posterPath: t.posterPath,
+              },
+            });
+            console.log(`[matching] TMDB ${t.tmdbId} → created new NzbMovie ${movie.id.slice(0, 8)}...`);
+          } catch (err: any) {
+            // P2002: unique constraint — another request won the race
+            if (err?.code === "P2002") {
+              movie = await tx.nzbMovie.findUniqueOrThrow({ where: { tmdbId: t.tmdbId } });
+              console.log(
+                `[matching] TMDB ${t.tmdbId} → race detected, reusing winner ${movie.id.slice(0, 8)}...`
+              );
+            } else {
+              throw err;
+            }
+          }
+        }
         movieId = movie.id;
       } else {
         // Fallback — no TMDB data available
