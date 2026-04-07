@@ -341,6 +341,74 @@ describe("POST /downloads/request", () => {
     expect(count).toBe(1);
   });
 
+  // --- Broken NZB Rejection ---
+
+  it("lehnt broken NzbFile mit 410 Gone ab", async () => {
+    // Pre-create a broken NzbFile
+    const movie = await prisma.nzbMovie.create({
+      data: { titleDe: "Broken Film", titleEn: "Broken Film", year: 2020 },
+    });
+
+    const { createHash } = await import("crypto");
+    const hash = createHash("sha256").update(VALID_NZB).digest("hex");
+
+    await prisma.nzbFile.create({
+      data: {
+        movieId: movie.id,
+        hash,
+        originalFilename: "broken.nzb",
+        status: "broken",
+        brokenReason: "Download 5x fehlgeschlagen: missing articles",
+        failedAttempts: 5,
+      },
+    });
+
+    const res = await request(app)
+      .post("/downloads/request")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ nzbContent: VALID_NZB, title: "Broken Film" });
+
+    expect(res.status).toBe(410);
+    expect(res.body.error).toContain("kaputt");
+    expect(res.body.failedAttempts).toBe(5);
+    expect(res.body.reason).toContain("missing articles");
+    expect(res.body.movie.titleEn).toBe("Broken Film");
+    expect(res.body.hint).toContain("andere NZB-Version");
+  });
+
+  it("lehnt broken NzbFile NICHT ab wenn Film auf S3 verfügbar ist", async () => {
+    // Pre-create a broken NzbFile that is also on S3 (rare but possible)
+    const movie = await prisma.nzbMovie.create({
+      data: { titleDe: "Broken But Available", titleEn: "Broken But Available", year: 2021 },
+    });
+
+    const { createHash } = await import("crypto");
+    const hash = createHash("sha256").update(VALID_NZB_2).digest("hex");
+
+    await prisma.nzbFile.create({
+      data: {
+        movieId: movie.id,
+        hash,
+        originalFilename: "broken-but-on-s3.nzb",
+        status: "broken",
+        brokenReason: "Old failure history",
+        failedAttempts: 5,
+        s3Key: `${hash}/${hash}.mkv`,
+        s3Bucket: "openmedia-files",
+        downloadedAt: new Date(),
+      },
+    });
+
+    // fileExists is mocked to return true (default mock)
+    const res = await request(app)
+      .post("/downloads/request")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ nzbContent: VALID_NZB_2, title: "Broken But Available" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.alreadyAvailable).toBe(true);
+  });
+
   it("nutzt Fallback wenn TMDB nichts findet", async () => {
     // Default mock already returns not_found
     const NZB = `<?xml version="1.0"?><nzb xmlns="http://www.newzbin.com/DTD/2003/nzb"><file poster="x@x.com" date="1" subject="Unknown.Movie [1/1] &quot;u.rar&quot; yEnc"><groups><group>g</group></groups><segments><segment bytes="1" number="1">unknown@b.com</segment></segments></file></nzb>`;
