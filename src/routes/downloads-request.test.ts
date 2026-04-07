@@ -12,6 +12,11 @@ vi.mock("../lib/s3.js", async (importOriginal) => {
   };
 });
 
+// Mock TMDB — default to "not_found" so fallback path is exercised by existing tests
+vi.mock("../lib/tmdb.js", () => ({
+  searchTmdbMovie: vi.fn().mockResolvedValue({ status: "not_found" }),
+}));
+
 const app = createApp();
 
 // Minimal valid NZB XML for testing
@@ -254,5 +259,103 @@ describe("POST /downloads/request", () => {
     const updatedFile = await prisma.nzbFile.findUnique({ where: { hash } });
     expect(updatedFile?.s3Key).toBeNull();
     expect(updatedFile?.downloadedAt).toBeNull();
+  });
+
+  // --- TMDB Matching ---
+
+  it("verknüpft NzbMovie mit TMDB-Daten bei erfolgreichem Match", async () => {
+    const tmdbModule = await import("../lib/tmdb.js");
+    vi.mocked(tmdbModule.searchTmdbMovie).mockResolvedValueOnce({
+      status: "found",
+      movie: {
+        tmdbId: 773,
+        imdbId: "tt0449059",
+        titleDe: "Little Miss Sunshine",
+        titleEn: "Little Miss Sunshine",
+        description: "Eine dysfunktionale Familie...",
+        year: 2006,
+        posterPath: "/wKn7AJw730emlmzLSmJtzquwaeW.jpg",
+      },
+    });
+
+    const NZB = `<?xml version="1.0"?><nzb xmlns="http://www.newzbin.com/DTD/2003/nzb"><file poster="x@x.com" date="1" subject="Little.Miss.Sunshine.2006.1080p.BluRay.x264 [1/1] &quot;a.rar&quot; yEnc"><groups><group>g</group></groups><segments><segment bytes="1" number="1">a@b.com</segment></segments></file></nzb>`;
+
+    const res = await request(app)
+      .post("/downloads/request")
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        nzbContent: NZB,
+        title: "Little Miss Sunshine 2006",
+        filename: "Little.Miss.Sunshine.2006.1080p.BluRay.x264.nzb",
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.job.nzbFile.movie.tmdbId).toBe(773);
+    expect(res.body.job.nzbFile.movie.titleEn).toBe("Little Miss Sunshine");
+    expect(res.body.job.nzbFile.movie.year).toBe(2006);
+    expect(res.body.job.nzbFile.movie.posterPath).toContain("wKn7AJw730emlmzLSmJtzquwaeW");
+  });
+
+  it("verwendet bestehenden NzbMovie mit gleicher tmdbId wieder", async () => {
+    // Pre-create a movie with tmdbId 773
+    const existingMovie = await prisma.nzbMovie.create({
+      data: {
+        tmdbId: 773,
+        titleDe: "Little Miss Sunshine",
+        titleEn: "Little Miss Sunshine",
+        year: 2006,
+      },
+    });
+
+    const tmdbModule = await import("../lib/tmdb.js");
+    vi.mocked(tmdbModule.searchTmdbMovie).mockResolvedValueOnce({
+      status: "found",
+      movie: {
+        tmdbId: 773,
+        imdbId: "tt0449059",
+        titleDe: "Little Miss Sunshine",
+        titleEn: "Little Miss Sunshine",
+        description: "...",
+        year: 2006,
+        posterPath: "/poster.jpg",
+      },
+    });
+
+    const NZB = `<?xml version="1.0"?><nzb xmlns="http://www.newzbin.com/DTD/2003/nzb"><file poster="x@x.com" date="1" subject="LMS.2006 [1/1] &quot;different.rar&quot; yEnc"><groups><group>g</group></groups><segments><segment bytes="1" number="1">unique@b.com</segment></segments></file></nzb>`;
+
+    const res = await request(app)
+      .post("/downloads/request")
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        nzbContent: NZB,
+        title: "Little Miss Sunshine",
+        filename: "Little.Miss.Sunshine.2006.720p.WEB.x264.nzb",
+      });
+
+    expect(res.status).toBe(201);
+    // Same movie ID, not a new one
+    expect(res.body.job.nzbFile.movie.id).toBe(existingMovie.id);
+
+    // Verify only ONE movie exists with tmdbId 773
+    const count = await prisma.nzbMovie.count({ where: { tmdbId: 773 } });
+    expect(count).toBe(1);
+  });
+
+  it("nutzt Fallback wenn TMDB nichts findet", async () => {
+    // Default mock already returns not_found
+    const NZB = `<?xml version="1.0"?><nzb xmlns="http://www.newzbin.com/DTD/2003/nzb"><file poster="x@x.com" date="1" subject="Unknown.Movie [1/1] &quot;u.rar&quot; yEnc"><groups><group>g</group></groups><segments><segment bytes="1" number="1">unknown@b.com</segment></segments></file></nzb>`;
+
+    const res = await request(app)
+      .post("/downloads/request")
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        nzbContent: NZB,
+        title: "Unknown Movie 2099",
+        filename: "Unknown.Movie.2099.nzb",
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.job.nzbFile.movie.tmdbId).toBeNull();
+    expect(res.body.job.nzbFile.movie.titleEn).toBe("Unknown Movie 2099");
   });
 });
