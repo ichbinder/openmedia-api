@@ -15,7 +15,13 @@ export function createApp() {
   const app = express();
 
   app.use(cors());
-  app.use(express.json({ limit: "50mb" }));
+
+  // NZB uploads can be several MB — apply a larger limit only to that route.
+  // Mount the larger parser BEFORE the global one so /downloads/request matches first.
+  app.use("/downloads/request", express.json({ limit: "50mb" }));
+
+  // All other routes use a tight default limit to minimize DoS surface.
+  app.use(express.json({ limit: "1mb" }));
 
   app.use("/auth", authRoutes);
   app.use("/watchlist", watchlistRoutes);
