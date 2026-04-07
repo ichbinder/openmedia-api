@@ -55,11 +55,13 @@ services:
       AUTO_PROVISION: ${AUTO_PROVISION}
       DOWNLOADER_DOCKER_IMAGE: ${DOWNLOADER_DOCKER_IMAGE}
       NZB_SERVICE_URL: ${NZB_SERVICE_URL}
-      NZB_API_URL: ${NZB_API_URL}
-      API_BASE_URL: ${API_BASE_URL}
-      SERVICE_API_TOKEN: ${SERVICE_API_TOKEN}
-      USENET_SERVERS: ${USENET_SERVERS}
-      TMDB_API_KEY: ${TMDB_API_KEY}
+      # Required env vars — fail fast if not set so misconfiguration is obvious
+      NZB_API_URL: ${NZB_API_URL:?NZB_API_URL is required}
+      API_BASE_URL: ${API_BASE_URL:?API_BASE_URL is required}
+      SERVICE_API_TOKEN: ${SERVICE_API_TOKEN:?SERVICE_API_TOKEN is required}
+      USENET_SERVERS: ${USENET_SERVERS:?USENET_SERVERS is required}
+      # Optional — TMDB matching falls back gracefully if not set
+      TMDB_API_KEY: ${TMDB_API_KEY:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./caddy/dl-backends.map:/etc/caddy/dl-backends.map
