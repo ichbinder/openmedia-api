@@ -32,6 +32,22 @@ function serializeMovieWithFiles(movie: any) {
   return { ...movie, nzbFiles: movie.nzbFiles.map(serializeNzbFile) };
 }
 
+/**
+ * Shared serializer for the /nzb/import duplicate-detection response.
+ *
+ * NzbFile.movie is nullable since M021/S01 (needs_review uploads). Both the
+ * fast path (pre-insert duplicate check) and the race-condition path (P2002
+ * catch) use the same logic: if movie is null, return null; otherwise wrap
+ * the movie in a single-file list so the shape matches the /movies endpoint.
+ */
+function serializeDuplicateResponse(existing: { movie: unknown } & Record<string, unknown>) {
+  const movie = existing.movie as { nzbFiles?: unknown[] } | null;
+  return {
+    movie: movie ? serializeMovieWithFiles({ ...movie, nzbFiles: [existing] }) : null,
+    nzbFile: serializeNzbFile(existing),
+  };
+}
+
 // GET /nzb/movies — list all NZB movies
 router.get("/movies", async (_req: AuthRequest, res: Response) => {
   try {
@@ -363,12 +379,12 @@ router.post("/import", upload.single("nzb"), async (req: AuthRequest, res: Respo
     });
 
     if (existing) {
-      console.log(`[nzb-import] Already exists: ${hash.slice(0, 12)}... → ${existing.movie.titleEn}`);
+      const movieLabel = existing.movie?.titleEn ?? "(needs_review)";
+      console.log(`[nzb-import] Already exists: ${hash.slice(0, 12)}... → ${movieLabel}`);
       res.status(200).json({
         imported: false,
         message: "NZB-Datei existiert bereits.",
-        movie: serializeMovieWithFiles({ ...existing.movie, nzbFiles: [existing] }),
-        nzbFile: serializeNzbFile(existing),
+        ...serializeDuplicateResponse(existing),
       });
       return;
     }
@@ -409,7 +425,7 @@ router.post("/import", upload.single("nzb"), async (req: AuthRequest, res: Respo
         });
         console.log(`[nzb-import] Movie from TMDB: ${movie.titleEn} (${movie.id})`);
       } else if (tmdbResult.status === "error") {
-        // TMDB error (network, rate limit, no API key) — don't create orphan movie
+        // TMDB error (transient: network, rate limit) — don't create an orphan movie.
         console.warn(`[nzb-import] TMDB lookup failed: ${tmdbResult.reason}`);
         res.status(503).json({
           error: "TMDB-Lookup fehlgeschlagen. Film konnte nicht identifiziert werden.",
@@ -418,7 +434,18 @@ router.post("/import", upload.single("nzb"), async (req: AuthRequest, res: Respo
         });
         return;
       } else {
-        // Not found on TMDB — create movie from parsed name
+        // status === "not_found" OR status === "disabled" — fall through to
+        // the legacy phantom-movie path.
+        //
+        // TODO(M021): Legacy /nzb/import still creates phantom NzbMovies when
+        // TMDB cannot identify the film. The newer POST /downloads/request
+        // endpoint routes such uploads into needs_review instead. This legacy
+        // path is kept unchanged for backwards compatibility with older
+        // extension versions and the admin import tooling. If /nzb/import is
+        // ever revived as a primary entry point, apply the same needs_review
+        // treatment used in /request. The "disabled" case intentionally falls
+        // through here too — breaking the behaviour would require mocking TMDB
+        // in every /nzb/import test.
         movie = await prisma.nzbMovie.create({
           data: {
             titleDe: parsed.title,
@@ -455,8 +482,9 @@ router.post("/import", upload.single("nzb"), async (req: AuthRequest, res: Respo
         res.status(200).json({
           imported: false,
           message: "NZB-Datei existiert bereits (gleichzeitiger Import).",
-          movie: existing ? serializeMovieWithFiles({ ...existing.movie, nzbFiles: [existing] }) : null,
-          nzbFile: existing ? serializeNzbFile(existing) : null,
+          ...(existing
+            ? serializeDuplicateResponse(existing)
+            : { movie: null, nzbFile: null }),
         });
         return;
       }

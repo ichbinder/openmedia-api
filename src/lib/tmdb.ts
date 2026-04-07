@@ -14,22 +14,27 @@ export interface TmdbMovieResult {
 export type TmdbLookupResult =
   | { status: "found"; movie: TmdbMovieResult }
   | { status: "not_found" }
-  | { status: "error"; reason: string };
+  | { status: "error"; reason: string }
+  // TMDB is not configured at all — no API key present. Distinct from error
+  // so callers can treat this as a server misconfiguration (503) rather than
+  // confusing it with a transient failure or a real no-match.
+  | { status: "disabled"; reason: string };
 
 /**
  * Search for a movie on TMDB and return the best match.
- * Returns structured result distinguishing "not found" from "error".
+ * Returns a structured result distinguishing four cases:
+ * - found: a matching movie, with metadata.
+ * - not_found: TMDB returned zero matches for the title — definitive.
+ * - error: transient failure (rate limit, 5xx, network) — caller may retry.
+ * - disabled: TMDB_API_KEY is not configured — server misconfiguration.
  */
 export async function searchTmdbMovie(
   title: string,
   year?: number | null
 ): Promise<TmdbLookupResult> {
   if (!TMDB_API_KEY) {
-    if (process.env.NODE_ENV === "test" || process.env.ALLOW_TMDB_FALLBACK === "true") {
-      console.log("[tmdb] No TMDB_API_KEY set — falling back to not_found (test/dev mode)");
-      return { status: "not_found" };
-    }
-    return { status: "error", reason: "TMDB_API_KEY is not configured" };
+    console.warn("[tmdb] TMDB_API_KEY is not set — returning 'disabled' status");
+    return { status: "disabled", reason: "TMDB_API_KEY is not configured" };
   }
 
   try {

@@ -12,9 +12,22 @@ vi.mock("../lib/s3.js", async (importOriginal) => {
   };
 });
 
-// Mock TMDB — default to "not_found" so fallback path is exercised by existing tests
+// Mock TMDB — default to a generic "found" result so existing tests get a normal
+// queued job. Tests that need needs_review can override the mock with not_found
+// or error per-test using vi.mocked(...).mockResolvedValueOnce(...).
 vi.mock("../lib/tmdb.js", () => ({
-  searchTmdbMovie: vi.fn().mockResolvedValue({ status: "not_found" }),
+  searchTmdbMovie: vi.fn().mockResolvedValue({
+    status: "found",
+    movie: {
+      tmdbId: 999_001,
+      imdbId: "tt9990001",
+      titleDe: "Test Movie 2024",
+      titleEn: "Test Movie 2024",
+      description: "Default mock movie for tests.",
+      year: 2024,
+      posterPath: "/test-poster.jpg",
+    },
+  }),
 }));
 
 const app = createApp();
@@ -409,21 +422,152 @@ describe("POST /downloads/request", () => {
     expect(res.body.alreadyAvailable).toBe(true);
   });
 
-  it("nutzt Fallback wenn TMDB nichts findet", async () => {
-    // Default mock already returns not_found
-    const NZB = `<?xml version="1.0"?><nzb xmlns="http://www.newzbin.com/DTD/2003/nzb"><file poster="x@x.com" date="1" subject="Unknown.Movie [1/1] &quot;u.rar&quot; yEnc"><groups><group>g</group></groups><segments><segment bytes="1" number="1">unknown@b.com</segment></segments></file></nzb>`;
+  // --- needs_review path (TMDB no match / error) ---
+
+  it("erstellt needs_review Job wenn TMDB nichts findet (kein Phantom-Movie)", async () => {
+    const tmdbModule = await import("../lib/tmdb.js");
+    vi.mocked(tmdbModule.searchTmdbMovie).mockResolvedValueOnce({ status: "not_found" });
+
+    const NZB = `<?xml version="1.0"?><nzb xmlns="http://www.newzbin.com/DTD/2003/nzb"><file poster="x@x.com" date="1" subject="Xyzzy.Random.String [1/1] &quot;u.rar&quot; yEnc"><groups><group>g</group></groups><segments><segment bytes="1" number="1">xyzzy@b.com</segment></segments></file></nzb>`;
+
+    // Snapshot the movie count so we can assert nothing was created,
+    // regardless of whether the phantom title would have been "Xyzzy..."
+    // or something else derived from the parsed filename.
+    const movieCountBefore = await prisma.nzbMovie.count();
 
     const res = await request(app)
       .post("/downloads/request")
       .set("Authorization", `Bearer ${token}`)
       .send({
         nzbContent: NZB,
-        title: "Unknown Movie 2099",
-        filename: "Unknown.Movie.2099.nzb",
+        title: "Xyzzy Random String 2099",
+        filename: "Xyzzy.Random.String.2099.nzb",
       });
 
     expect(res.status).toBe(201);
-    expect(res.body.job.nzbFile.movie.tmdbId).toBeNull();
-    expect(res.body.job.nzbFile.movie.titleEn).toBe("Unknown Movie 2099");
+    expect(res.body.needsReview).toBe(true);
+    expect(res.body.job.status).toBe("needs_review");
+    expect(res.body.job.reviewExpiresAt).toBeDefined();
+    expect(new Date(res.body.job.reviewExpiresAt).getTime()).toBeGreaterThan(Date.now());
+    // No movie should be linked
+    expect(res.body.job.nzbFile.movie).toBeNull();
+    expect(res.body.job.nzbFile.movieId).toBeNull();
+
+    // Robust phantom-movie assertion: the total NzbMovie count must not have
+    // changed at all. Narrow title-based lookups would miss phantoms whose
+    // title was derived from the parsed filename rather than the user-supplied
+    // title field.
+    const movieCountAfter = await prisma.nzbMovie.count();
+    expect(movieCountAfter).toBe(movieCountBefore);
+  });
+
+  it("erstellt needs_review Job mit tmdbRetryAfter bei TMDB-Error", async () => {
+    const tmdbModule = await import("../lib/tmdb.js");
+    vi.mocked(tmdbModule.searchTmdbMovie).mockResolvedValueOnce({
+      status: "error",
+      reason: "TMDB rate limit exceeded",
+    });
+
+    const NZB = `<?xml version="1.0"?><nzb xmlns="http://www.newzbin.com/DTD/2003/nzb"><file poster="x@x.com" date="1" subject="Rate.Limited.Movie [1/1] &quot;u.rar&quot; yEnc"><groups><group>g</group></groups><segments><segment bytes="1" number="1">rl@b.com</segment></segments></file></nzb>`;
+
+    const res = await request(app)
+      .post("/downloads/request")
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        nzbContent: NZB,
+        title: "Rate Limited Movie",
+        filename: "Rate.Limited.Movie.2024.nzb",
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.needsReview).toBe(true);
+    expect(res.body.job.status).toBe("needs_review");
+    // Background retry must be scheduled for transient errors
+    expect(res.body.job.tmdbRetryAfter).toBeDefined();
+    expect(new Date(res.body.job.tmdbRetryAfter).getTime()).toBeGreaterThan(Date.now());
+    expect(res.body.job.nzbFile.movieId).toBeNull();
+  });
+
+  it("erstellt KEINEN tmdbRetryAfter bei not_found (definitive Antwort)", async () => {
+    const tmdbModule = await import("../lib/tmdb.js");
+    vi.mocked(tmdbModule.searchTmdbMovie).mockResolvedValueOnce({ status: "not_found" });
+
+    const NZB = `<?xml version="1.0"?><nzb xmlns="http://www.newzbin.com/DTD/2003/nzb"><file poster="x@x.com" date="1" subject="Definitive.NotFound [1/1] &quot;u.rar&quot; yEnc"><groups><group>g</group></groups><segments><segment bytes="1" number="1">def@b.com</segment></segments></file></nzb>`;
+
+    const res = await request(app)
+      .post("/downloads/request")
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        nzbContent: NZB,
+        title: "Definitive Not Found",
+        filename: "Definitive.NotFound.nzb",
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.needsReview).toBe(true);
+    expect(res.body.job.tmdbRetryAfter).toBeNull();
+  });
+
+  it("propagiert needs_review beim Reuse einer existierenden movieId=null NzbFile", async () => {
+    // First upload — TMDB not found, creates needs_review NzbFile
+    const tmdbModule = await import("../lib/tmdb.js");
+    vi.mocked(tmdbModule.searchTmdbMovie).mockResolvedValueOnce({ status: "not_found" });
+
+    const NZB = `<?xml version="1.0"?><nzb xmlns="http://www.newzbin.com/DTD/2003/nzb"><file poster="shared@x.com" date="1" subject="Shared.Hash.Test [1/1] &quot;s.rar&quot; yEnc"><groups><group>g</group></groups><segments><segment bytes="1" number="1">shared@b.com</segment></segments></file></nzb>`;
+
+    const res1 = await request(app)
+      .post("/downloads/request")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ nzbContent: NZB, title: "Shared Hash Test" });
+
+    expect(res1.status).toBe(201);
+    expect(res1.body.needsReview).toBe(true);
+
+    // Second upload — different user, same hash. The reuse path should also
+    // produce a needs_review job, not a queued one.
+    const token2 = await getAuthToken();
+    const res2 = await request(app)
+      .post("/downloads/request")
+      .set("Authorization", `Bearer ${token2}`)
+      .send({ nzbContent: NZB, title: "Shared Hash Test" });
+
+    expect(res2.status).toBe(201);
+    expect(res2.body.reused).toBe(true);
+    expect(res2.body.needsReview).toBe(true);
+    expect(res2.body.job.status).toBe("needs_review");
+    // Both jobs share the same NzbFile
+    expect(res2.body.job.nzbFile.id).toBe(res1.body.job.nzbFile.id);
+    // But are distinct DownloadJob rows
+    expect(res2.body.job.id).not.toBe(res1.body.job.id);
+  });
+
+  it("verhindert doppelte needs_review Jobs für denselben User+Hash", async () => {
+    const tmdbModule = await import("../lib/tmdb.js");
+    // Use mockResolvedValueOnce twice so the mock self-resets after this test,
+    // even if an earlier assertion throws. This keeps the default "found" mock
+    // intact for subsequent tests.
+    vi.mocked(tmdbModule.searchTmdbMovie)
+      .mockResolvedValueOnce({ status: "not_found" })
+      .mockResolvedValueOnce({ status: "not_found" });
+
+    const NZB = `<?xml version="1.0"?><nzb xmlns="http://www.newzbin.com/DTD/2003/nzb"><file poster="dup@x.com" date="1" subject="Duplicate.Review.Test [1/1] &quot;d.rar&quot; yEnc"><groups><group>g</group></groups><segments><segment bytes="1" number="1">dup@b.com</segment></segments></file></nzb>`;
+
+    const res1 = await request(app)
+      .post("/downloads/request")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ nzbContent: NZB, title: "Duplicate Review Test" });
+
+    expect(res1.status).toBe(201);
+    expect(res1.body.needsReview).toBe(true);
+
+    // Same user uploads the same hash again — should get 409 with the existing job
+    const res2 = await request(app)
+      .post("/downloads/request")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ nzbContent: NZB, title: "Duplicate Review Test" });
+
+    expect(res2.status).toBe(409);
+    expect(res2.body.existingJobId).toBe(res1.body.job.id);
+    expect(res2.body.existingStatus).toBe("needs_review");
   });
 });

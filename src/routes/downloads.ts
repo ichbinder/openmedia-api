@@ -6,18 +6,33 @@ import { parseNzbName } from "../lib/nzb-parser.js";
 import { sendToSabnzbd, getSabnzbdStatus, getSabnzbdConfigSummary } from "../lib/sabnzbd.js";
 import { searchTmdbMovie, type TmdbMovieResult } from "../lib/tmdb.js";
 import { markJobFailed } from "../lib/job-failure.js";
+import { computeReviewExpiresAt, computeInitialTmdbRetryAfter } from "../lib/review-config.js";
 
 const router = Router();
 
 router.use(requireAuth);
 
 /**
- * Resolve a movie via TMDB lookup or fallback.
+ * Resolve a movie via TMDB lookup, returning one of three outcomes.
  *
- * Two cases:
- * 1. TMDB found → return TMDB data; reuse vs create is decided inside the
- *    transaction to avoid a TOCTOU race on the tmdbId unique constraint.
- * 2. TMDB not found / error → return fallback data with user-supplied title.
+ * Cases:
+ * 1. **tmdb-found**: TMDB returned a single matching movie. The caller decides
+ *    whether to reuse an existing NzbMovie row (matched by tmdbId) or create a
+ *    new one — that decision happens inside the transaction to avoid a TOCTOU
+ *    race on the tmdbId unique constraint.
+ * 2. **needs-review** (`reason: 'not-found'`): TMDB definitively had no match.
+ *    The caller must NOT create a Phantom NzbMovie. Instead the NzbFile is
+ *    persisted with movieId=null and the DownloadJob enters status='needs_review'.
+ *    The user is expected to assign a movie manually via the Frontend.
+ * 3. **needs-review** (`reason: 'error'`): TMDB call failed for transient
+ *    reasons (rate limit, network, 5xx). Same as (2) at the data-model level
+ *    but additionally signals that a background retry should be scheduled —
+ *    the reconciler will attempt the lookup again later, and if successful
+ *    auto-assign the movie without user interaction.
+ *
+ * Note: even if `parsedTitle` is empty, an `error` from TMDB still routes to
+ * needs-review (rather than the previous silent fallback) because the user
+ * must be the one to decide what film this NZB represents.
  */
 async function resolveMovieFromTmdb(
   parsedTitle: string,
@@ -25,29 +40,38 @@ async function resolveMovieFromTmdb(
   fallbackTitle: string,
 ): Promise<
   | { source: "tmdb-found"; tmdb: TmdbMovieResult }
-  | { source: "fallback"; titleDe: string; titleEn: string; year: number | null }
+  | { source: "needs-review"; reason: "not-found" | "error"; errorDetail?: string }
+  | { source: "tmdb-disabled"; reason: string }
 > {
   // Use parsed title if available, fallback to user-supplied title
   const searchTitle = parsedTitle || fallbackTitle;
 
   if (!searchTitle) {
-    return { source: "fallback", titleDe: fallbackTitle, titleEn: fallbackTitle, year: parsedYear };
+    console.log(`[matching] No usable title for TMDB lookup — marking needs_review`);
+    return { source: "needs-review", reason: "not-found" };
   }
 
   const result = await searchTmdbMovie(searchTitle, parsedYear);
 
+  if (result.status === "disabled") {
+    console.error(
+      `[matching] TMDB is disabled (${result.reason}) — cannot process upload`
+    );
+    return { source: "tmdb-disabled", reason: result.reason };
+  }
+
   if (result.status === "error") {
     console.warn(
-      `[matching] TMDB error for "${searchTitle}" (${parsedYear || "?"}): ${result.reason} — using fallback`
+      `[matching] TMDB error for "${searchTitle}" (${parsedYear || "?"}): ${result.reason} — marking needs_review (will retry in background)`
     );
-    return { source: "fallback", titleDe: fallbackTitle, titleEn: fallbackTitle, year: parsedYear };
+    return { source: "needs-review", reason: "error", errorDetail: result.reason };
   }
 
   if (result.status === "not_found") {
     console.log(
-      `[matching] No TMDB match for "${searchTitle}" (${parsedYear || "?"}) — using fallback`
+      `[matching] No TMDB match for "${searchTitle}" (${parsedYear || "?"}) — marking needs_review`
     );
-    return { source: "fallback", titleDe: fallbackTitle, titleEn: fallbackTitle, year: parsedYear };
+    return { source: "needs-review", reason: "not-found" };
   }
 
   // TMDB found the movie — return the data; reuse vs create decided inside the
@@ -64,11 +88,16 @@ const NZB_API_URL = process.env.NZB_API_URL || "http://localhost:4100";
 // Valid status transitions for download jobs
 // ---------------------------------------------------------------------------
 
-const VALID_STATUSES = ["queued", "provisioning", "downloading", "uploading", "completed", "failed"] as const;
+const VALID_STATUSES = ["needs_review", "queued", "provisioning", "downloading", "uploading", "completed", "failed", "expired"] as const;
 type JobStatus = (typeof VALID_STATUSES)[number];
 
 /** Map of allowed status transitions: current → allowed next statuses */
 const STATUS_TRANSITIONS: Record<string, JobStatus[]> = {
+  // needs_review → queued (movie was assigned manually or via background TMDB retry)
+  // needs_review → expired (review window elapsed without assignment — distinct
+  //                 from 'failed' because no download actually failed, so the
+  //                 NzbFile's failedAttempts counter must NOT be incremented)
+  needs_review: ["queued", "expired"],
   queued: ["provisioning", "failed"],
   provisioning: ["downloading", "failed"],
   downloading: ["uploading", "failed"],
@@ -76,6 +105,7 @@ const STATUS_TRANSITIONS: Record<string, JobStatus[]> = {
   // Terminal states — no transitions out
   completed: [],
   failed: [],
+  expired: [],
 };
 
 function isValidTransition(from: string, to: string): boolean {
@@ -154,6 +184,17 @@ router.post("/start", async (req: AuthRequest, res: Response) => {
       return;
     }
 
+    // NzbFile must be assigned to a movie before it can be downloaded.
+    // Files in needs_review state (movieId=null) require manual TMDB assignment first.
+    if (!nzbFile.movie) {
+      res.status(409).json({
+        error: "NZB-Datei wartet auf manuelle Film-Zuordnung.",
+        reason: "needs_review",
+        hint: "Ordne der NZB einen Film zu, bevor der Download gestartet werden kann.",
+      });
+      return;
+    }
+
     const authHeader = req.headers.authorization || "";
     const nzbContent = await fetchNzbFromStorage(nzbFile.hash, authHeader.replace("Bearer ", ""));
 
@@ -218,6 +259,18 @@ router.post("/jobs", async (req: AuthRequest, res: Response) => {
       return;
     }
 
+    // NzbFile must be assigned to a movie before a download job can be created.
+    // Files in needs_review state (movieId=null) must be routed through the
+    // manual assignment endpoint instead.
+    if (!nzbFile.movieId) {
+      res.status(409).json({
+        error: "NZB-Datei wartet auf manuelle Film-Zuordnung.",
+        reason: "needs_review",
+        hint: "Ordne der NZB einen Film zu, bevor ein Download-Job erstellt werden kann.",
+      });
+      return;
+    }
+
     // Atomic check-and-create inside a transaction to prevent race conditions
     // (two concurrent requests for the same nzbFileId)
     let result;
@@ -263,7 +316,9 @@ router.post("/jobs", async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    console.log(`[download-job] Created: ${result.job.id} for ${nzbFile.movie.titleEn} (${nzbFile.hash.slice(0, 12)}...)`);
+    // nzbFile.movie is guaranteed non-null here (guarded above).
+    const movieTitle = nzbFile.movie?.titleEn ?? "unknown";
+    console.log(`[download-job] Created: ${result.job.id} for ${movieTitle} (${nzbFile.hash.slice(0, 12)}...)`);
 
     res.status(201).json({ job: serializeJob(result.job) });
 
@@ -447,27 +502,74 @@ router.post("/request", async (req: AuthRequest, res: Response) => {
         return;
       }
 
-      // File already known — atomic check-and-create inside a transaction
+      // File already known — atomic check-and-create inside a transaction.
+      // We re-read the NzbFile's movieId INSIDE the transaction so a concurrent
+      // /assign-movie call (landing in S02) can't create a TOCTOU where we
+      // decide "needs_review" based on a stale null and leave a stuck job.
       let reuseResult;
       try {
         reuseResult = await prisma.$transaction(async (tx) => {
-          const activeJob = await tx.downloadJob.findFirst({
+          // Fresh read: movieId may have been set between the initial findUnique
+          // and the start of this transaction (concurrent assign-movie, reconciler
+          // TMDB retry, etc.).
+          const freshFile = await tx.nzbFile.findUnique({
+            where: { id: existingFile.id },
+            select: { id: true, movieId: true },
+          });
+
+          if (!freshFile) {
+            // Extremely unlikely — NzbFile vanished between reads. Treat as not found.
+            return { missing: true as const };
+          }
+
+          const reuseNeedsReview = freshFile.movieId === null;
+
+          // Cross-user conflict: any active running download for this file blocks
+          // a new job (the second user should wait for the first download to
+          // finish, then they share the result via S3).
+          const runningJob = await tx.downloadJob.findFirst({
             where: {
               nzbFileId: existingFile.id,
               status: { in: ["queued", "provisioning", "downloading", "uploading"] },
             },
           });
 
-          if (activeJob) {
-            return { conflict: true as const, activeJob };
+          if (runningJob) {
+            return { conflict: true as const, activeJob: runningJob };
+          }
+
+          // Per-user needs_review check: if THIS user already has a pending
+          // review for the same file, surface that existing job rather than
+          // spamming a duplicate row. Other users may have their own review
+          // jobs in parallel — that's intentional.
+          const ownReview = await tx.downloadJob.findFirst({
+            where: {
+              nzbFileId: existingFile.id,
+              status: "needs_review",
+              userId: req.user?.userId || null,
+            },
+          });
+
+          if (ownReview) {
+            return { conflict: true as const, activeJob: ownReview };
           }
 
           const job = await tx.downloadJob.create({
-            data: { nzbFileId: existingFile.id, userId: req.user?.userId || null },
+            data: {
+              nzbFileId: existingFile.id,
+              userId: req.user?.userId || null,
+              ...(reuseNeedsReview && {
+                status: "needs_review",
+                reviewExpiresAt: computeReviewExpiresAt(),
+                // No retry hint here — we don't know whether the original
+                // upload failed via TMDB error or not_found. The reconciler
+                // will only retry rows whose tmdbRetryAfter is set.
+              }),
+            },
             include: { nzbFile: { include: { movie: true } } },
           });
 
-          return { conflict: false as const, job };
+          return { conflict: false as const, job, reuseNeedsReview };
         }, { isolationLevel: "Serializable" });
       } catch (err: any) {
         if (err?.code === "P2034" || err?.code === "40001") {
@@ -475,6 +577,11 @@ router.post("/request", async (req: AuthRequest, res: Response) => {
           return;
         }
         throw err;
+      }
+
+      if ("missing" in reuseResult) {
+        res.status(404).json({ error: "NZB-Datei wurde inzwischen entfernt." });
+        return;
       }
 
       if (reuseResult.conflict) {
@@ -486,17 +593,29 @@ router.post("/request", async (req: AuthRequest, res: Response) => {
         return;
       }
 
-      console.log(`[nzb-request] Reusing existing NzbFile ${hash.slice(0, 12)}... → new job ${reuseResult.job.id}`);
+      const reuseNeedsReview = reuseResult.reuseNeedsReview;
+
+      if (reuseNeedsReview) {
+        console.log(
+          `[nzb-request] Reuse needs_review NzbFile ${hash.slice(0, 12)}... → new job ${reuseResult.job.id} (needs_review)`
+        );
+      } else {
+        console.log(`[nzb-request] Reusing existing NzbFile ${hash.slice(0, 12)}... → new job ${reuseResult.job.id}`);
+      }
 
       // Ensure NZB exists on NZB service (may have been imported without it)
       storeNzbInService(hash, nzbContent).catch((err) => {
         console.error(`[nzb-request] Unexpected error storing NZB: ${err}`);
       });
 
-      res.status(201).json({ job: serializeJob(reuseResult.job), reused: true });
+      res.status(201).json({
+        job: serializeJob(reuseResult.job),
+        reused: true,
+        needsReview: reuseNeedsReview,
+      });
 
-      // Trigger auto-provisioner
-      if (process.env.AUTO_PROVISION !== "false") {
+      // Trigger auto-provisioner — but skip needs_review jobs.
+      if (!reuseNeedsReview && process.env.AUTO_PROVISION !== "false") {
         import("../lib/provisioner.js").then(({ provisionDownload }) => {
           provisionDownload(reuseResult.job.id).catch((err) => {
             console.error("[nzb-request] Auto-provision failed:", err);
@@ -512,13 +631,30 @@ router.post("/request", async (req: AuthRequest, res: Response) => {
     const effectiveFilename = filename || `${title}.nzb`;
     const parsed = parseNzbName(effectiveFilename);
 
-    // --- Resolve movie via TMDB (with fallback) ---
+    // --- Resolve movie via TMDB (or mark for review) ---
     const movieResolution = await resolveMovieFromTmdb(parsed.title, parsed.year, title);
 
+    // TMDB is completely disabled (no API key configured). This is a server
+    // misconfiguration, not a transient or "no match" condition — fail hard
+    // so the ops team notices.
+    if (movieResolution.source === "tmdb-disabled") {
+      res.status(503).json({
+        error: "TMDB-Matching ist nicht verfügbar — Server-Konfiguration fehlt.",
+        reason: "tmdb_disabled",
+        hint: "Der Administrator muss TMDB_API_KEY setzen.",
+      });
+      return;
+    }
+
+    const isNeedsReview = movieResolution.source === "needs-review";
+
     // --- Create NzbMovie (or reuse existing) + NzbFile + DownloadJob in one transaction ---
+    // For needs-review uploads, NzbMovie is skipped entirely and NzbFile is created
+    // with movieId=null. The DownloadJob is still created so the user sees it on the
+    // downloads page, but it enters status='needs_review' and is not provisioned.
     const result = await prisma.$transaction(async (tx) => {
-      let movieId: string;
-      let movie;
+      let movieId: string | null = null;
+      let movie: { id: string; titleEn: string } | null = null;
 
       if (movieResolution.source === "tmdb-found") {
         // Atomic reuse-or-create on the tmdbId unique constraint.
@@ -560,17 +696,9 @@ router.post("/request", async (req: AuthRequest, res: Response) => {
           }
         }
         movieId = movie.id;
-      } else {
-        // Fallback — no TMDB data available
-        movie = await tx.nzbMovie.create({
-          data: {
-            titleDe: movieResolution.titleDe,
-            titleEn: movieResolution.titleEn,
-            year: movieResolution.year,
-          },
-        });
-        movieId = movie.id;
       }
+      // else: needs-review — NzbMovie is intentionally not created. The user must
+      // assign a movie via POST /downloads/jobs/:id/assign-movie before the job runs.
 
       const nzbFile = await tx.nzbFile.create({
         data: {
@@ -589,18 +717,39 @@ router.post("/request", async (req: AuthRequest, res: Response) => {
         data: {
           nzbFileId: nzbFile.id,
           userId: req.user?.userId || null,
+          // needs_review jobs wait for manual assignment or background TMDB retry.
+          // The reconciler will fail and clean them up after reviewExpiresAt.
+          ...(isNeedsReview && {
+            status: "needs_review",
+            reviewExpiresAt: computeReviewExpiresAt(),
+            // Only schedule a background retry for transient TMDB errors.
+            // 'not-found' is a definitive answer — no automatic retry, the user
+            // must intervene manually.
+            ...(movieResolution.reason === "error" && {
+              tmdbRetryAfter: computeInitialTmdbRetryAfter(),
+            }),
+          }),
         },
       });
 
       return { movie, nzbFile, job };
     });
 
-    console.log(
-      `[nzb-request] Created: movie=${result.movie.id} file=${result.nzbFile.id} job=${result.job.id} ` +
-      `"${title}" (${parsed.resolution || "unknown"})`
-    );
+    if (isNeedsReview) {
+      console.log(
+        `[nzb-request] Created (needs_review): file=${result.nzbFile.id} job=${result.job.id} ` +
+        `"${title}" (${parsed.resolution || "unknown"})`
+      );
+    } else {
+      console.log(
+        `[nzb-request] Created: movie=${result.movie?.id} file=${result.nzbFile.id} job=${result.job.id} ` +
+        `"${title}" (${parsed.resolution || "unknown"})`
+      );
+    }
 
     // --- Store NZB in NZB service (non-blocking) ---
+    // We always store the file, even for needs_review uploads — the assignment
+    // step doesn't re-upload it, it just links it to a movie.
     storeNzbInService(hash, nzbContent).catch((err) => {
       console.error(`[nzb-request] Unexpected error storing NZB: ${err}`);
     });
@@ -616,10 +765,15 @@ router.post("/request", async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    res.status(201).json({ job: serializeJob(fullJob), reused: false });
+    res.status(201).json({
+      job: serializeJob(fullJob),
+      reused: false,
+      needsReview: isNeedsReview,
+    });
 
-    // Trigger auto-provisioner
-    if (process.env.AUTO_PROVISION !== "false") {
+    // Trigger auto-provisioner — but NOT for needs_review jobs.
+    // They wait until a movie is manually assigned (or auto-retry succeeds).
+    if (!isNeedsReview && process.env.AUTO_PROVISION !== "false") {
       import("../lib/provisioner.js").then(({ provisionDownload }) => {
         provisionDownload(result.job.id).catch((err) => {
           console.error("[nzb-request] Auto-provision failed:", err);
@@ -716,6 +870,22 @@ router.patch("/jobs/:id/status", async (req: AuthRequest, res: Response) => {
 
     if (!currentJob) {
       res.status(404).json({ error: "Download-Job nicht gefunden." });
+      return;
+    }
+
+    // needs_review jobs must not be transitioned via PATCH.
+    // The only valid transitions out of needs_review are:
+    //   - needs_review → queued  via POST /downloads/jobs/:id/assign-movie (S02)
+    //   - needs_review → expired via the reconciler cleanup loop           (S02)
+    // Allowing PATCH would let a client bypass the assign flow (landing a job in
+    // queued without a movie) or increment the broken counter on an upload that
+    // never actually ran.
+    if (currentJob.status === "needs_review") {
+      res.status(409).json({
+        error: "needs_review Jobs können nicht per PATCH geändert werden.",
+        reason: "needs_review",
+        hint: "Nutze POST /downloads/jobs/:id/assign-movie um eine TMDB-Zuordnung zu setzen.",
+      });
       return;
     }
 
@@ -1138,6 +1308,18 @@ router.post("/jobs/:id/provision", async (req: AuthRequest, res: Response) => {
     if (job.status !== "queued") {
       res.status(422).json({
         error: `Job kann nur aus Status 'queued' provisioniert werden (aktuell: ${job.status}).`,
+      });
+      return;
+    }
+
+    // Defensive: a queued job must have a movieId. If something landed a
+    // needs_review NzbFile in queued state without going through assign-movie,
+    // abort before spinning up a VPS.
+    if (!job.nzbFile.movieId || !job.nzbFile.movie) {
+      res.status(409).json({
+        error: "NZB-Datei wartet auf manuelle Film-Zuordnung.",
+        reason: "needs_review",
+        hint: "Ordne der NZB einen Film zu, bevor der Download provisioniert werden kann.",
       });
       return;
     }

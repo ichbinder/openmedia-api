@@ -1,8 +1,25 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import request from "supertest";
 import { createApp } from "../app.js";
 import { prisma } from "../test/setup.js";
 import { hashToken, TOKEN_PREFIX } from "../lib/api-token.js";
+
+// Mock TMDB so the /downloads/request integration test below doesn't hit
+// the real client (which returns "disabled" without a TMDB_API_KEY).
+vi.mock("../lib/tmdb.js", () => ({
+  searchTmdbMovie: vi.fn().mockResolvedValue({
+    status: "found",
+    movie: {
+      tmdbId: 999_002,
+      imdbId: "tt9990002",
+      titleDe: "Token Auth Movie",
+      titleEn: "Token Auth Movie",
+      description: "Mock for API token auth tests.",
+      year: 2024,
+      posterPath: "/mock-poster.jpg",
+    },
+  }),
+}));
 
 const app = createApp();
 
