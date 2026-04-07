@@ -13,6 +13,7 @@ import { exec } from "node:child_process";
 import prisma from "./prisma.js";
 import { isHetznerConfigured, createServer, generateCloudInit, type UsenetServer } from "./hetzner.js";
 import { parseUsenetServersFromEnv } from "./usenet-config.js";
+import { markJobFailed } from "./job-failure.js";
 import { addMapping } from "./caddy-mapping.js";
 
 type ProvisionMode = "hetzner" | "local" | "false";
@@ -74,10 +75,7 @@ async function provisionHetznerVPS(job: any): Promise<void> {
   if (!isHetznerConfigured()) {
     const error = "AUTO_PROVISION=hetzner but HETZNER_API_TOKEN is not configured";
     console.error(`[provision] ${error}`);
-    await prisma.downloadJob.updateMany({
-      where: { id: job.id, status: "provisioning" },
-      data: { status: "failed", error },
-    });
+    await markJobFailed({ jobId: job.id, error, source: "provision", expectedStatus: "provisioning" });
     return;
   }
 
@@ -91,10 +89,7 @@ async function provisionHetznerVPS(job: any): Promise<void> {
   if (missing.length > 0) {
     const error = `Missing config: ${missing.join(", ")}`;
     console.error(`[provision] ${error}`);
-    await prisma.downloadJob.updateMany({
-      where: { id: job.id, status: "provisioning" },
-      data: { status: "failed", error },
-    });
+    await markJobFailed({ jobId: job.id, error, source: "provision", expectedStatus: "provisioning" });
     return;
   }
 
@@ -156,10 +151,7 @@ async function provisionHetznerVPS(job: any): Promise<void> {
   } catch (err: any) {
     const error = `Hetzner VPS creation failed: ${err.message}`;
     console.error(`[provision] ${error}`);
-    await prisma.downloadJob.updateMany({
-      where: { id: job.id, status: "provisioning" },
-      data: { status: "failed", error },
-    });
+    await markJobFailed({ jobId: job.id, error, source: "provision", expectedStatus: "provisioning" });
   }
 }
 
@@ -197,10 +189,12 @@ async function provisionLocalDocker(job: any): Promise<void> {
   exec(dockerCmd, (err, stdout, stderr) => {
     if (err) {
       console.error(`[provision] Docker run failed:`, stderr || err.message);
-      prisma.downloadJob.updateMany({
-        where: { id: job.id, status: "provisioning" },
-        data: { status: "failed", error: `Container start failed: ${stderr || err.message}` },
-      }).catch((e) => console.error("[provision] Status update failed:", e));
+      markJobFailed({
+        jobId: job.id,
+        error: `Container start failed: ${stderr || err.message}`,
+        source: "provision",
+        expectedStatus: "provisioning",
+      }).catch((e) => console.error("[provision] markJobFailed failed:", e));
       return;
     }
 
