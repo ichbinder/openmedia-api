@@ -166,9 +166,12 @@ describe("retryTmdbForPendingReviews", () => {
     expect(mockProvisionDownload).toHaveBeenCalledWith(jobId);
   });
 
-  it("bumps retry count and schedules next attempt on not_found", async () => {
+  it("bumps retry count and schedules next attempt at exactly 60s on first not_found", async () => {
     const user = await createUser();
-    const past = new Date(Date.now() - 1000);
+    // Fixed `now` so we can assert the scheduled delay exactly — catches any
+    // regression of the backoff off-by-one CodeRabbit + Greptile flagged.
+    const now = new Date("2026-06-01T12:00:00.000Z");
+    const past = new Date(now.getTime() - 1000);
 
     const { jobId } = await createNeedsReviewJob({
       userId: user.id,
@@ -181,8 +184,7 @@ describe("retryTmdbForPendingReviews", () => {
     mockSearchTmdbMovie.mockResolvedValueOnce({ status: "not_found" });
 
     const result = emptyResult();
-    const before = Date.now();
-    await retryTmdbForPendingReviews(result);
+    await retryTmdbForPendingReviews(result, now);
 
     expect(result.tmdbRetried).toBe(1);
     expect(result.tmdbAutoAssigned).toBe(0);
@@ -190,9 +192,46 @@ describe("retryTmdbForPendingReviews", () => {
     const job = await prisma.downloadJob.findUniqueOrThrow({ where: { id: jobId } });
     expect(job.status).toBe("needs_review");
     expect(job.tmdbRetryCount).toBe(1);
-    // Next retry scheduled ~5min in the future (index 1 in backoff schedule)
-    expect(job.tmdbRetryAfter).not.toBeNull();
-    expect(job.tmdbRetryAfter!.getTime()).toBeGreaterThan(before);
+    // First retry must land exactly 60 seconds in the future (BACKOFF[0]),
+    // NOT 5 minutes (BACKOFF[1]). Strict equality guards the off-by-one.
+    expect(job.tmdbRetryAfter?.toISOString()).toBe(
+      new Date(now.getTime() + 60_000).toISOString()
+    );
+  });
+
+  it("applies the full backoff schedule across retry counts 1-4", async () => {
+    // Sweep the schedule: (countBefore, expectedDelayMs)
+    const cases: Array<[number, number]> = [
+      [0, 60 * 1000],         // 1st failure → BACKOFF[0] = 60s
+      [1, 5 * 60 * 1000],     // 2nd failure → BACKOFF[1] = 5min
+      [2, 30 * 60 * 1000],    // 3rd failure → BACKOFF[2] = 30min
+      [3, 2 * 60 * 60 * 1000], // 4th failure → BACKOFF[3] = 2h
+    ];
+
+    for (const [countBefore, expectedDelayMs] of cases) {
+      const user = await createUser();
+      const now = new Date("2026-06-01T12:00:00.000Z");
+      const past = new Date(now.getTime() - 1000);
+
+      const { jobId } = await createNeedsReviewJob({
+        userId: user.id,
+        hash: `retry-sweep-${countBefore}-` + Date.now(),
+        originalFilename: "Sweep.nzb",
+        tmdbRetryAfter: past,
+        tmdbRetryCount: countBefore,
+      });
+
+      mockSearchTmdbMovie.mockResolvedValueOnce({ status: "not_found" });
+
+      const result = emptyResult();
+      await retryTmdbForPendingReviews(result, now);
+
+      const job = await prisma.downloadJob.findUniqueOrThrow({ where: { id: jobId } });
+      expect(job.tmdbRetryCount).toBe(countBefore + 1);
+      expect(job.tmdbRetryAfter?.toISOString()).toBe(
+        new Date(now.getTime() + expectedDelayMs).toISOString()
+      );
+    }
   });
 
   it("gives up after MAX_TMDB_RETRIES reached", async () => {

@@ -3,6 +3,14 @@ import request from "supertest";
 import { createApp } from "../app.js";
 import { prisma } from "../test/setup.js";
 
+// Mock the provisioner so the fire-and-forget provisionDownload() call after
+// the response doesn't hit real side effects. AUTO_PROVISION=false in the
+// test env already guards against this, but the explicit mock makes the
+// test's isolation intent visible and protects against future env changes.
+vi.mock("../lib/provisioner.js", () => ({
+  provisionDownload: vi.fn().mockResolvedValue(undefined),
+}));
+
 // Mock TMDB — the assign flow hits searchTmdbMovieById with the user-picked
 // tmdbId. Default response is "found" so most tests just work; individual
 // tests override with mockResolvedValueOnce for not_found/error/disabled.
