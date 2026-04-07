@@ -389,6 +389,9 @@ router.post("/request", async (req: AuthRequest, res: Response) => {
     });
 
     if (existingFile) {
+      // --- Check if NzbFile is marked as broken (≥3 failures) ---
+      // Note: if the file is already on S3, broken status is irrelevant —
+      // the user can still stream it. So we check S3 first.
       // --- Check if file is already on S3 (no download needed) ---
       if (existingFile.s3Key) {
         try {
@@ -426,6 +429,22 @@ router.post("/request", async (req: AuthRequest, res: Response) => {
           // S3 not configured or unreachable — continue with download as fallback
           console.warn(`[nzb-request] S3 check failed: ${err.message} — continuing with download`);
         }
+      }
+
+      // --- Reject broken NzbFiles (≥3 failures) ---
+      // The file isn't on S3 and is known to be broken. Don't waste a VPS.
+      if (existingFile.status === "broken") {
+        console.log(
+          `[nzb-request] Rejected broken NZB: ${hash.slice(0, 12)}... (${existingFile.failedAttempts} failures)`
+        );
+        res.status(410).json({
+          error: "Diese NZB-Datei ist als kaputt markiert.",
+          reason: existingFile.brokenReason || `Download ${existingFile.failedAttempts}x fehlgeschlagen.`,
+          failedAttempts: existingFile.failedAttempts,
+          movie: existingFile.movie,
+          hint: "Bitte suche eine andere NZB-Version dieses Films.",
+        });
+        return;
       }
 
       // File already known — atomic check-and-create inside a transaction
