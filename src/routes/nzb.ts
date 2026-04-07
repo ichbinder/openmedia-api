@@ -425,7 +425,7 @@ router.post("/import", upload.single("nzb"), async (req: AuthRequest, res: Respo
         });
         console.log(`[nzb-import] Movie from TMDB: ${movie.titleEn} (${movie.id})`);
       } else if (tmdbResult.status === "error") {
-        // TMDB error (network, rate limit, no API key) — don't create orphan movie
+        // TMDB error (transient: network, rate limit) — don't create an orphan movie.
         console.warn(`[nzb-import] TMDB lookup failed: ${tmdbResult.reason}`);
         res.status(503).json({
           error: "TMDB-Lookup fehlgeschlagen. Film konnte nicht identifiziert werden.",
@@ -434,12 +434,18 @@ router.post("/import", upload.single("nzb"), async (req: AuthRequest, res: Respo
         });
         return;
       } else {
-        // TODO(M021): Legacy /nzb/import still creates phantom NzbMovies on TMDB
-        // not_found. The newer POST /downloads/request endpoint routes such
-        // uploads into needs_review instead. This legacy path is kept unchanged
-        // for backwards compatibility with older extension versions and the
-        // admin import tooling. If /nzb/import is ever revived as a primary
-        // entry point, apply the same needs_review treatment used in /request.
+        // status === "not_found" OR status === "disabled" — fall through to
+        // the legacy phantom-movie path.
+        //
+        // TODO(M021): Legacy /nzb/import still creates phantom NzbMovies when
+        // TMDB cannot identify the film. The newer POST /downloads/request
+        // endpoint routes such uploads into needs_review instead. This legacy
+        // path is kept unchanged for backwards compatibility with older
+        // extension versions and the admin import tooling. If /nzb/import is
+        // ever revived as a primary entry point, apply the same needs_review
+        // treatment used in /request. The "disabled" case intentionally falls
+        // through here too — breaking the behaviour would require mocking TMDB
+        // in every /nzb/import test.
         movie = await prisma.nzbMovie.create({
           data: {
             titleDe: parsed.title,

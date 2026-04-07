@@ -41,6 +41,7 @@ async function resolveMovieFromTmdb(
 ): Promise<
   | { source: "tmdb-found"; tmdb: TmdbMovieResult }
   | { source: "needs-review"; reason: "not-found" | "error"; errorDetail?: string }
+  | { source: "tmdb-disabled"; reason: string }
 > {
   // Use parsed title if available, fallback to user-supplied title
   const searchTitle = parsedTitle || fallbackTitle;
@@ -51,6 +52,13 @@ async function resolveMovieFromTmdb(
   }
 
   const result = await searchTmdbMovie(searchTitle, parsedYear);
+
+  if (result.status === "disabled") {
+    console.error(
+      `[matching] TMDB is disabled (${result.reason}) — cannot process upload`
+    );
+    return { source: "tmdb-disabled", reason: result.reason };
+  }
 
   if (result.status === "error") {
     console.warn(
@@ -80,14 +88,16 @@ const NZB_API_URL = process.env.NZB_API_URL || "http://localhost:4100";
 // Valid status transitions for download jobs
 // ---------------------------------------------------------------------------
 
-const VALID_STATUSES = ["needs_review", "queued", "provisioning", "downloading", "uploading", "completed", "failed"] as const;
+const VALID_STATUSES = ["needs_review", "queued", "provisioning", "downloading", "uploading", "completed", "failed", "expired"] as const;
 type JobStatus = (typeof VALID_STATUSES)[number];
 
 /** Map of allowed status transitions: current → allowed next statuses */
 const STATUS_TRANSITIONS: Record<string, JobStatus[]> = {
   // needs_review → queued (movie was assigned manually or via background TMDB retry)
-  // needs_review → failed (review window expired without assignment)
-  needs_review: ["queued", "failed"],
+  // needs_review → expired (review window elapsed without assignment — distinct
+  //                 from 'failed' because no download actually failed, so the
+  //                 NzbFile's failedAttempts counter must NOT be incremented)
+  needs_review: ["queued", "expired"],
   queued: ["provisioning", "failed"],
   provisioning: ["downloading", "failed"],
   downloading: ["uploading", "failed"],
@@ -95,6 +105,7 @@ const STATUS_TRANSITIONS: Record<string, JobStatus[]> = {
   // Terminal states — no transitions out
   completed: [],
   failed: [],
+  expired: [],
 };
 
 function isValidTransition(from: string, to: string): boolean {
@@ -622,6 +633,19 @@ router.post("/request", async (req: AuthRequest, res: Response) => {
 
     // --- Resolve movie via TMDB (or mark for review) ---
     const movieResolution = await resolveMovieFromTmdb(parsed.title, parsed.year, title);
+
+    // TMDB is completely disabled (no API key configured). This is a server
+    // misconfiguration, not a transient or "no match" condition — fail hard
+    // so the ops team notices.
+    if (movieResolution.source === "tmdb-disabled") {
+      res.status(503).json({
+        error: "TMDB-Matching ist nicht verfügbar — Server-Konfiguration fehlt.",
+        reason: "tmdb_disabled",
+        hint: "Der Administrator muss TMDB_API_KEY setzen.",
+      });
+      return;
+    }
+
     const isNeedsReview = movieResolution.source === "needs-review";
 
     // --- Create NzbMovie (or reuse existing) + NzbFile + DownloadJob in one transaction ---
@@ -846,6 +870,22 @@ router.patch("/jobs/:id/status", async (req: AuthRequest, res: Response) => {
 
     if (!currentJob) {
       res.status(404).json({ error: "Download-Job nicht gefunden." });
+      return;
+    }
+
+    // needs_review jobs must not be transitioned via PATCH.
+    // The only valid transitions out of needs_review are:
+    //   - needs_review → queued  via POST /downloads/jobs/:id/assign-movie (S02)
+    //   - needs_review → expired via the reconciler cleanup loop           (S02)
+    // Allowing PATCH would let a client bypass the assign flow (landing a job in
+    // queued without a movie) or increment the broken counter on an upload that
+    // never actually ran.
+    if (currentJob.status === "needs_review") {
+      res.status(409).json({
+        error: "needs_review Jobs können nicht per PATCH geändert werden.",
+        reason: "needs_review",
+        hint: "Nutze POST /downloads/jobs/:id/assign-movie um eine TMDB-Zuordnung zu setzen.",
+      });
       return;
     }
 
@@ -1268,6 +1308,18 @@ router.post("/jobs/:id/provision", async (req: AuthRequest, res: Response) => {
     if (job.status !== "queued") {
       res.status(422).json({
         error: `Job kann nur aus Status 'queued' provisioniert werden (aktuell: ${job.status}).`,
+      });
+      return;
+    }
+
+    // Defensive: a queued job must have a movieId. If something landed a
+    // needs_review NzbFile in queued state without going through assign-movie,
+    // abort before spinning up a VPS.
+    if (!job.nzbFile.movieId || !job.nzbFile.movie) {
+      res.status(409).json({
+        error: "NZB-Datei wartet auf manuelle Film-Zuordnung.",
+        reason: "needs_review",
+        hint: "Ordne der NZB einen Film zu, bevor der Download provisioniert werden kann.",
       });
       return;
     }
