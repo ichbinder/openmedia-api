@@ -51,12 +51,27 @@ export async function provisionDownload(jobId: string): Promise<void> {
 
   // Defensive: NzbFile without movieId means the upload is still in review.
   // The /request path should never route such jobs here, but if something slips
-  // through (e.g. manual DB edit), skip cleanly rather than crash or start a
-  // download without a movie context.
+  // through (e.g. manual DB edit) we must not start a download without a movie
+  // context AND we must not leave the job stuck in 'queued' — otherwise the
+  // reconciler would eventually mark it stale and bump failedAttempts.
+  //
+  // Instead, flip it back to 'needs_review' with a clear error so it shows up
+  // in the correct UI section and can be assigned properly.
   if (!job.nzbFile.movieId || !job.nzbFile.movie) {
-    console.log(
-      `[provision] Skipping job ${jobId}: NzbFile ${job.nzbFile.hash.slice(0, 12)}... has no movie (needs_review)`
+    console.warn(
+      `[provision] Correcting job ${jobId}: NzbFile ${job.nzbFile.hash.slice(0, 12)}... has no movie → reverting to needs_review`
     );
+    try {
+      await prisma.downloadJob.update({
+        where: { id: jobId },
+        data: {
+          status: "needs_review",
+          error: "Job reached provisioner without a movie assignment — reverted to needs_review.",
+        },
+      });
+    } catch (err: any) {
+      console.error(`[provision] Failed to revert job ${jobId} to needs_review: ${err.message}`);
+    }
     return;
   }
 

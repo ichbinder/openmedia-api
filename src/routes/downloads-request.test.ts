@@ -488,6 +488,39 @@ describe("POST /downloads/request", () => {
     expect(res.body.job.nzbFile.movieId).toBeNull();
   });
 
+  it("antwortet mit 503 wenn TMDB disabled ist (Server-Misconfig)", async () => {
+    const tmdbModule = await import("../lib/tmdb.js");
+    vi.mocked(tmdbModule.searchTmdbMovie).mockResolvedValueOnce({
+      status: "disabled",
+      reason: "TMDB_API_KEY is not configured",
+    });
+
+    const NZB = `<?xml version="1.0"?><nzb xmlns="http://www.newzbin.com/DTD/2003/nzb"><file poster="d@x.com" date="1" subject="Disabled.Test [1/1] &quot;d.rar&quot; yEnc"><groups><group>g</group></groups><segments><segment bytes="1" number="1">disabled@b.com</segment></segments></file></nzb>`;
+
+    // Snapshot counts — nothing should be persisted when TMDB is disabled
+    const movieCountBefore = await prisma.nzbMovie.count();
+    const fileCountBefore = await prisma.nzbFile.count();
+
+    const res = await request(app)
+      .post("/downloads/request")
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        nzbContent: NZB,
+        title: "Disabled Test",
+        filename: "Disabled.Test.2024.nzb",
+      });
+
+    expect(res.status).toBe(503);
+    expect(res.body.reason).toBe("tmdb_disabled");
+    expect(res.body.hint).toContain("TMDB_API_KEY");
+
+    // Verify NO DB side effects — neither NzbMovie nor NzbFile was created
+    const movieCountAfter = await prisma.nzbMovie.count();
+    const fileCountAfter = await prisma.nzbFile.count();
+    expect(movieCountAfter).toBe(movieCountBefore);
+    expect(fileCountAfter).toBe(fileCountBefore);
+  });
+
   it("erstellt KEINEN tmdbRetryAfter bei not_found (definitive Antwort)", async () => {
     const tmdbModule = await import("../lib/tmdb.js");
     vi.mocked(tmdbModule.searchTmdbMovie).mockResolvedValueOnce({ status: "not_found" });
