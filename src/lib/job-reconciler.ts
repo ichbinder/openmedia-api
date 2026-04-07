@@ -1,24 +1,41 @@
 /**
- * Job Reconciler — detects and fixes stuck download jobs.
+ * Job Reconciler — detects and fixes stuck download jobs, plus manages the
+ * needs_review lifecycle added in M021/S02.
  *
  * Runs periodically to catch jobs where the VPS died without callback:
  *
- * 1. **Stale detection**: Jobs in non-terminal status (queued, provisioning,
+ * 1. **TMDB background retry**: needs_review jobs whose `tmdbRetryAfter` has
+ *    elapsed get a fresh TMDB lookup. If it succeeds, the NzbFile is auto-
+ *    assigned and all sibling needs_review jobs flip to queued. Runs before
+ *    the expiry cleanup so recoverable jobs don't get expired by accident.
+ *
+ * 2. **Expired review cleanup**: needs_review jobs whose `reviewExpiresAt`
+ *    has elapsed get transitioned to `expired` (a distinct terminal state —
+ *    NOT `failed`, so NzbFile.failedAttempts is never incremented for
+ *    uploads that never actually ran). If the cleanup leaves the NzbFile
+ *    with no remaining active jobs, no movie, and no S3 object, the NzbFile
+ *    row and the physical NZB on the service are deleted.
+ *
+ * 3. **Stale detection**: Jobs in non-terminal status (queued, provisioning,
  *    downloading, uploading) for longer than MAX_STALE_HOURS get checked.
  *
- * 2. **VPS health check**: For jobs with a Hetzner server ID, we verify
+ * 4. **VPS health check**: For jobs with a Hetzner server ID, we verify
  *    the server still exists. If not → immediate failure.
  *
- * 3. **Hard timeout**: Jobs stuck longer than HARD_TIMEOUT_HOURS are failed
+ * 5. **Hard timeout**: Jobs stuck longer than HARD_TIMEOUT_HOURS are failed
  *    regardless of VPS status (a download shouldn't take that long).
  *
- * 4. **Zombie VPS cleanup**: VPS servers without matching active jobs get deleted.
+ * 6. **Zombie VPS cleanup**: VPS servers without matching active jobs get deleted.
  */
 
 import prisma from "./prisma.js";
 import { getServer, deleteServer, listServers, isHetznerConfigured } from "./hetzner.js";
 import { removeMapping } from "./caddy-mapping.js";
 import { markJobFailed } from "./job-failure.js";
+import { searchTmdbMovie } from "./tmdb.js";
+import { parseNzbName } from "./nzb-parser.js";
+import { deleteNzbFromService } from "./nzb-service.js";
+import { provisionDownload } from "./provisioner.js";
 
 // ── Configuration ───────────────────────────────────────────
 
@@ -32,13 +49,401 @@ const HARD_TIMEOUT_HOURS = 4;
 /** Interval between reconciliation runs (ms) */
 const RECONCILE_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
+// ── TMDB background retry configuration ────────────────────
+
+/** Maximum number of TMDB retry attempts before giving up. After this, the
+ * needs_review job waits for manual assignment only. */
+const MAX_TMDB_RETRIES = 5;
+
+/** Exponential-ish backoff schedule in milliseconds. Index = retry count AFTER
+ * this attempt. 5 entries matches MAX_TMDB_RETRIES. */
+const TMDB_RETRY_BACKOFF_MS: readonly number[] = [
+  60 * 1000,          //  1 min  — first retry
+  5 * 60 * 1000,      //  5 min
+  30 * 60 * 1000,     // 30 min
+  2 * 60 * 60 * 1000, //  2 h
+  6 * 60 * 60 * 1000, //  6 h
+];
+
 // ── Reconciliation Logic ────────────────────────────────────
 
 export interface ReconcileResult {
   checked: number;
   failed: number;
   zombiesDeleted: number;
+  tmdbRetried: number;
+  tmdbAutoAssigned: number;
+  expired: number;
+  orphansDeleted: number;
   details: string[];
+}
+
+/**
+ * Retry TMDB lookups for needs_review jobs whose tmdbRetryAfter has elapsed.
+ *
+ * This handles the case where the /request endpoint got a transient TMDB
+ * error (rate limit, 5xx, network) and deferred the lookup. For each eligible
+ * NzbFile we re-run searchTmdbMovie with the parsed title. On success, the
+ * NzbFile is auto-assigned and all sibling needs_review jobs flip to queued.
+ * On failure, the retry counter increments and tmdbRetryAfter is pushed out
+ * per the backoff schedule. After MAX_TMDB_RETRIES, the job stays in
+ * needs_review and waits for manual assignment (tmdbRetryAfter = null).
+ *
+ * Processes one NzbFile per eligible job. If multiple users' jobs point at
+ * the same NzbFile, they all benefit from a single successful retry.
+ *
+ * Safe to call concurrently — CAS + transaction guards in the inner updates.
+ */
+export async function retryTmdbForPendingReviews(
+  result: ReconcileResult,
+  now: Date = new Date(),
+): Promise<void> {
+  const eligibleJobs = await prisma.downloadJob.findMany({
+    where: {
+      status: "needs_review",
+      tmdbRetryAfter: { not: null, lte: now },
+      tmdbRetryCount: { lt: MAX_TMDB_RETRIES },
+    },
+    include: {
+      nzbFile: { select: { id: true, hash: true, originalFilename: true, movieId: true } },
+    },
+  });
+
+  // Dedupe by NzbFile — if multiple needs_review jobs share a hash, we only
+  // run TMDB once per hash. The flip below will pick up all of them.
+  const seenFiles = new Set<string>();
+
+  for (const job of eligibleJobs) {
+    if (seenFiles.has(job.nzbFileId)) continue;
+    seenFiles.add(job.nzbFileId);
+    result.tmdbRetried++;
+
+    const hash = job.nzbFile.hash.slice(0, 12);
+
+    // Race: the NzbFile was already assigned between the query and this
+    // iteration (manual assign-movie, or a concurrent retry tick). Just
+    // flip this job to queued — the NzbFile already has a movieId.
+    if (job.nzbFile.movieId !== null) {
+      await flipNeedsReviewJobsToQueued(job.nzbFileId);
+      const msg = `TMDB retry skipped: NzbFile ${hash}... already assigned — flipped sibling jobs`;
+      result.details.push(msg);
+      console.log(`[reconciler] ${msg}`);
+      continue;
+    }
+
+    const parsed = parseNzbName(job.nzbFile.originalFilename);
+    const tmdbResult = await searchTmdbMovie(parsed.title, parsed.year);
+
+    if (tmdbResult.status === "found") {
+      // Success — auto-assign the NzbFile and flip all sibling jobs
+      const assigned = await assignMovieToNzbFile(job.nzbFileId, tmdbResult.movie);
+      if (assigned) {
+        result.tmdbAutoAssigned++;
+        const msg = `TMDB retry success: hash ${hash}... → auto-assigned to TMDB ${tmdbResult.movie.tmdbId} (${tmdbResult.movie.titleEn})`;
+        result.details.push(msg);
+        console.log(`[reconciler] ${msg}`);
+      }
+      continue;
+    }
+
+    // Failure (not_found, error, disabled) — bump retry counter and schedule
+    // the next attempt. Apply to ALL jobs on this NzbFile that are still in
+    // needs_review and still under the retry cap.
+    const newCount = job.tmdbRetryCount + 1;
+    const newRetryAfter =
+      newCount >= MAX_TMDB_RETRIES
+        ? null
+        : new Date(now.getTime() + TMDB_RETRY_BACKOFF_MS[Math.min(newCount, TMDB_RETRY_BACKOFF_MS.length - 1)]);
+
+    await prisma.downloadJob.updateMany({
+      where: {
+        nzbFileId: job.nzbFileId,
+        status: "needs_review",
+        tmdbRetryCount: { lt: MAX_TMDB_RETRIES },
+      },
+      data: {
+        tmdbRetryCount: { increment: 1 },
+        tmdbRetryAfter: newRetryAfter,
+      },
+    });
+
+    if (newCount >= MAX_TMDB_RETRIES) {
+      const msg = `TMDB retry max reached: hash ${hash}... — waiting for manual assign`;
+      result.details.push(msg);
+      console.log(`[reconciler] ${msg}`);
+    } else {
+      const msg = `TMDB retry failed (attempt ${newCount}/${MAX_TMDB_RETRIES}): hash ${hash}... — next at ${newRetryAfter?.toISOString()}`;
+      result.details.push(msg);
+      console.log(`[reconciler] ${msg}`);
+    }
+  }
+}
+
+/**
+ * Transaction helper: link an NzbFile to a TMDB movie (reusing or creating
+ * the NzbMovie row) and flip all sibling needs_review jobs to queued.
+ *
+ * Mirrors the logic of the POST /downloads/jobs/:id/assign-movie endpoint
+ * but without the HTTP layer or ownership checks. Used by the TMDB background
+ * retry path.
+ *
+ * Returns true if the assignment succeeded (or raced with another caller and
+ * we're now in a sensible state), false on unexpected error. The flipped
+ * jobs are then triggered for provisioning in a fire-and-forget fashion.
+ */
+async function assignMovieToNzbFile(
+  nzbFileId: string,
+  tmdb: {
+    tmdbId: number;
+    imdbId: string | null;
+    titleDe: string;
+    titleEn: string;
+    description: string;
+    year: number | null;
+    posterPath: string | null;
+  },
+): Promise<boolean> {
+  let flippedJobIds: string[] = [];
+  try {
+    flippedJobIds = await prisma.$transaction(async (tx) => {
+      // Fresh read
+      const fresh = await tx.nzbFile.findUnique({
+        where: { id: nzbFileId },
+        select: { id: true, movieId: true },
+      });
+      if (!fresh) return [];
+
+      // Race: already assigned — flip sibling jobs and return.
+      if (fresh.movieId !== null) {
+        const siblings = await tx.downloadJob.findMany({
+          where: { nzbFileId, status: "needs_review" },
+          select: { id: true },
+        });
+        await tx.downloadJob.updateMany({
+          where: { nzbFileId, status: "needs_review" },
+          data: {
+            status: "queued",
+            error: null,
+            reviewExpiresAt: null,
+            tmdbRetryAfter: null,
+          },
+        });
+        return siblings.map((j) => j.id);
+      }
+
+      // Reuse-or-create NzbMovie on tmdbId unique.
+      let movie = await tx.nzbMovie.findUnique({ where: { tmdbId: tmdb.tmdbId } });
+      if (!movie) {
+        try {
+          movie = await tx.nzbMovie.create({
+            data: {
+              tmdbId: tmdb.tmdbId,
+              imdbId: tmdb.imdbId,
+              titleDe: tmdb.titleDe,
+              titleEn: tmdb.titleEn,
+              description: tmdb.description,
+              year: tmdb.year,
+              posterPath: tmdb.posterPath,
+            },
+          });
+        } catch (err: any) {
+          if (err?.code === "P2002") {
+            movie = await tx.nzbMovie.findUniqueOrThrow({ where: { tmdbId: tmdb.tmdbId } });
+          } else {
+            throw err;
+          }
+        }
+      }
+
+      await tx.nzbFile.update({
+        where: { id: nzbFileId },
+        data: { movieId: movie.id },
+      });
+
+      const siblings = await tx.downloadJob.findMany({
+        where: { nzbFileId, status: "needs_review" },
+        select: { id: true },
+      });
+
+      await tx.downloadJob.updateMany({
+        where: { nzbFileId, status: "needs_review" },
+        data: {
+          status: "queued",
+          error: null,
+          reviewExpiresAt: null,
+          tmdbRetryAfter: null,
+        },
+      });
+
+      return siblings.map((j) => j.id);
+    });
+  } catch (err: any) {
+    console.error(`[reconciler] assignMovieToNzbFile failed for ${nzbFileId}:`, err);
+    return false;
+  }
+
+  // Fire-and-forget provisioning (outside the transaction)
+  for (const jobId of flippedJobIds) {
+    provisionDownload(jobId).catch((err) => {
+      console.error(`[reconciler] Auto-provision failed for flipped job ${jobId}:`, err);
+    });
+  }
+
+  return true;
+}
+
+/**
+ * Transaction helper: flip all needs_review jobs on an NzbFile to queued.
+ * Used when the NzbFile was already assigned by another path and we just
+ * want to catch our sibling job up.
+ */
+async function flipNeedsReviewJobsToQueued(nzbFileId: string): Promise<string[]> {
+  let flippedIds: string[] = [];
+  try {
+    flippedIds = await prisma.$transaction(async (tx) => {
+      const jobs = await tx.downloadJob.findMany({
+        where: { nzbFileId, status: "needs_review" },
+        select: { id: true },
+      });
+      await tx.downloadJob.updateMany({
+        where: { nzbFileId, status: "needs_review" },
+        data: {
+          status: "queued",
+          error: null,
+          reviewExpiresAt: null,
+          tmdbRetryAfter: null,
+        },
+      });
+      return jobs.map((j) => j.id);
+    });
+  } catch (err: any) {
+    console.error(`[reconciler] flipNeedsReviewJobsToQueued failed for ${nzbFileId}:`, err);
+    return [];
+  }
+
+  for (const jobId of flippedIds) {
+    provisionDownload(jobId).catch((err) => {
+      console.error(`[reconciler] Auto-provision failed for flipped job ${jobId}:`, err);
+    });
+  }
+  return flippedIds;
+}
+
+/**
+ * Clean up needs_review jobs whose review window has expired.
+ *
+ * For each expired job:
+ *  1. Transition to terminal status 'expired' (NOT 'failed' — we don't want
+ *     to bump NzbFile.failedAttempts for an upload that never ran).
+ *  2. If no other active jobs remain on the NzbFile AND movieId is still null
+ *     AND s3Key is null, delete the orphan NzbFile and its physical NZB file
+ *     on the nzb-service.
+ *
+ * Direct Prisma updates are used (not markJobFailed) because the latter
+ * increments failedAttempts and auto-marks the NzbFile as broken after 3
+ * failures. That's wrong semantics for expired reviews.
+ */
+export async function cleanupExpiredReviews(
+  result: ReconcileResult,
+  now: Date = new Date(),
+): Promise<void> {
+  const expiredJobs = await prisma.downloadJob.findMany({
+    where: {
+      status: "needs_review",
+      reviewExpiresAt: { not: null, lte: now },
+    },
+    include: {
+      nzbFile: { select: { id: true, hash: true, movieId: true, s3Key: true } },
+    },
+  });
+
+  for (const job of expiredJobs) {
+    const hash = job.nzbFile.hash.slice(0, 12);
+
+    // Transition to 'expired' with CAS on status to avoid racing with a
+    // concurrent assign-movie that might flip the job to queued.
+    const cas = await prisma.downloadJob.updateMany({
+      where: { id: job.id, status: "needs_review" },
+      data: {
+        status: "expired",
+        error: "Review-Zeit abgelaufen ohne manuelle Zuordnung.",
+        completedAt: now,
+      },
+    });
+
+    if (cas.count === 0) {
+      // Someone else transitioned this job — leave it alone.
+      console.log(`[reconciler] Expired review skipped: job ${job.id.slice(0, 8)} was already transitioned`);
+      continue;
+    }
+
+    result.expired++;
+    const expiredMsg = `Expired review: job ${job.id.slice(0, 8)} (${hash}...) → status=expired`;
+    result.details.push(expiredMsg);
+    console.log(`[reconciler] ${expiredMsg}`);
+
+    // Check if we should clean up the NzbFile.
+    // Any remaining active job (including other needs_review, queued, or in-flight)
+    // pins the NzbFile. Same rule for s3Key — we never delete a file that's on S3.
+    const remainingActiveJobs = await prisma.downloadJob.count({
+      where: {
+        nzbFileId: job.nzbFileId,
+        status: { in: ["needs_review", "queued", "provisioning", "downloading", "uploading", "completed"] },
+      },
+    });
+
+    if (remainingActiveJobs > 0) {
+      const keepMsg = `Cleanup: kept NzbFile ${hash}... (still has ${remainingActiveJobs} active job(s))`;
+      result.details.push(keepMsg);
+      console.log(`[reconciler] ${keepMsg}`);
+      continue;
+    }
+
+    // Re-read the NzbFile to see its latest movieId (could have been set
+    // between our initial query and now).
+    const freshFile = await prisma.nzbFile.findUnique({
+      where: { id: job.nzbFileId },
+      select: { id: true, movieId: true, s3Key: true, hash: true },
+    });
+
+    if (!freshFile) {
+      // Already gone — idempotent.
+      continue;
+    }
+
+    if (freshFile.movieId !== null) {
+      const keepMsg = `Cleanup: kept NzbFile ${hash}... (was assigned to a movie in the meantime)`;
+      result.details.push(keepMsg);
+      console.log(`[reconciler] ${keepMsg}`);
+      continue;
+    }
+
+    if (freshFile.s3Key !== null) {
+      // Defensive: needs_review NzbFiles should never have an s3Key, but if
+      // they do, don't delete.
+      const keepMsg = `Cleanup: kept NzbFile ${hash}... (has s3Key ${freshFile.s3Key})`;
+      result.details.push(keepMsg);
+      console.log(`[reconciler] ${keepMsg}`);
+      continue;
+    }
+
+    // Truly orphaned — delete the NzbFile row and the physical NZB file.
+    try {
+      await prisma.nzbFile.delete({ where: { id: freshFile.id } });
+      result.orphansDeleted++;
+      const deleteMsg = `Cleanup: deleted orphan NzbFile ${hash}... (no active jobs, no movie, no S3)`;
+      result.details.push(deleteMsg);
+      console.log(`[reconciler] ${deleteMsg}`);
+    } catch (err: any) {
+      console.error(`[reconciler] Failed to delete NzbFile ${freshFile.id}: ${err.message}`);
+      continue;
+    }
+
+    // Fire-and-forget physical file delete on the nzb-service
+    deleteNzbFromService(freshFile.hash).catch((err) => {
+      console.error(`[reconciler] Physical NZB delete failed for ${hash}: ${err.message}`);
+    });
+  }
 }
 
 /**
@@ -47,7 +452,31 @@ export interface ReconcileResult {
  * Safe to call concurrently — uses CAS updates so no double-transition.
  */
 export async function reconcileStaleJobs(): Promise<ReconcileResult> {
-  const result: ReconcileResult = { checked: 0, failed: 0, zombiesDeleted: 0, details: [] };
+  const result: ReconcileResult = {
+    checked: 0,
+    failed: 0,
+    zombiesDeleted: 0,
+    tmdbRetried: 0,
+    tmdbAutoAssigned: 0,
+    expired: 0,
+    orphansDeleted: 0,
+    details: [],
+  };
+
+  // ── M021/S02: needs_review lifecycle ───────────────────────
+  // Run TMDB retry BEFORE cleanup so recoverable jobs don't get expired
+  // by accident. Both are safe to call with the same `now` timestamp.
+  try {
+    await retryTmdbForPendingReviews(result);
+  } catch (err) {
+    console.error("[reconciler] retryTmdbForPendingReviews failed:", err);
+  }
+
+  try {
+    await cleanupExpiredReviews(result);
+  } catch (err) {
+    console.error("[reconciler] cleanupExpiredReviews failed:", err);
+  }
 
   try {
     // Find non-terminal jobs

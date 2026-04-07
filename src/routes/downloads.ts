@@ -4,9 +4,10 @@ import prisma from "../lib/prisma.js";
 import { requireAuth, type AuthRequest } from "../middleware/auth.js";
 import { parseNzbName } from "../lib/nzb-parser.js";
 import { sendToSabnzbd, getSabnzbdStatus, getSabnzbdConfigSummary } from "../lib/sabnzbd.js";
-import { searchTmdbMovie, type TmdbMovieResult } from "../lib/tmdb.js";
+import { searchTmdbMovie, searchTmdbMovieById, type TmdbMovieResult } from "../lib/tmdb.js";
 import { markJobFailed } from "../lib/job-failure.js";
 import { computeReviewExpiresAt, computeInitialTmdbRetryAfter } from "../lib/review-config.js";
+import { storeNzbInService } from "../lib/nzb-service.js";
 
 const router = Router();
 
@@ -336,61 +337,6 @@ router.post("/jobs", async (req: AuthRequest, res: Response) => {
     res.status(500).json({ error: "Fehler beim Erstellen des Download-Jobs." });
   }
 });
-
-// ---------------------------------------------------------------------------
-// NZB Storage helper — forward NZB content to the NZB service
-// ---------------------------------------------------------------------------
-
-/**
- * Store NZB content in the NZB service (nzb.nettoken.de).
- * Non-blocking: logs a warning on failure but does not throw.
- */
-async function storeNzbInService(hash: string, nzbContent: string): Promise<boolean> {
-  const serviceToken = process.env.SERVICE_API_TOKEN;
-
-  if (!serviceToken) {
-    console.warn(`[nzb-request] SERVICE_API_TOKEN not set — skipping NZB storage`);
-    return false;
-  }
-
-  try {
-    // Check if file already exists (HEAD request)
-    const headRes = await fetch(`${NZB_API_URL}/files/${hash}`, {
-      method: "HEAD",
-      headers: { Authorization: `Bearer ${serviceToken}` },
-      signal: AbortSignal.timeout(10_000),
-    });
-
-    if (headRes.ok) {
-      console.log(`[nzb-request] NZB ${hash.slice(0, 12)}... already exists on NZB service — skipping upload`);
-      return true;
-    }
-
-    // Upload the NZB content
-    const putRes = await fetch(`${NZB_API_URL}/files/${hash}`, {
-      method: "PUT",
-      headers: {
-        Authorization: `Bearer ${serviceToken}`,
-        "Content-Type": "application/x-nzb",
-      },
-      body: nzbContent,
-      signal: AbortSignal.timeout(30_000),
-    });
-
-    if (putRes.ok) {
-      const data = await putRes.json() as { size?: number };
-      console.log(`[nzb-request] Stored NZB ${hash.slice(0, 12)}... on NZB service (${data.size ?? "?"} bytes)`);
-      return true;
-    }
-
-    const errorText = await putRes.text().catch(() => "");
-    console.error(`[nzb-request] NZB service PUT failed: HTTP ${putRes.status} — ${errorText}`);
-    return false;
-  } catch (err: any) {
-    console.error(`[nzb-request] NZB service unreachable: ${err.message}`);
-    return false;
-  }
-}
 
 // ---------------------------------------------------------------------------
 // NZB Request — accept raw NZB content from browser extension
@@ -1274,6 +1220,239 @@ router.get("/jobs/:id/link", async (req: AuthRequest, res: Response) => {
   } catch (err) {
     console.error("[download-job] Link error:", err);
     res.status(500).json({ error: "Fehler beim Erstellen des Download-Links." });
+  }
+});
+
+// POST /downloads/jobs/:id/assign-movie — link a needs_review job to a TMDB movie
+//
+// Transitions the job (and all sibling jobs on the same NzbFile) from
+// needs_review → queued, then triggers the auto-provisioner in the background.
+//
+// Body: { tmdbId: number }
+//
+// Ownership: only the original uploader (job.userId === caller.userId) may assign.
+// Service tokens with null userId can only assign jobs that were themselves
+// created with null userId (so an admin token cannot hijack a user's job).
+router.post("/jobs/:id/assign-movie", async (req: AuthRequest, res: Response) => {
+  try {
+    const { tmdbId } = req.body ?? {};
+
+    // Validate tmdbId
+    if (typeof tmdbId !== "number" || !Number.isInteger(tmdbId) || tmdbId <= 0) {
+      res.status(400).json({ error: "tmdbId ist erforderlich (positive ganze Zahl)." });
+      return;
+    }
+
+    const job = await prisma.downloadJob.findUnique({
+      where: { id: String(req.params.id) },
+      include: { nzbFile: true },
+    });
+
+    if (!job) {
+      res.status(404).json({ error: "Download-Job nicht gefunden." });
+      return;
+    }
+
+    // Ownership check: caller must be the job's uploader
+    const callerId = req.user?.userId ?? null;
+    if (job.userId !== callerId) {
+      res.status(403).json({ error: "Nur der Uploader kann diesem Job einen Film zuordnen." });
+      return;
+    }
+
+    // Status check: only needs_review jobs can be assigned
+    if (job.status !== "needs_review") {
+      res.status(409).json({
+        error: `Nur Jobs im Status 'needs_review' können zugeordnet werden (aktuell: ${job.status}).`,
+        currentStatus: job.status,
+      });
+      return;
+    }
+
+    // --- TMDB lookup (outside transaction — I/O) ---
+    const tmdbResult = await searchTmdbMovieById(tmdbId);
+
+    if (tmdbResult.status === "disabled") {
+      res.status(503).json({
+        error: "TMDB-Matching ist nicht verfügbar — Server-Konfiguration fehlt.",
+        reason: "tmdb_disabled",
+      });
+      return;
+    }
+
+    if (tmdbResult.status === "error") {
+      res.status(503).json({
+        error: "TMDB-Lookup fehlgeschlagen. Bitte später erneut versuchen.",
+        reason: tmdbResult.reason,
+      });
+      return;
+    }
+
+    if (tmdbResult.status === "not_found") {
+      res.status(404).json({
+        error: `TMDB-Film mit ID ${tmdbId} nicht gefunden.`,
+        tmdbId,
+      });
+      return;
+    }
+
+    const tmdb = tmdbResult.movie;
+
+    // --- Atomic assignment inside a transaction ---
+    // Handles three races:
+    //  1. NzbFile already got a movieId (another user assigned in parallel or
+    //     the reconciler auto-assigned) → we respect that, flip only our own job.
+    //  2. NzbMovie with this tmdbId already exists → reuse it.
+    //  3. Two concurrent assigns create the same tmdbId → P2002 unique error,
+    //     we re-read the winner.
+    let result;
+    try {
+      result = await prisma.$transaction(async (tx) => {
+        // Fresh read of the NzbFile — movieId may have been set under us.
+        const freshFile = await tx.nzbFile.findUnique({
+          where: { id: job.nzbFileId },
+          select: { id: true, movieId: true, hash: true },
+        });
+
+        if (!freshFile) {
+          return { outcome: "file_missing" as const };
+        }
+
+        // Race: NzbFile was already assigned to a movie by someone else.
+        // Flip only our own job and report alreadyAssigned.
+        if (freshFile.movieId !== null) {
+          const existingMovie = await tx.nzbMovie.findUniqueOrThrow({
+            where: { id: freshFile.movieId },
+          });
+
+          // Flip our own job (CAS on status)
+          const cas = await tx.downloadJob.updateMany({
+            where: { id: job.id, status: "needs_review" },
+            data: {
+              status: "queued",
+              error: null,
+              reviewExpiresAt: null,
+              tmdbRetryAfter: null,
+            },
+          });
+
+          return {
+            outcome: "already_assigned" as const,
+            movie: existingMovie,
+            flippedJobIds: cas.count > 0 ? [job.id] : [],
+          };
+        }
+
+        // Reuse-or-create the NzbMovie on the tmdbId unique constraint.
+        let movie = await tx.nzbMovie.findUnique({ where: { tmdbId: tmdb.tmdbId } });
+
+        if (!movie) {
+          try {
+            movie = await tx.nzbMovie.create({
+              data: {
+                tmdbId: tmdb.tmdbId,
+                imdbId: tmdb.imdbId,
+                titleDe: tmdb.titleDe,
+                titleEn: tmdb.titleEn,
+                description: tmdb.description,
+                year: tmdb.year,
+                posterPath: tmdb.posterPath,
+              },
+            });
+          } catch (err: any) {
+            if (err?.code === "P2002") {
+              // Race: another request created the same tmdbId concurrently.
+              movie = await tx.nzbMovie.findUniqueOrThrow({ where: { tmdbId: tmdb.tmdbId } });
+            } else {
+              throw err;
+            }
+          }
+        }
+
+        // Link NzbFile → movie
+        await tx.nzbFile.update({
+          where: { id: freshFile.id },
+          data: { movieId: movie.id },
+        });
+
+        // Flip ALL needs_review jobs on this NzbFile to queued (could be more
+        // than one if multiple users uploaded the same hash).
+        const flipped = await tx.downloadJob.findMany({
+          where: { nzbFileId: freshFile.id, status: "needs_review" },
+          select: { id: true },
+        });
+
+        await tx.downloadJob.updateMany({
+          where: { nzbFileId: freshFile.id, status: "needs_review" },
+          data: {
+            status: "queued",
+            error: null,
+            reviewExpiresAt: null,
+            tmdbRetryAfter: null,
+          },
+        });
+
+        return {
+          outcome: "assigned" as const,
+          movie,
+          flippedJobIds: flipped.map((j) => j.id),
+        };
+      });
+    } catch (err: any) {
+      if (err?.code === "P2034" || err?.code === "40001") {
+        res.status(409).json({ error: "Gleichzeitiger Request — bitte erneut versuchen." });
+        return;
+      }
+      throw err;
+    }
+
+    if (result.outcome === "file_missing") {
+      res.status(404).json({ error: "NZB-Datei wurde inzwischen entfernt." });
+      return;
+    }
+
+    // Log outcome
+    if (result.outcome === "already_assigned") {
+      console.log(
+        `[assign] Race detected: NzbFile already linked to TMDB ${result.movie.tmdbId} (${result.movie.titleEn}) — flipped only own job ${job.id.slice(0, 8)}...`
+      );
+    } else {
+      console.log(
+        `[assign] Linked NzbFile to TMDB ${result.movie.tmdbId} (${result.movie.titleEn}) — flipped ${result.flippedJobIds.length} job(s)`
+      );
+    }
+
+    // Respond before triggering provisioners
+    res.status(200).json({
+      movie: {
+        id: result.movie.id,
+        tmdbId: result.movie.tmdbId,
+        imdbId: result.movie.imdbId,
+        titleDe: result.movie.titleDe,
+        titleEn: result.movie.titleEn,
+        year: result.movie.year,
+        posterPath: result.movie.posterPath,
+      },
+      flippedCount: result.flippedJobIds.length,
+      alreadyAssigned: result.outcome === "already_assigned",
+    });
+
+    // Trigger auto-provisioner for all flipped jobs (background, best-effort).
+    // Skipped in test env via AUTO_PROVISION=false.
+    if (process.env.AUTO_PROVISION !== "false" && result.flippedJobIds.length > 0) {
+      import("../lib/provisioner.js").then(({ provisionDownload }) => {
+        for (const flippedId of result.flippedJobIds) {
+          provisionDownload(flippedId).catch((err) => {
+            console.error(`[assign] Auto-provision failed for job ${flippedId}:`, err);
+          });
+        }
+      }).catch((err) => {
+        console.error("[assign] Failed to load provisioner module:", err);
+      });
+    }
+  } catch (err: any) {
+    console.error("[assign] Error:", err);
+    res.status(500).json({ error: "Fehler beim Zuordnen des Films." });
   }
 });
 
