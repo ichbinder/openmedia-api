@@ -55,14 +55,11 @@ services:
       AUTO_PROVISION: ${AUTO_PROVISION}
       DOWNLOADER_DOCKER_IMAGE: ${DOWNLOADER_DOCKER_IMAGE}
       NZB_SERVICE_URL: ${NZB_SERVICE_URL}
+      NZB_API_URL: ${NZB_API_URL}
       API_BASE_URL: ${API_BASE_URL}
       SERVICE_API_TOKEN: ${SERVICE_API_TOKEN}
-      USENET_HOST: ${USENET_HOST}
-      USENET_PORT: ${USENET_PORT}
-      USENET_USER: ${USENET_USER}
-      USENET_PASSWORD: ${USENET_PASSWORD}
-      USENET_SSL: ${USENET_SSL}
-      USENET_CONNECTIONS: ${USENET_CONNECTIONS}
+      USENET_SERVERS: ${USENET_SERVERS}
+      TMDB_API_KEY: ${TMDB_API_KEY}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./caddy/dl-backends.map:/etc/caddy/dl-backends.map
