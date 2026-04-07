@@ -421,7 +421,12 @@ router.post("/import", upload.single("nzb"), async (req: AuthRequest, res: Respo
         });
         return;
       } else {
-        // Not found on TMDB — create movie from parsed name
+        // TODO(M021): Legacy /nzb/import still creates phantom NzbMovies on TMDB
+        // not_found. The newer POST /downloads/request endpoint routes such
+        // uploads into needs_review instead. This legacy path is kept unchanged
+        // for backwards compatibility with older extension versions and the
+        // admin import tooling. If /nzb/import is ever revived as a primary
+        // entry point, apply the same needs_review treatment used in /request.
         movie = await prisma.nzbMovie.create({
           data: {
             titleDe: parsed.title,
@@ -455,10 +460,15 @@ router.post("/import", upload.single("nzb"), async (req: AuthRequest, res: Respo
           where: { hash },
           include: { movie: true },
         });
+        // Note: existing.movie can be null now that NzbFile.movieId is nullable
+        // (needs_review uploads). Spreading null into serializeMovieWithFiles would
+        // produce a malformed movie object — guard explicitly.
         res.status(200).json({
           imported: false,
           message: "NZB-Datei existiert bereits (gleichzeitiger Import).",
-          movie: existing ? serializeMovieWithFiles({ ...existing.movie, nzbFiles: [existing] }) : null,
+          movie: existing?.movie
+            ? serializeMovieWithFiles({ ...existing.movie, nzbFiles: [existing] })
+            : null,
           nzbFile: existing ? serializeNzbFile(existing) : null,
         });
         return;

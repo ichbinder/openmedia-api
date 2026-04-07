@@ -491,16 +491,28 @@ router.post("/request", async (req: AuthRequest, res: Response) => {
         return;
       }
 
-      // The existing NzbFile may be in needs_review state (movieId=null) — that
-      // changes how we create the new job. We capture this once outside the
-      // transaction since the field doesn't mutate from underneath us during
-      // the short transaction window.
-      const reuseNeedsReview = existingFile.movieId === null;
-
-      // File already known — atomic check-and-create inside a transaction
+      // File already known — atomic check-and-create inside a transaction.
+      // We re-read the NzbFile's movieId INSIDE the transaction so a concurrent
+      // /assign-movie call (landing in S02) can't create a TOCTOU where we
+      // decide "needs_review" based on a stale null and leave a stuck job.
       let reuseResult;
       try {
         reuseResult = await prisma.$transaction(async (tx) => {
+          // Fresh read: movieId may have been set between the initial findUnique
+          // and the start of this transaction (concurrent assign-movie, reconciler
+          // TMDB retry, etc.).
+          const freshFile = await tx.nzbFile.findUnique({
+            where: { id: existingFile.id },
+            select: { id: true, movieId: true },
+          });
+
+          if (!freshFile) {
+            // Extremely unlikely — NzbFile vanished between reads. Treat as not found.
+            return { missing: true as const };
+          }
+
+          const reuseNeedsReview = freshFile.movieId === null;
+
           // Cross-user conflict: any active running download for this file blocks
           // a new job (the second user should wait for the first download to
           // finish, then they share the result via S3).
@@ -546,7 +558,7 @@ router.post("/request", async (req: AuthRequest, res: Response) => {
             include: { nzbFile: { include: { movie: true } } },
           });
 
-          return { conflict: false as const, job };
+          return { conflict: false as const, job, reuseNeedsReview };
         }, { isolationLevel: "Serializable" });
       } catch (err: any) {
         if (err?.code === "P2034" || err?.code === "40001") {
@@ -554,6 +566,11 @@ router.post("/request", async (req: AuthRequest, res: Response) => {
           return;
         }
         throw err;
+      }
+
+      if ("missing" in reuseResult) {
+        res.status(404).json({ error: "NZB-Datei wurde inzwischen entfernt." });
+        return;
       }
 
       if (reuseResult.conflict) {
@@ -564,6 +581,8 @@ router.post("/request", async (req: AuthRequest, res: Response) => {
         });
         return;
       }
+
+      const reuseNeedsReview = reuseResult.reuseNeedsReview;
 
       if (reuseNeedsReview) {
         console.log(

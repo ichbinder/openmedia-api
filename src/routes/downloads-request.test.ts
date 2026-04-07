@@ -537,7 +537,12 @@ describe("POST /downloads/request", () => {
 
   it("verhindert doppelte needs_review Jobs für denselben User+Hash", async () => {
     const tmdbModule = await import("../lib/tmdb.js");
-    vi.mocked(tmdbModule.searchTmdbMovie).mockResolvedValue({ status: "not_found" });
+    // Use mockResolvedValueOnce twice so the mock self-resets after this test,
+    // even if an earlier assertion throws. This keeps the default "found" mock
+    // intact for subsequent tests.
+    vi.mocked(tmdbModule.searchTmdbMovie)
+      .mockResolvedValueOnce({ status: "not_found" })
+      .mockResolvedValueOnce({ status: "not_found" });
 
     const NZB = `<?xml version="1.0"?><nzb xmlns="http://www.newzbin.com/DTD/2003/nzb"><file poster="dup@x.com" date="1" subject="Duplicate.Review.Test [1/1] &quot;d.rar&quot; yEnc"><groups><group>g</group></groups><segments><segment bytes="1" number="1">dup@b.com</segment></segments></file></nzb>`;
 
@@ -558,19 +563,5 @@ describe("POST /downloads/request", () => {
     expect(res2.status).toBe(409);
     expect(res2.body.existingJobId).toBe(res1.body.job.id);
     expect(res2.body.existingStatus).toBe("needs_review");
-
-    // Reset mock to avoid leaking into the next test
-    vi.mocked(tmdbModule.searchTmdbMovie).mockResolvedValue({
-      status: "found",
-      movie: {
-        tmdbId: 999_001,
-        imdbId: "tt9990001",
-        titleDe: "Test Movie 2024",
-        titleEn: "Test Movie 2024",
-        description: "Default mock movie for tests.",
-        year: 2024,
-        posterPath: "/test-poster.jpg",
-      },
-    });
   });
 });
