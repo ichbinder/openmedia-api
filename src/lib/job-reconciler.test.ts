@@ -51,17 +51,46 @@ function makeJob(overrides: Record<string, any> = {}) {
   };
 }
 
+/**
+ * Set the active-jobs mock for the stale-check path. Call this in each test
+ * that wants a specific set of active jobs returned.
+ *
+ * reconcileStaleJobs calls prisma.downloadJob.findMany three times per pass:
+ *   1. retryTmdbForPendingReviews — needs_review + tmdbRetryAfter (S02)
+ *   2. cleanupExpiredReviews     — needs_review + reviewExpiresAt (S02)
+ *   3. stale check               — queued/provisioning/downloading/uploading
+ *
+ * This helper wires findMany to an implementation that returns empty for the
+ * first two and the supplied `activeJobs` for the third.
+ */
+function mockActiveJobs(activeJobs: any[]) {
+  mockPrisma.downloadJob.findMany.mockImplementation((args: any) => {
+    const where = args?.where ?? {};
+    if (where.status === "needs_review") {
+      // Either tmdbRetryAfter (retry path) or reviewExpiresAt (cleanup path)
+      return Promise.resolve([]);
+    }
+    // The stale-check path asks for status: { in: [...] }
+    if (where.status && typeof where.status === "object" && "in" in where.status) {
+      return Promise.resolve(activeJobs);
+    }
+    return Promise.resolve([]);
+  });
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   mockPrisma.downloadJob.updateMany.mockResolvedValue({ count: 1 });
   mockListServers.mockResolvedValue([]);
   // Default: helper successfully marks job as failed
   mockMarkJobFailed.mockResolvedValue({ changed: true, failedAttempts: 1, brokenNow: false });
+  // Default: no active jobs — individual tests override via mockActiveJobs
+  mockActiveJobs([]);
 });
 
 describe("reconcileStaleJobs", () => {
   it("does nothing when no active jobs exist", async () => {
-    mockPrisma.downloadJob.findMany.mockResolvedValue([]);
+    mockActiveJobs([]);
 
     const result = await reconcileStaleJobs();
 
@@ -70,7 +99,7 @@ describe("reconcileStaleJobs", () => {
   });
 
   it("fails a provisioning job when VPS is gone", async () => {
-    mockPrisma.downloadJob.findMany.mockResolvedValue([makeJob()]);
+    mockActiveJobs([makeJob()]);
     mockGetServer.mockResolvedValue(null); // VPS not found
 
     const result = await reconcileStaleJobs();
@@ -91,7 +120,7 @@ describe("reconcileStaleJobs", () => {
     const job = makeJob({
       updatedAt: new Date(now - 5 * 60 * 60 * 1000), // 5h ago
     });
-    mockPrisma.downloadJob.findMany.mockResolvedValue([job]);
+    mockActiveJobs([job]);
 
     const result = await reconcileStaleJobs();
 
@@ -104,7 +133,7 @@ describe("reconcileStaleJobs", () => {
     const job = makeJob({
       updatedAt: new Date(now - 10 * 60 * 1000), // 10 min ago
     });
-    mockPrisma.downloadJob.findMany.mockResolvedValue([job]);
+    mockActiveJobs([job]);
     mockGetServer.mockResolvedValue({ id: 12345, status: "running" });
 
     const result = await reconcileStaleJobs();
@@ -119,7 +148,7 @@ describe("reconcileStaleJobs", () => {
       hetznerServerId: null,
       updatedAt: new Date(now - 2 * 60 * 60 * 1000), // 2h ago
     });
-    mockPrisma.downloadJob.findMany.mockResolvedValue([job]);
+    mockActiveJobs([job]);
 
     const result = await reconcileStaleJobs();
 
@@ -128,7 +157,7 @@ describe("reconcileStaleJobs", () => {
   });
 
   it("cleans up zombie VPS for completed jobs", async () => {
-    mockPrisma.downloadJob.findMany.mockResolvedValue([]);
+    mockActiveJobs([]);
     mockListServers.mockResolvedValue([
       { id: 99, name: "dl-old", labels: { "job-id": "old-job-id" } },
     ]);
@@ -142,7 +171,7 @@ describe("reconcileStaleJobs", () => {
   });
 
   it("fails a job when VPS is in 'off' status", async () => {
-    mockPrisma.downloadJob.findMany.mockResolvedValue([makeJob()]);
+    mockActiveJobs([makeJob()]);
     mockGetServer.mockResolvedValue({ id: 12345, status: "off" });
 
     const result = await reconcileStaleJobs();
