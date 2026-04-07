@@ -32,6 +32,22 @@ function serializeMovieWithFiles(movie: any) {
   return { ...movie, nzbFiles: movie.nzbFiles.map(serializeNzbFile) };
 }
 
+/**
+ * Shared serializer for the /nzb/import duplicate-detection response.
+ *
+ * NzbFile.movie is nullable since M021/S01 (needs_review uploads). Both the
+ * fast path (pre-insert duplicate check) and the race-condition path (P2002
+ * catch) use the same logic: if movie is null, return null; otherwise wrap
+ * the movie in a single-file list so the shape matches the /movies endpoint.
+ */
+function serializeDuplicateResponse(existing: { movie: unknown } & Record<string, unknown>) {
+  const movie = existing.movie as { nzbFiles?: unknown[] } | null;
+  return {
+    movie: movie ? serializeMovieWithFiles({ ...movie, nzbFiles: [existing] }) : null,
+    nzbFile: serializeNzbFile(existing),
+  };
+}
+
 // GET /nzb/movies — list all NZB movies
 router.get("/movies", async (_req: AuthRequest, res: Response) => {
   try {
@@ -368,10 +384,7 @@ router.post("/import", upload.single("nzb"), async (req: AuthRequest, res: Respo
       res.status(200).json({
         imported: false,
         message: "NZB-Datei existiert bereits.",
-        movie: existing.movie
-          ? serializeMovieWithFiles({ ...existing.movie, nzbFiles: [existing] })
-          : null,
-        nzbFile: serializeNzbFile(existing),
+        ...serializeDuplicateResponse(existing),
       });
       return;
     }
@@ -460,16 +473,12 @@ router.post("/import", upload.single("nzb"), async (req: AuthRequest, res: Respo
           where: { hash },
           include: { movie: true },
         });
-        // Note: existing.movie can be null now that NzbFile.movieId is nullable
-        // (needs_review uploads). Spreading null into serializeMovieWithFiles would
-        // produce a malformed movie object — guard explicitly.
         res.status(200).json({
           imported: false,
           message: "NZB-Datei existiert bereits (gleichzeitiger Import).",
-          movie: existing?.movie
-            ? serializeMovieWithFiles({ ...existing.movie, nzbFiles: [existing] })
-            : null,
-          nzbFile: existing ? serializeNzbFile(existing) : null,
+          ...(existing
+            ? serializeDuplicateResponse(existing)
+            : { movie: null, nzbFile: null }),
         });
         return;
       }

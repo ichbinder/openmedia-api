@@ -164,6 +164,11 @@ model DownloadJob {
 
   @@index([nzbFileId])
   @@index([status])
+  // Composite indexes for the S02 reconciler queries: expired needs_review
+  // cleanup and background TMDB retry. Both filter by status first and then
+  // by a timestamp column, so a composite index is the natural fit.
+  @@index([status, reviewExpiresAt])
+  @@index([status, tmdbRetryAfter])
   @@map("download_jobs")
 }
 
