@@ -19,14 +19,21 @@ vi.mock("./hetzner.js", () => ({
   listServers: vi.fn(() => []),
 }));
 
+// Mock job-failure helper — reconciler delegates to it
+vi.mock("./job-failure.js", () => ({
+  markJobFailed: vi.fn(),
+}));
+
 import prisma from "./prisma.js";
 import { getServer, deleteServer, listServers, isHetznerConfigured } from "./hetzner.js";
+import { markJobFailed } from "./job-failure.js";
 import { reconcileStaleJobs } from "./job-reconciler.js";
 
 const mockPrisma = prisma as any;
 const mockGetServer = getServer as any;
 const mockDeleteServer = deleteServer as any;
 const mockListServers = listServers as any;
+const mockMarkJobFailed = markJobFailed as any;
 
 function makeJob(overrides: Record<string, any> = {}) {
   const now = Date.now();
@@ -48,6 +55,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockPrisma.downloadJob.updateMany.mockResolvedValue({ count: 1 });
   mockListServers.mockResolvedValue([]);
+  // Default: helper successfully marks job as failed
+  mockMarkJobFailed.mockResolvedValue({ changed: true, failedAttempts: 1, brokenNow: false });
 });
 
 describe("reconcileStaleJobs", () => {
@@ -68,10 +77,11 @@ describe("reconcileStaleJobs", () => {
 
     expect(result.failed).toBe(1);
     expect(result.details[0]).toContain("VPS gone");
-    expect(mockPrisma.downloadJob.updateMany).toHaveBeenCalledWith(
+    expect(mockMarkJobFailed).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: "test-job-id", status: "provisioning" },
-        data: expect.objectContaining({ status: "failed" }),
+        jobId: "test-job-id",
+        source: "reconciler",
+        expectedStatus: "provisioning",
       }),
     );
   });

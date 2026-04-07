@@ -5,6 +5,7 @@ import { requireAuth, type AuthRequest } from "../middleware/auth.js";
 import { parseNzbName } from "../lib/nzb-parser.js";
 import { sendToSabnzbd, getSabnzbdStatus, getSabnzbdConfigSummary } from "../lib/sabnzbd.js";
 import { searchTmdbMovie, type TmdbMovieResult } from "../lib/tmdb.js";
+import { markJobFailed } from "../lib/job-failure.js";
 
 const router = Router();
 
@@ -840,53 +841,42 @@ router.patch("/jobs/:id/status", async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    // On failed: increment failedAttempts on NzbFile, auto-mark as broken at 3+
-    // Only count the failure if this is a real state transition (not a retry of failed→failed)
+    // On failed: handle two cases differently
+    // 1. New failure (status transition X → failed): use markJobFailed helper
+    //    which atomically transitions, increments failedAttempts, and auto-marks broken
+    // 2. Same-status update (failed → failed for progress/metadata): plain updateMany
+    //    without counter increment
     if (status === "failed") {
       const isNewFailure = currentJob.status !== "failed";
 
-      const failureResult = await prisma.$transaction(async (tx) => {
-        const casResult = await tx.downloadJob.updateMany({
-          where: { id: String(req.params.id), status: currentJob.status },
+      if (isNewFailure) {
+        // Strip status/error/completedAt from extraJobUpdate — the helper sets those
+        const { status: _s, error: _e, completedAt: _c, ...extraJobUpdate } = updateData;
+
+        const failResult = await markJobFailed({
+          jobId: String(req.params.id),
+          error: errorMsg ? String(errorMsg).slice(0, 2000) : "Job manually marked as failed",
+          source: "download-job",
+          expectedStatus: currentJob.status,
+          extraJobUpdate,
+        });
+
+        if (!failResult.changed) {
+          res.status(409).json({ error: "Status wurde zwischenzeitlich geändert (Konflikt)." });
+          return;
+        }
+      } else {
+        // Same-status update — just update fields, no counter change
+        const casResult = await prisma.downloadJob.updateMany({
+          where: { id: String(req.params.id), status: "failed" },
           data: updateData,
         });
 
         if (casResult.count === 0) {
-          return { conflict: true as const, nzbFile: null };
+          res.status(409).json({ error: "Status wurde zwischenzeitlich geändert (Konflikt)." });
+          return;
         }
-
-        // Only increment failedAttempts on a real state transition
-        const updatedNzb = isNewFailure
-          ? await tx.nzbFile.update({
-              where: { id: currentJob.nzbFileId },
-              data: { failedAttempts: { increment: 1 } },
-            })
-          : await tx.nzbFile.findUniqueOrThrow({
-              where: { id: currentJob.nzbFileId },
-            });
-
-        // Auto-mark as broken after 3 failed attempts
-        if (isNewFailure && updatedNzb.failedAttempts >= 3 && updatedNzb.status !== "broken") {
-          const count = updatedNzb.failedAttempts;
-          const reason = errorMsg
-            ? `Download ${count}x fehlgeschlagen: ${String(errorMsg).slice(0, 200)}`
-            : `Download ${count}x fehlgeschlagen`;
-          await tx.nzbFile.update({
-            where: { id: currentJob.nzbFileId },
-            data: { status: "broken", brokenReason: reason },
-          });
-          console.log(`[download-job] NZB auto-broken: ${updatedNzb.hash.slice(0, 12)}... (${count} failures)`);
-        }
-
-        return { conflict: false as const, nzbFile: updatedNzb };
-      });
-
-      if (failureResult.conflict) {
-        res.status(409).json({ error: "Status wurde zwischenzeitlich geändert (Konflikt)." });
-        return;
       }
-
-      console.log(`[download-job] Failed: ${currentJob.id} (attempt ${failureResult.nzbFile?.failedAttempts})`);
 
       const fullJob = await prisma.downloadJob.findUnique({
         where: { id: currentJob.id },

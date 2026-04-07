@@ -18,6 +18,7 @@
 import prisma from "./prisma.js";
 import { getServer, deleteServer, listServers, isHetznerConfigured } from "./hetzner.js";
 import { removeMapping } from "./caddy-mapping.js";
+import { markJobFailed } from "./job-failure.js";
 
 // ── Configuration ───────────────────────────────────────────
 
@@ -70,16 +71,14 @@ export async function reconcileStaleJobs(): Promise<ReconcileResult> {
 
       // Hard timeout — fail regardless
       if (ageHours >= HARD_TIMEOUT_HOURS) {
-        const updated = await prisma.downloadJob.updateMany({
-          where: { id: job.id, status: job.status },
-          data: {
-            status: "failed",
-            error: `Timeout: Job steckte ${ageHours.toFixed(1)}h in Status '${job.status}' fest. Automatisch abgebrochen.`,
-            completedAt: new Date(),
-          },
+        const failResult = await markJobFailed({
+          jobId: job.id,
+          error: `Timeout: Job steckte ${ageHours.toFixed(1)}h in Status '${job.status}' fest. Automatisch abgebrochen.`,
+          source: "reconciler",
+          expectedStatus: job.status,
         });
 
-        if (updated.count > 0) {
+        if (failResult.changed) {
           result.failed++;
           const msg = `Hard timeout: job ${job.id.slice(0, 8)} (${hash}...) — ${ageHours.toFixed(1)}h in ${job.status}`;
           result.details.push(msg);
@@ -95,16 +94,14 @@ export async function reconcileStaleJobs(): Promise<ReconcileResult> {
 
           if (!server) {
             // VPS is gone but job still active → fail it
-            const updated = await prisma.downloadJob.updateMany({
-              where: { id: job.id, status: job.status },
-              data: {
-                status: "failed",
-                error: `Download-Server (${job.hetznerServerId}) existiert nicht mehr. Download abgebrochen.`,
-                completedAt: new Date(),
-              },
+            const failResult = await markJobFailed({
+              jobId: job.id,
+              error: `Download-Server (${job.hetznerServerId}) existiert nicht mehr. Download abgebrochen.`,
+              source: "reconciler",
+              expectedStatus: job.status,
             });
 
-            if (updated.count > 0) {
+            if (failResult.changed) {
               result.failed++;
               const msg = `VPS gone: job ${job.id.slice(0, 8)} (${hash}...) — server ${job.hetznerServerId} not found`;
               result.details.push(msg);
@@ -112,16 +109,14 @@ export async function reconcileStaleJobs(): Promise<ReconcileResult> {
             }
           } else if (server.status === "off" || server.status === "deleting") {
             // VPS exists but is shutting down
-            const updated = await prisma.downloadJob.updateMany({
-              where: { id: job.id, status: job.status },
-              data: {
-                status: "failed",
-                error: `Download-Server ist ${server.status}. Download abgebrochen.`,
-                completedAt: new Date(),
-              },
+            const failResult = await markJobFailed({
+              jobId: job.id,
+              error: `Download-Server ist ${server.status}. Download abgebrochen.`,
+              source: "reconciler",
+              expectedStatus: job.status,
             });
 
-            if (updated.count > 0) {
+            if (failResult.changed) {
               result.failed++;
               const msg = `VPS ${server.status}: job ${job.id.slice(0, 8)} (${hash}...) — server ${job.hetznerServerId}`;
               result.details.push(msg);
@@ -136,16 +131,14 @@ export async function reconcileStaleJobs(): Promise<ReconcileResult> {
 
       // Queued jobs without VPS that are stale → provisioning probably failed silently
       if (ageHours >= STALE_CHECK_HOURS && job.status === "queued") {
-        const updated = await prisma.downloadJob.updateMany({
-          where: { id: job.id, status: "queued" },
-          data: {
-            status: "failed",
-            error: `Job blieb ${ageHours.toFixed(1)}h in 'queued' — Provisioning wurde nie gestartet.`,
-            completedAt: new Date(),
-          },
+        const failResult = await markJobFailed({
+          jobId: job.id,
+          error: `Job blieb ${ageHours.toFixed(1)}h in 'queued' — Provisioning wurde nie gestartet.`,
+          source: "reconciler",
+          expectedStatus: "queued",
         });
 
-        if (updated.count > 0) {
+        if (failResult.changed) {
           result.failed++;
           const msg = `Stale queued: job ${job.id.slice(0, 8)} (${hash}...) — ${ageHours.toFixed(1)}h`;
           result.details.push(msg);
