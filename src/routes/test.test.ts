@@ -7,45 +7,65 @@ import { prisma } from "../test/setup.js";
 
 /**
  * The production app only mounts /test routes when NODE_ENV === "test".
- * These tests run under vitest which sets NODE_ENV=test by default (see
- * vitest.config.ts), so createApp() mounts the router and the happy-path
- * tests work.
+ * The router middleware additionally requires ENABLE_TEST_ENDPOINTS="1".
  *
- * The guard test temporarily flips NODE_ENV to "production" on a locally
- * assembled express app (NOT createApp, which would omit the router
- * entirely) to prove the in-router middleware rejects the request with 404.
+ * These tests run under vitest which sets NODE_ENV=test by default. Happy
+ * path tests set ENABLE_TEST_ENDPOINTS explicitly. Guard tests build a bare
+ * express app with the router forcibly mounted and flip env vars to prove
+ * each independent check rejects requests on its own.
  */
 
-describe("POST /test/jobs/:id/force-complete — NODE_ENV guard", () => {
+describe("POST /test/jobs/:id/force-complete — env var guards", () => {
   const originalNodeEnv = process.env.NODE_ENV;
+  const originalEnableFlag = process.env.ENABLE_TEST_ENDPOINTS;
 
   afterEach(() => {
     process.env.NODE_ENV = originalNodeEnv;
+    if (originalEnableFlag === undefined) {
+      delete process.env.ENABLE_TEST_ENDPOINTS;
+    } else {
+      process.env.ENABLE_TEST_ENDPOINTS = originalEnableFlag;
+    }
   });
 
-  it("returns 404 when NODE_ENV is not 'test' even if the router is mounted", async () => {
-    // Build a bare app with the test router forcibly mounted — this
-    // simulates what would happen if someone bypassed the conditional
-    // mount in app.ts. The in-router middleware must still reject.
+  function buildBareApp() {
     const app = express();
     app.use(express.json());
     app.use("/test", testRoutes);
+    return app;
+  }
 
+  it("returns 404 when NODE_ENV is not 'test' even if ENABLE_TEST_ENDPOINTS=1", async () => {
     process.env.NODE_ENV = "production";
+    process.env.ENABLE_TEST_ENDPOINTS = "1";
 
-    const res = await request(app).post("/test/jobs/any-id/force-complete");
+    const res = await request(buildBareApp()).post("/test/jobs/any-id/force-complete");
     expect(res.status).toBe(404);
     expect(res.body).toEqual({ error: "Not found" });
   });
 
   it("returns 404 when NODE_ENV is undefined", async () => {
-    const app = express();
-    app.use(express.json());
-    app.use("/test", testRoutes);
-
     delete process.env.NODE_ENV;
+    process.env.ENABLE_TEST_ENDPOINTS = "1";
 
-    const res = await request(app).post("/test/jobs/any-id/force-complete");
+    const res = await request(buildBareApp()).post("/test/jobs/any-id/force-complete");
+    expect(res.status).toBe(404);
+  });
+
+  it("returns 404 when ENABLE_TEST_ENDPOINTS is unset even if NODE_ENV=test", async () => {
+    process.env.NODE_ENV = "test";
+    delete process.env.ENABLE_TEST_ENDPOINTS;
+
+    const res = await request(buildBareApp()).post("/test/jobs/any-id/force-complete");
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: "Not found" });
+  });
+
+  it("returns 404 when ENABLE_TEST_ENDPOINTS is any value other than '1'", async () => {
+    process.env.NODE_ENV = "test";
+    process.env.ENABLE_TEST_ENDPOINTS = "true";
+
+    const res = await request(buildBareApp()).post("/test/jobs/any-id/force-complete");
     expect(res.status).toBe(404);
   });
 });
@@ -56,7 +76,20 @@ describe("POST /test/jobs/:id/force-complete — happy path", () => {
   let movieId: string;
   let jobId: string;
 
+  const originalEnableFlag = process.env.ENABLE_TEST_ENDPOINTS;
+
+  afterEach(() => {
+    if (originalEnableFlag === undefined) {
+      delete process.env.ENABLE_TEST_ENDPOINTS;
+    } else {
+      process.env.ENABLE_TEST_ENDPOINTS = originalEnableFlag;
+    }
+  });
+
   beforeEach(async () => {
+    // Turn on the test endpoint opt-in flag for every happy-path case.
+    process.env.ENABLE_TEST_ENDPOINTS = "1";
+
     // Arrange a realistic scene: a user owns a queued download job that
     // references a NzbFile already linked to an NzbMovie (the post-assign
     // state the E2E flow reaches right before the download container would
@@ -123,6 +156,8 @@ describe("POST /test/jobs/:id/force-complete — happy path", () => {
       "force-complete-test-hash-0000000000000000/force-complete-test-hash-0000000000000000_stream.mp4",
     );
     expect(updatedFile?.s3Bucket).toBe("e2e-fake-bucket");
+    // Must start with a dot to match the production schema contract.
+    expect(updatedFile?.fileExtension).toBe(".mkv");
 
     const libraryEntry = await prisma.userLibrary.findUnique({
       where: { userId_nzbFileId: { userId, nzbFileId } },
@@ -145,14 +180,17 @@ describe("POST /test/jobs/:id/force-complete — happy path", () => {
     expect(libraryEntries).toHaveLength(1);
   });
 
-  it("re-activates a previously removed library entry", async () => {
-    // Pre-mark the library entry as removed — force-complete should
-    // clear removedAt via the upsert update clause.
+  it("re-activates a previously removed library entry and bumps addedAt", async () => {
+    // Pre-mark the library entry as removed with a stale addedAt — the
+    // upsert's update branch must clear removedAt AND refresh addedAt so
+    // the film jumps to the top of the user's library list on re-add.
+    const staleTimestamp = new Date("2020-01-01T00:00:00Z");
     await prisma.userLibrary.create({
       data: {
         userId,
         nzbFileId,
-        removedAt: new Date(),
+        addedAt: staleTimestamp,
+        removedAt: staleTimestamp,
       },
     });
 
@@ -164,6 +202,29 @@ describe("POST /test/jobs/:id/force-complete — happy path", () => {
       where: { userId_nzbFileId: { userId, nzbFileId } },
     });
     expect(entry?.removedAt).toBeNull();
+    // addedAt must be refreshed, not the stale 2020 value.
+    expect(entry?.addedAt.getTime()).toBeGreaterThan(staleTimestamp.getTime());
+  });
+
+  it("handles jobs in any starting status (needs_review, queued, etc.)", async () => {
+    // The force-complete handler reads the current status and uses it as
+    // the CAS precondition. As long as nothing changes the status
+    // between the read and the transactional write, the update succeeds
+    // regardless of the starting status. This test runs the happy path
+    // with status='needs_review' (the actual starting point for the
+    // single-user M021 flow after upload but before manual assign).
+    await prisma.downloadJob.update({
+      where: { id: jobId },
+      data: { status: "needs_review" },
+    });
+
+    const app = createApp();
+    const res = await request(app).post(`/test/jobs/${jobId}/force-complete`);
+    expect(res.status).toBe(200);
+
+    const updated = await prisma.downloadJob.findUnique({ where: { id: jobId } });
+    expect(updated?.status).toBe("completed");
+    expect(updated?.progress).toBe(100);
   });
 
   it("returns 404 for a non-existent job id", async () => {

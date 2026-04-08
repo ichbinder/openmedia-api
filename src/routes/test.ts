@@ -1,14 +1,21 @@
 /**
  * Test-only HTTP routes used by the E2E test suite (see openmedia-web
- * Playwright specs). The entire router group is gated behind
- * `NODE_ENV === "test"` — in any other environment every request in this
- * router returns 404, making the endpoints effectively invisible in
- * production.
+ * Playwright specs). The entire router group is triple-gated:
  *
- * The router is mounted conditionally in `app.ts`, so in a non-test build
- * the route paths are never even registered. The in-router guard below is a
- * defense-in-depth layer in case someone mounts it unconditionally in the
- * future.
+ *   1. Mount-time: `app.ts` only calls `app.use("/test", ...)` when
+ *      `NODE_ENV === "test"`. In a normal dev/prod build the routes are
+ *      not even registered in the Express request pipeline.
+ *
+ *   2. Runtime: the middleware below rejects any request when
+ *      `NODE_ENV !== "test"` with a plain 404. This is defense-in-depth
+ *      in case someone refactors app.ts and accidentally mounts the
+ *      router unconditionally.
+ *
+ *   3. Opt-in flag: the same middleware requires an explicit
+ *      `ENABLE_TEST_ENDPOINTS="1"` environment variable. Turning the
+ *      test endpoints on in a production-ish environment requires two
+ *      independent env vars to be flipped in the wrong direction at the
+ *      same time — a deliberate opt-in rather than a single mistake.
  */
 
 import { Router, type Request, type Response, type NextFunction } from "express";
@@ -18,12 +25,14 @@ const router = Router();
 
 /**
  * Defense-in-depth guard: every request routed through this router must
- * pass the NODE_ENV check. If NODE_ENV is not "test" we respond with the
- * same 404 body Express would produce for an unmounted route, so the
- * presence of the router is not observable from the outside.
+ * pass BOTH checks. When either check fails we respond with the same 404
+ * body Express would produce for an unmounted route, so the presence of
+ * the router is not observable from the outside.
  */
 router.use((_req: Request, res: Response, next: NextFunction) => {
-  if (process.env.NODE_ENV !== "test") {
+  const isTestEnv = process.env.NODE_ENV === "test";
+  const isExplicitlyEnabled = process.env.ENABLE_TEST_ENDPOINTS === "1";
+  if (!isTestEnv || !isExplicitlyEnabled) {
     res.status(404).json({ error: "Not found" });
     return;
   }
@@ -67,32 +76,45 @@ router.post("/jobs/:id/force-complete", async (req: Request, res: Response) => {
   const userId = job.userId;
   const nzbFileId = job.nzbFileId;
   const hash = job.nzbFile.hash;
+  const previousStatus = job.status;
   const fakeS3Key = `${hash}/${hash}.mkv`;
   const fakeStreamKey = `${hash}/${hash}_stream.mp4`;
   const now = new Date();
 
-  await prisma.$transaction([
-    prisma.downloadJob.update({
-      where: { id: jobId },
+  // Compare-and-swap transaction: matches the production callback pattern in
+  // downloads.ts so a concurrent reconciler (e.g. needs_review → expired)
+  // can't be silently overwritten. If the job's status has changed between
+  // the read and the write the whole force-complete is aborted with 409.
+  const casResult = await prisma.$transaction(async (tx) => {
+    const cas = await tx.downloadJob.updateMany({
+      where: { id: jobId, status: previousStatus },
       data: {
         status: "completed",
         progress: 100,
         completedAt: now,
         error: null,
       },
-    }),
-    prisma.nzbFile.update({
+    });
+
+    if (cas.count === 0) {
+      return { conflict: true as const };
+    }
+
+    await tx.nzbFile.update({
       where: { id: nzbFileId },
       data: {
         s3Key: fakeS3Key,
         s3StreamKey: fakeStreamKey,
         s3Bucket: "e2e-fake-bucket",
-        fileExtension: "mkv",
+        // Match the production schema contract: fileExtension must start
+        // with a dot (validated in downloads.ts callback handler).
+        fileExtension: ".mkv",
         downloadedAt: now,
         lastAccessedAt: now,
       },
-    }),
-    prisma.userLibrary.upsert({
+    });
+
+    await tx.userLibrary.upsert({
       where: {
         userId_nzbFileId: {
           userId,
@@ -104,10 +126,23 @@ router.post("/jobs/:id/force-complete", async (req: Request, res: Response) => {
         nzbFileId,
       },
       update: {
+        // Match production behavior in downloads.ts / library.ts: a re-add
+        // clears removedAt AND bumps addedAt so the film jumps to the top
+        // of the user's library list.
         removedAt: null,
+        addedAt: now,
       },
-    }),
-  ]);
+    });
+
+    return { conflict: false as const };
+  });
+
+  if (casResult.conflict) {
+    res.status(409).json({
+      error: `Status wurde zwischenzeitlich geändert (erwartet: ${previousStatus})`,
+    });
+    return;
+  }
 
   console.log(
     `[test:force-complete] Job ${jobId} marked completed, NzbFile ${nzbFileId} got fake s3 keys`,
