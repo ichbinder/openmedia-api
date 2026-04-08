@@ -9,6 +9,7 @@ import storageRoutes from "./routes/storage.js";
 import configRoutes from "./routes/config.js";
 import libraryRoutes from "./routes/library.js";
 import searchHistoryRoutes from "./routes/search-history.js";
+import testRoutes from "./routes/test.js";
 import { errorHandler } from "./middleware/error-handler.js";
 
 export function createApp() {
@@ -31,6 +32,15 @@ export function createApp() {
   app.use("/config", configRoutes);
   app.use("/library", libraryRoutes);
   app.use("/search-history", searchHistoryRoutes);
+
+  // Test-only routes are mounted ONLY when NODE_ENV === "test". This keeps
+  // the /test/* paths absent from the request pipeline in production. The
+  // router itself also has an internal guard as defense-in-depth, so even
+  // if NODE_ENV flipped at runtime (it doesn't) requests would still 404.
+  if (process.env.NODE_ENV === "test") {
+    app.use("/test", testRoutes);
+    console.log("[app] Test routes mounted at /test (NODE_ENV=test)");
+  }
 
   // Health check with DB status
 app.get("/health", async (_req, res) => {

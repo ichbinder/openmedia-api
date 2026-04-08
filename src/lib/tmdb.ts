@@ -1,5 +1,8 @@
 const TMDB_API_KEY = process.env.TMDB_API_KEY || "";
-const TMDB_BASE = "https://api.themoviedb.org/3";
+// Base URL is overridable via TMDB_BASE_URL so the E2E test suite can point
+// this client at a local mock server (see openmedia-web e2e/tmdb-mock-server.ts).
+// Falls back to the real TMDB API in normal development and production.
+const TMDB_BASE = process.env.TMDB_BASE_URL || "https://api.themoviedb.org/3";
 const TMDB_REQUEST_TIMEOUT_MS = 10_000;
 
 export interface TmdbMovieResult {
