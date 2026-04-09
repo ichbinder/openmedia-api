@@ -15,7 +15,11 @@ beforeAll(async () => {
   // Push schema to test DB using prisma db push
   execSync("npx prisma db push --force-reset --accept-data-loss", {
     cwd: process.cwd(),
-    env: { ...process.env },
+    env: {
+      ...process.env,
+      // Prisma AI safety guard — this is the ephemeral test DB on tmpfs, safe to reset
+      PRISMA_USER_CONSENT_FOR_DANGEROUS_AI_ACTION: "yes",
+    },
     stdio: "pipe",
   });
 });

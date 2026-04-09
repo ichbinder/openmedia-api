@@ -11,7 +11,8 @@
     "db:studio": "prisma studio",
     "db:generate": "prisma generate",
     "test": "vitest --run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:e2e": "vitest --run --config vitest.config.e2e.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1019.0",
