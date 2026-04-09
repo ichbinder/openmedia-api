@@ -1,5 +1,4 @@
 import { beforeAll, afterAll, beforeEach } from "vitest";
-import { createApp } from "../src/app.js";
 import type { Server } from "http";
 
 const API_PORT = parseInt(process.env.E2E_PORT || "4444", 10) || 4444;
@@ -8,7 +7,7 @@ export const BASE_URL = `http://localhost:${API_PORT}`;
 let server: Server;
 
 beforeAll(async () => {
-  // Set test environment
+  // Set test environment before any app imports
   process.env.NODE_ENV = "test";
   process.env.JWT_SECRET = process.env.JWT_SECRET || "e2e-test-secret";
   process.env.AUTO_PROVISION = "false";
@@ -17,11 +16,18 @@ beforeAll(async () => {
     process.env.DATABASE_URL ||
     "postgresql://cinescope_test:cinescope_test@localhost:5433/cinescope_test";
 
-  // Safety guard: refuse to run --force-reset against anything that doesn't look like a test DB
-  const dbUrl = process.env.DATABASE_URL;
-  if (!dbUrl.includes("test") && !dbUrl.includes("5433")) {
+  // Safety guard: refuse to run --force-reset against anything other than the expected test DB
+  const parsed = new URL(process.env.DATABASE_URL);
+  const dbName = parsed.pathname.replace(/^\//, "");
+  const allowedHosts = new Set(["localhost", "127.0.0.1"]);
+  const isExpectedDb =
+    allowedHosts.has(parsed.hostname) &&
+    parsed.port === "5433" &&
+    dbName === "cinescope_test";
+
+  if (!isExpectedDb) {
     throw new Error(
-      `DATABASE_URL does not look like a test database — refusing to --force-reset: ${dbUrl.replace(/\/\/.*@/, "//***@")}`,
+      `DATABASE_URL does not look like the test database — refusing to --force-reset: ${process.env.DATABASE_URL.replace(/\/\/.*@/, "//***@")}`,
     );
   }
 
@@ -36,6 +42,9 @@ beforeAll(async () => {
     },
     stdio: "pipe",
   });
+
+  // Defer app import so prisma reads DATABASE_URL after it's set
+  const { createApp } = await import("../src/app.js");
 
   // Start real server
   const app = createApp();
