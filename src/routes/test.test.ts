@@ -310,5 +310,7 @@ describe("POST /test/cleanup — E2E data cleanup", () => {
     expect(res.status).toBe(200);
     expect(res.body.deleted.users).toBe(0);
     expect(res.body.deleted.jobs).toBe(0);
+    expect(res.body.deleted.nzbFiles).toBe(0);
+    expect(res.body.deleted.nzbMovies).toBe(0);
   });
 });
