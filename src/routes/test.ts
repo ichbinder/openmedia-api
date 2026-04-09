@@ -157,4 +157,71 @@ router.post("/jobs/:id/force-complete", async (req: Request, res: Response) => {
   });
 });
 
+/**
+ * Delete all data created by E2E test users. Matches on the email pattern
+ * `e2e-%@test.local` — the same prefix/suffix that the Playwright auth
+ * helpers use when registering fresh test users.
+ *
+ * Deletion order matters because DownloadJob.userId is nullable and has
+ * no ON DELETE CASCADE — we must delete jobs before users. NzbFiles and
+ * NzbMovies are cleaned up as orphans after the user+job rows are gone.
+ *
+ * This replaces direct `pg` access from the E2E suite — all DB writes
+ * go through Prisma in this endpoint, keeping schema knowledge in one
+ * place and eliminating the need for a raw Postgres client in the test
+ * repo.
+ */
+router.post("/cleanup", async (_req: Request, res: Response) => {
+  // 1. Find all E2E test users
+  const testUsers = await prisma.user.findMany({
+    where: { email: { startsWith: "e2e-", endsWith: "@test.local" } },
+    select: { id: true, email: true },
+  });
+
+  const userIds = testUsers.map((u) => u.id);
+
+  if (userIds.length === 0) {
+    res.json({ ok: true, deleted: { users: 0, jobs: 0, nzbFiles: 0, nzbMovies: 0 } });
+    return;
+  }
+
+  // 2. Delete download_jobs for these users (no cascade on userId)
+  const jobDeletion = await prisma.downloadJob.deleteMany({
+    where: { userId: { in: userIds } },
+  });
+
+  // 3. Delete users (cascades: user_library, watchlist_items, api_tokens)
+  const userDeletion = await prisma.user.deleteMany({
+    where: { id: { in: userIds } },
+  });
+
+  // 4. Clean up orphan NzbFiles (no remaining jobs or library refs)
+  //    Using raw SQL with NOT EXISTS to handle nullable FKs correctly.
+  const orphanFiles = await prisma.$executeRaw`
+    DELETE FROM nzb_files
+    WHERE NOT EXISTS (SELECT 1 FROM download_jobs WHERE download_jobs.nzb_file_id = nzb_files.id)
+      AND NOT EXISTS (SELECT 1 FROM user_library WHERE user_library.nzb_file_id = nzb_files.id)
+  `;
+
+  // 5. Clean up orphan NzbMovies (no remaining NzbFiles referencing them)
+  const orphanMovies = await prisma.$executeRaw`
+    DELETE FROM nzb_movies
+    WHERE NOT EXISTS (SELECT 1 FROM nzb_files WHERE nzb_files.movie_id = nzb_movies.id)
+  `;
+
+  console.log(
+    `[test:cleanup] Deleted: ${userDeletion.count} users, ${jobDeletion.count} jobs, ${orphanFiles} orphan files, ${orphanMovies} orphan movies`,
+  );
+
+  res.json({
+    ok: true,
+    deleted: {
+      users: userDeletion.count,
+      jobs: jobDeletion.count,
+      nzbFiles: Number(orphanFiles),
+      nzbMovies: Number(orphanMovies),
+    },
+  });
+});
+
 export default router;
