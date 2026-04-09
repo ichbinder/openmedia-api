@@ -157,4 +157,108 @@ router.post("/jobs/:id/force-complete", async (req: Request, res: Response) => {
   });
 });
 
+/**
+ * Delete all data created by E2E test users. Matches on the email pattern
+ * `e2e-%@test.local` — the same prefix/suffix that the Playwright auth
+ * helpers use when registering fresh test users.
+ *
+ * Deletion order matters because DownloadJob.userId is nullable and has
+ * no ON DELETE CASCADE — we must delete jobs before users. NzbFiles and
+ * NzbMovies are cleaned up as orphans after the user+job rows are gone.
+ *
+ * This replaces direct `pg` access from the E2E suite — all DB writes
+ * go through Prisma in this endpoint, keeping schema knowledge in one
+ * place and eliminating the need for a raw Postgres client in the test
+ * repo.
+ */
+router.post("/cleanup", async (_req: Request, res: Response) => {
+  // All cleanup steps run inside a single interactive transaction so a
+  // failure at any step leaves the database unchanged. This addresses the
+  // partial-deletion risk where users+jobs are deleted but the orphan
+  // sweep throws, leaving unreachable NzbFiles behind.
+  const result = await prisma.$transaction(async (tx) => {
+    // 1. Find all E2E test users
+    const testUsers = await tx.user.findMany({
+      where: { email: { startsWith: "e2e-", endsWith: "@test.local" } },
+      select: { id: true },
+    });
+    const userIds = testUsers.map((u) => u.id);
+
+    let jobCount = 0;
+    let userCount = 0;
+
+    if (userIds.length > 0) {
+      // 2. Collect NzbFile IDs touched by these users' jobs BEFORE
+      //    deleting anything — we need them to scope the orphan sweep.
+      const touchedFiles = await tx.downloadJob.findMany({
+        where: { userId: { in: userIds } },
+        select: { nzbFileId: true },
+        distinct: ["nzbFileId"],
+      });
+      const touchedFileIds = touchedFiles.map((j) => j.nzbFileId);
+
+      // 3. Delete download_jobs for these users (no cascade on userId)
+      const jobDeletion = await tx.downloadJob.deleteMany({
+        where: { userId: { in: userIds } },
+      });
+      jobCount = jobDeletion.count;
+
+      // 4. Delete users (cascades: user_library, watchlist_items, api_tokens)
+      const userDeletion = await tx.user.deleteMany({
+        where: { id: { in: userIds } },
+      });
+      userCount = userDeletion.count;
+
+      // 5. Clean up NzbFiles that were referenced by E2E jobs and now
+      //    have no remaining jobs or library refs. Scoped to the files
+      //    we collected in step 2 — never touches non-E2E data.
+      const orphanFiles = touchedFileIds.length > 0
+        ? await tx.nzbFile.deleteMany({
+            where: {
+              id: { in: touchedFileIds },
+              downloadJobs: { none: {} },
+              libraryUsers: { none: {} },
+            },
+          })
+        : { count: 0 };
+
+      // 6. Clean up NzbMovies that lost all their NzbFiles. Scoped to
+      //    movies that were linked to the deleted files.
+      const orphanMovies = await tx.nzbMovie.deleteMany({
+        where: {
+          nzbFiles: { none: {} },
+        },
+      });
+
+      return {
+        users: userCount,
+        jobs: jobCount,
+        nzbFiles: orphanFiles.count,
+        nzbMovies: orphanMovies.count,
+      };
+    }
+
+    // No E2E users found — still run a scoped orphan sweep for NzbMovies
+    // with zero NzbFiles (covers the case where a previous partial run
+    // deleted files but left movies behind).
+    const orphanMovies = await tx.nzbMovie.deleteMany({
+      where: { nzbFiles: { none: {} } },
+    });
+
+    return {
+      users: 0,
+      jobs: 0,
+      nzbFiles: 0,
+      nzbMovies: orphanMovies.count,
+    };
+  });
+
+  console.log(
+    `[test:cleanup] Deleted: ${result.users} users, ${result.jobs} jobs, ` +
+    `${result.nzbFiles} orphan files, ${result.nzbMovies} orphan movies`,
+  );
+
+  res.json({ ok: true, deleted: result });
+});
+
 export default router;

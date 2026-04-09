@@ -252,3 +252,65 @@ describe("POST /test/jobs/:id/force-complete — happy path", () => {
     expect(movieId).toBeTruthy();
   });
 });
+
+describe("POST /test/cleanup — E2E data cleanup", () => {
+  const originalEnableFlag = process.env.ENABLE_TEST_ENDPOINTS;
+
+  afterEach(() => {
+    if (originalEnableFlag === undefined) {
+      delete process.env.ENABLE_TEST_ENDPOINTS;
+    } else {
+      process.env.ENABLE_TEST_ENDPOINTS = originalEnableFlag;
+    }
+  });
+
+  beforeEach(() => {
+    process.env.ENABLE_TEST_ENDPOINTS = "1";
+  });
+
+  it("deletes E2E test users, their jobs, and orphan NzbFiles/NzbMovies", async () => {
+    // Seed: one E2E user with a download job, one non-E2E user to prove
+    // the cleanup is scoped and doesn't nuke real data.
+    const e2eUser = await prisma.user.create({
+      data: { email: "e2e-cleanup-test@test.local", password: "fake", name: "E2E Cleanup" },
+    });
+    const realUser = await prisma.user.create({
+      data: { email: "real-user@example.com", password: "fake", name: "Real User" },
+    });
+
+    const movie = await prisma.nzbMovie.create({
+      data: { tmdbId: 999, titleDe: "Cleanup Test", titleEn: "Cleanup Test" },
+    });
+    const nzbFile = await prisma.nzbFile.create({
+      data: { hash: "cleanup-test-hash-000", originalFilename: "cleanup.nzb", movieId: movie.id },
+    });
+    await prisma.downloadJob.create({
+      data: { userId: e2eUser.id, nzbFileId: nzbFile.id, status: "queued" },
+    });
+
+    const app = createApp();
+    const res = await request(app).post("/test/cleanup");
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.deleted.users).toBe(1);
+    expect(res.body.deleted.jobs).toBe(1);
+    // The NzbFile and NzbMovie should be cleaned up as orphans.
+    expect(res.body.deleted.nzbFiles).toBe(1);
+    expect(res.body.deleted.nzbMovies).toBe(1);
+
+    // Real user must survive.
+    const surviving = await prisma.user.findUnique({ where: { id: realUser.id } });
+    expect(surviving).not.toBeNull();
+    expect(surviving?.email).toBe("real-user@example.com");
+  });
+
+  it("returns zero counts when no E2E users exist", async () => {
+    const app = createApp();
+    const res = await request(app).post("/test/cleanup");
+    expect(res.status).toBe(200);
+    expect(res.body.deleted.users).toBe(0);
+    expect(res.body.deleted.jobs).toBe(0);
+    expect(res.body.deleted.nzbFiles).toBe(0);
+    expect(res.body.deleted.nzbMovies).toBe(0);
+  });
+});
