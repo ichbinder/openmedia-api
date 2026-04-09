@@ -167,7 +167,16 @@ describe("Download Jobs", () => {
   });
 
   it("all download endpoints require authentication", async () => {
-    const res = await api("/downloads/jobs");
-    expect(res.status).toBe(401);
+    const endpoints = [
+      { path: "/downloads/jobs", method: "GET" },
+      { path: "/downloads/jobs", method: "POST" },
+      { path: "/downloads/jobs/test-id", method: "GET" },
+      { path: "/downloads/jobs/test-id", method: "DELETE" },
+    ];
+
+    for (const { path, method } of endpoints) {
+      const res = await api(path, { method: method as "GET" });
+      expect(res.status).toBe(401);
+    }
   });
 });

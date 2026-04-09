@@ -1,8 +1,23 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { api } from "./helpers/api-client.js";
 import { createTestUser } from "./helpers/auth.js";
 
 describe("Storage Endpoints (no S3 configured)", () => {
+  const savedS3Vars: Record<string, string | undefined> = {};
+  const s3Keys = ["S3_BUCKET", "S3_REGION", "S3_ENDPOINT", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY"];
+
+  beforeAll(() => {
+    for (const key of s3Keys) {
+      savedS3Vars[key] = process.env[key];
+      delete process.env[key];
+    }
+  });
+
+  afterAll(() => {
+    for (const key of s3Keys) {
+      if (savedS3Vars[key] !== undefined) process.env[key] = savedS3Vars[key];
+    }
+  });
   it("GET /storage/files returns 503 without S3 config", async () => {
     const user = await createTestUser();
 
@@ -24,6 +39,16 @@ describe("Storage Endpoints (no S3 configured)", () => {
 });
 
 describe("Config Endpoints (no encryption configured)", () => {
+  let savedKey: string | undefined;
+
+  beforeAll(() => {
+    savedKey = process.env.ENCRYPTION_MASTER_KEY;
+    delete process.env.ENCRYPTION_MASTER_KEY;
+  });
+
+  afterAll(() => {
+    if (savedKey !== undefined) process.env.ENCRYPTION_MASTER_KEY = savedKey;
+  });
   it("GET /config/keys returns 503 without ENCRYPTION_MASTER_KEY", async () => {
     const user = await createTestUser();
 

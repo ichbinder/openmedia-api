@@ -138,4 +138,9 @@ describe("NZB Files CRUD", () => {
 
     expect(res.status).toBe(400);
   });
+
+  it("all NZB files endpoints require authentication", async () => {
+    const res = await api("/nzb/files");
+    expect(res.status).toBe(401);
+  });
 });

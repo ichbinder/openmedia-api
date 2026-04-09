@@ -139,5 +139,13 @@ describe("Search History CRUD", () => {
     });
 
     expect(res.status).toBe(400);
+
+    const res2 = await api("/search-history", {
+      method: "POST",
+      token: user.token,
+      body: { movieId: 123 },
+    });
+
+    expect(res2.status).toBe(400);
   });
 });

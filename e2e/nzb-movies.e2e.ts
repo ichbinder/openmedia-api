@@ -142,7 +142,17 @@ describe("NZB Movies CRUD", () => {
   });
 
   it("all NZB endpoints require authentication", async () => {
-    const res = await api("/nzb/movies");
-    expect(res.status).toBe(401);
+    const endpoints = [
+      { path: "/nzb/movies", method: "GET" },
+      { path: "/nzb/movies", method: "POST" },
+      { path: "/nzb/movies/test-id", method: "GET" },
+      { path: "/nzb/movies/test-id", method: "PUT" },
+      { path: "/nzb/movies/test-id", method: "DELETE" },
+    ];
+
+    for (const { path, method } of endpoints) {
+      const res = await api(path, { method: method as "GET" });
+      expect(res.status).toBe(401);
+    }
   });
 });

@@ -2,7 +2,7 @@ import { beforeAll, afterAll, beforeEach } from "vitest";
 import { createApp } from "../src/app.js";
 import type { Server } from "http";
 
-const API_PORT = Number(process.env.E2E_PORT || 4444);
+const API_PORT = parseInt(process.env.E2E_PORT || "4444", 10) || 4444;
 export const BASE_URL = `http://localhost:${API_PORT}`;
 
 let server: Server;

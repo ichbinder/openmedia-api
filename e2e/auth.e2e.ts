@@ -62,7 +62,9 @@ describe("Auth API Tokens", () => {
       "/auth/api-tokens",
       { token: user.token },
     );
-    expect(list.body.tokens[0].revokedAt).not.toBeNull();
+    const revokedToken = list.body.tokens.find((t) => t.id === created.body.id);
+    expect(revokedToken).toBeDefined();
+    expect(revokedToken!.revokedAt).not.toBeNull();
   });
 
   it("API token can authenticate requests", async () => {

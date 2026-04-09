@@ -40,10 +40,11 @@ export async function api<T = unknown>(
 
   let responseBody: T;
   const contentType = res.headers.get("content-type") || "";
-  if (contentType.includes("application/json")) {
-    responseBody = (await res.json()) as T;
+  const text = await res.text();
+  if (contentType.includes("application/json") && text.length > 0) {
+    responseBody = JSON.parse(text) as T;
   } else {
-    responseBody = (await res.text()) as unknown as T;
+    responseBody = text as unknown as T;
   }
 
   return {
