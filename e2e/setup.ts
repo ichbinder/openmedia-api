@@ -10,7 +10,7 @@ let server: Server;
 beforeAll(async () => {
   // Set test environment
   process.env.NODE_ENV = "test";
-  process.env.JWT_SECRET = "e2e-test-secret";
+  process.env.JWT_SECRET = process.env.JWT_SECRET || "e2e-test-secret";
   process.env.AUTO_PROVISION = "false";
   process.env.ENABLE_TEST_ENDPOINTS = "1";
   process.env.DATABASE_URL =
@@ -57,7 +57,7 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
-  // Clean all tables between test files via the /test/cleanup endpoint
+  // Clean all tables between each test via the /test/cleanup endpoint
   const res = await fetch(`${BASE_URL}/test/cleanup`, { method: "POST" });
   if (!res.ok) {
     throw new Error(`Test cleanup failed: ${res.status} ${await res.text()}`);
