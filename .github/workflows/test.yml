@@ -46,12 +46,22 @@ jobs:
         env:
           DATABASE_URL: postgresql://cinescope_test:cinescope_test@localhost:5433/cinescope_test
 
-      - name: Run tests
+      - name: Run unit/integration tests
         run: npm test
         env:
           DATABASE_URL: postgresql://cinescope_test:cinescope_test@localhost:5433/cinescope_test
           JWT_SECRET: ci-test-secret
           NODE_ENV: test
+
+      - name: Run E2E tests
+        run: npm run test:e2e
+        env:
+          DATABASE_URL: postgresql://cinescope_test:cinescope_test@localhost:5433/cinescope_test
+          JWT_SECRET: ci-e2e-secret
+          NODE_ENV: test
+          ENABLE_TEST_ENDPOINTS: "1"
+          AUTO_PROVISION: "false"
+          E2E_PORT: "4444"
 
       - name: TypeScript type check
         run: npx tsc --noEmit
