@@ -17,6 +17,14 @@ beforeAll(async () => {
     process.env.DATABASE_URL ||
     "postgresql://cinescope_test:cinescope_test@localhost:5433/cinescope_test";
 
+  // Safety guard: refuse to run --force-reset against anything that doesn't look like a test DB
+  const dbUrl = process.env.DATABASE_URL;
+  if (!dbUrl.includes("test") && !dbUrl.includes("5433")) {
+    throw new Error(
+      `DATABASE_URL does not look like a test database — refusing to --force-reset: ${dbUrl.replace(/\/\/.*@/, "//***@")}`,
+    );
+  }
+
   // Push schema to test DB (localhost:5433 tmpfs container — not production)
   const { execSync } = await import("child_process");
   execSync("npx prisma db push --force-reset --accept-data-loss", {
@@ -31,11 +39,12 @@ beforeAll(async () => {
 
   // Start real server
   const app = createApp();
-  await new Promise<void>((resolve) => {
+  await new Promise<void>((resolve, reject) => {
     server = app.listen(API_PORT, () => {
       console.log(`[e2e] API running on ${BASE_URL}`);
       resolve();
     });
+    server.on("error", (err) => reject(err));
   });
 
   // Wait for health check
