@@ -98,6 +98,13 @@ model NzbFile {
   lastAccessedAt       DateTime? @map("last_accessed_at")       // updated on every presigned URL request
   scheduledDeletionAt  DateTime? @map("scheduled_deletion_at")  // set when LRU cleanup marks for deletion
 
+  // Usenet re-upload (own copy)
+  // Set when we upload the MKV to Usenet ourselves via openmedia-uploader.
+  // If null, the NZB is external (from NZBDonkey) and not yet re-posted.
+  ownUsenetHash     String?  @map("own_usenet_hash")
+  ownNzbS3Key       String?  @map("own_nzb_s3_key")       // S3 key of our own NZB
+  ownUsenetUploadedAt DateTime? @map("own_usenet_uploaded_at")
+
   createdAt         DateTime @default(now()) @map("created_at")
   updatedAt         DateTime @updatedAt @map("updated_at")
 
@@ -108,9 +115,11 @@ model NzbFile {
   movieId String?   @map("movie_id")
 
   downloadJobs DownloadJob[]
+  uploadJobs   UploadJob[]
   libraryUsers UserLibrary[]
 
   @@index([movieId])
+  @@index([ownUsenetHash])
   @@map("nzb_files")
 }
 
@@ -170,6 +179,35 @@ model DownloadJob {
   @@index([status, reviewExpiresAt])
   @@index([status, tmdbRetryAfter])
   @@map("download_jobs")
+}
+
+model UploadJob {
+  id              String   @id @default(uuid())
+
+  // Status: queued → running → completed | failed
+  status          String   @default("queued")
+  error           String?                    // error message if failed
+
+  // Hetzner VPS tracking (upload VPS is ephemeral)
+  hetznerServerId Int?     @map("hetzner_server_id")
+  hetznerServerIp String?  @map("hetzner_server_ip")
+
+  // Result — NZB in S3 after successful upload
+  nzbS3Key        String?  @map("nzb_s3_key")  // e.g. "nzb/{hash}.nzb"
+
+  // Timing
+  startedAt       DateTime? @map("started_at")
+  completedAt     DateTime? @map("completed_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  nzbFile   NzbFile @relation(fields: [nzbFileId], references: [id], onDelete: Cascade)
+  nzbFileId String  @map("nzb_file_id")
+
+  @@index([nzbFileId])
+  @@index([status])
+  @@map("upload_jobs")
 }
 
 model SearchHistory {
