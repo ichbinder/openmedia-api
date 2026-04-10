@@ -507,12 +507,15 @@ export interface ProvisionUploadVpsParams {
   uploadJobId: string;
   nzbFileHash: string;
   s3Key: string;          // S3 key of the MKV file to upload
+  movieId?: string;       // target Movie for new NzbFile entry
   apiBaseUrl: string;
   apiToken: string;
   s3AccessKey: string;
   s3SecretKey: string;
   s3Endpoint: string;
   s3Bucket: string;
+  nzbServiceUrl: string;  // NZB-Service base URL (e.g. https://nzb.nettoken.de)
+  nzbServiceToken: string; // NZB-Service JWT token
   /** Usenet upload providers (3 providers) */
   usenetProviders: Array<{
     host: string;
@@ -548,6 +551,9 @@ export function generateUploadCloudInit(params: ProvisionUploadVpsParams): strin
     `S3_SECRET_KEY=${params.s3SecretKey}`,
     `S3_ENDPOINT=${params.s3Endpoint}`,
     `S3_BUCKET=${params.s3Bucket}`,
+    `NZB_SERVICE_URL=${params.nzbServiceUrl}`,
+    `NZB_SERVICE_TOKEN=${params.nzbServiceToken}`,
+    `MOVIE_ID=${params.movieId || ""}`,
   ];
 
   // Add 3 provider configs
