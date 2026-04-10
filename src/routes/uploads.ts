@@ -84,7 +84,7 @@ router.post("/", async (req: AuthRequest, res: Response) => {
   console.log(`[uploads] Created UploadJob ${job.id} for NzbFile ${nzbFile.id} (hash=${nzbFile.hash})`);
 
   // Start upload VPS if fully configured
-  const requiredEnv = ["SERVICE_TOKEN", "S3_ACCESS_KEY", "S3_SECRET_KEY", "S3_ENDPOINT", "S3_BUCKET", "USENET_PROVIDER_1_HOST", "USENET_PROVIDER_2_HOST", "USENET_PROVIDER_3_HOST"];
+  const requiredEnv = ["SERVICE_TOKEN", "S3_ACCESS_KEY", "S3_SECRET_KEY", "S3_ENDPOINT", "S3_BUCKET", "NZB_SERVICE_URL", "NZB_SERVICE_TOKEN", "USENET_PROVIDER_1_HOST", "USENET_PROVIDER_2_HOST", "USENET_PROVIDER_3_HOST"];
   const missingEnv = requiredEnv.filter((k) => !process.env[k]);
 
   if (isHetznerConfigured() && missingEnv.length === 0) {
@@ -129,6 +129,8 @@ router.post("/", async (req: AuthRequest, res: Response) => {
         s3SecretKey: process.env.S3_SECRET_KEY || "",
         s3Endpoint: process.env.S3_ENDPOINT || "",
         s3Bucket: process.env.S3_BUCKET || "",
+        nzbServiceUrl: process.env.NZB_SERVICE_URL || "https://nzb.nettoken.de",
+        nzbServiceToken: process.env.NZB_SERVICE_TOKEN || "",
         usenetProviders,
       });
 
