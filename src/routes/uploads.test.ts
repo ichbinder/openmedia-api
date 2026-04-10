@@ -159,7 +159,7 @@ describe("UploadJob routes", () => {
       const res = await request(app)
         .patch(`/uploads/${job.id}`)
         .set("Authorization", `Bearer ${authToken}`)
-        .send({ status: "completed", nzbS3Key: "nzb/test-hash.nzb" });
+        .send({ status: "completed" });
 
       expect(res.status).toBe(200);
       expect(res.body.status).toBe("completed");
@@ -168,7 +168,6 @@ describe("UploadJob routes", () => {
       const updated = await prisma.nzbFile.findUnique({ where: { id: nzbFile.id } });
       expect(updated?.ownUsenetHash).toBe(nzbFile.hash);
       expect(updated?.ownUsenetHash).not.toBe(nzbFile.id); // must NOT be the UUID
-      expect(updated?.ownNzbS3Key).toBe("nzb/test-hash.nzb");
       expect(updated?.ownUsenetUploadedAt).not.toBeNull();
     });
 
@@ -199,7 +198,7 @@ describe("UploadJob routes", () => {
       const res = await request(app)
         .patch(`/uploads/${job.id}`)
         .set("Authorization", `Bearer ${authToken}`)
-        .send({ status: "completed", nzbS3Key: "nzb/test.nzb" });
+        .send({ status: "completed" });
 
       expect(res.body.completedAt).toBeDefined();
     });

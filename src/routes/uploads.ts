@@ -224,7 +224,7 @@ router.get("/:id", async (req: AuthRequest, res: Response) => {
 // ---------------------------------------------------------------------------
 router.patch("/:id", async (req: AuthRequest, res: Response) => {
   const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
-  const { status, error, nzbS3Key, hetznerServerId, hetznerServerIp } = req.body;
+  const { status, error, hetznerServerId, hetznerServerIp } = req.body;
 
   const job = await prisma.uploadJob.findUnique({ where: { id } });
   if (!job) {
@@ -248,7 +248,6 @@ router.patch("/:id", async (req: AuthRequest, res: Response) => {
   const updateData: Record<string, unknown> = {};
   if (status) updateData.status = status;
   if (error !== undefined) updateData.error = error;
-  if (nzbS3Key) updateData.nzbS3Key = nzbS3Key;
   if (hetznerServerId) updateData.hetznerServerId = hetznerServerId;
   if (hetznerServerIp) updateData.hetznerServerIp = hetznerServerIp;
   if (status === "running" && !job.startedAt) updateData.startedAt = new Date();
@@ -274,13 +273,10 @@ router.patch("/:id", async (req: AuthRequest, res: Response) => {
     }
   }
 
-  // If completed with nzbS3Key, set ownUsenetHash on NzbFile.
-  // ownUsenetHash is the NzbFile.hash itself — it's the unique identifier
-  // that ties our Usenet upload back to the NzbFile record. The uploader
-  // container uses the same hash for NZB naming, so we can derive the NZB
-  // path from it: nzb/{hash}.nzb
-  if (status === "completed" && nzbS3Key) {
-    // Fetch the hash from the related NzbFile
+  // If completed: set ownUsenetHash on NzbFile.
+  // The NZB is stored in the NZB-Service under {hash}.nzb (same hash as NzbFile.hash).
+  // SABnzbd can retrieve it from https://nzb.nettoken.de/nzb/{hash}.nzb
+  if (status === "completed") {
     const nzbFile = await prisma.nzbFile.findUnique({
       where: { id: job.nzbFileId },
       select: { hash: true },
@@ -292,7 +288,6 @@ router.patch("/:id", async (req: AuthRequest, res: Response) => {
         where: { id: job.nzbFileId },
         data: {
           ownUsenetHash: nzbFile.hash,
-          ownNzbS3Key: nzbS3Key,
           ownUsenetUploadedAt: new Date(),
         },
       });
@@ -306,7 +301,6 @@ router.patch("/:id", async (req: AuthRequest, res: Response) => {
   res.json({
     id: updated.id,
     status: updated.status,
-    nzbS3Key: updated.nzbS3Key,
     completedAt: updated.completedAt,
   });
 });
