@@ -256,10 +256,14 @@ export async function listServers(
 export async function findZombieServers(
   maxAgeHours: number = 6,
 ): Promise<HetznerServer[]> {
-  const servers = await listServers("purpose=openmedia-download");
+  const cutoff = Date.now() - maxAgeHours * 60 * 60 * 1000;
 
-  const maxAgeMs = maxAgeHours * 60 * 60 * 1000;
-  const cutoff = Date.now() - maxAgeMs;
+  // Check both download and upload VPS instances
+  const [downloadServers, uploadServers] = await Promise.all([
+    listServers("purpose=openmedia-download"),
+    listServers("purpose=openmedia-upload"),
+  ]);
+  const servers = [...downloadServers, ...uploadServers];
 
   return servers.filter((s) => {
     const created = new Date(s.created).getTime();

@@ -164,9 +164,10 @@ describe("UploadJob routes", () => {
       expect(res.status).toBe(200);
       expect(res.body.status).toBe("completed");
 
-      // Verify NzbFile was updated
+      // Verify NzbFile was updated — ownUsenetHash should be the NzbFile.hash, not the NzbFile.id
       const updated = await prisma.nzbFile.findUnique({ where: { id: nzbFile.id } });
-      expect(updated?.ownUsenetHash).not.toBeNull();
+      expect(updated?.ownUsenetHash).toBe(nzbFile.hash);
+      expect(updated?.ownUsenetHash).not.toBe(nzbFile.id); // must NOT be the UUID
       expect(updated?.ownNzbS3Key).toBe("nzb/test-hash.nzb");
       expect(updated?.ownUsenetUploadedAt).not.toBeNull();
     });

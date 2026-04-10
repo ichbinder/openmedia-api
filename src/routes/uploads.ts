@@ -251,20 +251,32 @@ router.patch("/:id", async (req: AuthRequest, res: Response) => {
     data: updateData,
   });
 
-  // If completed with nzbS3Key, set ownUsenetHash on NzbFile
+  // If completed with nzbS3Key, set ownUsenetHash on NzbFile.
+  // ownUsenetHash is the NzbFile.hash itself — it's the unique identifier
+  // that ties our Usenet upload back to the NzbFile record. The uploader
+  // container uses the same hash for NZB naming, so we can derive the NZB
+  // path from it: nzb/{hash}.nzb
   if (status === "completed" && nzbS3Key) {
-    const uploadHash = job.nzbFileId; // Use nzbFile hash as the unique identifier
-    await prisma.nzbFile.update({
+    // Fetch the hash from the related NzbFile
+    const nzbFile = await prisma.nzbFile.findUnique({
       where: { id: job.nzbFileId },
-      data: {
-        ownUsenetHash: uploadHash,
-        ownNzbS3Key: nzbS3Key,
-        ownUsenetUploadedAt: new Date(),
-      },
+      select: { hash: true },
     });
-    console.log(
-      `[uploads] UploadJob ${id} completed — NzbFile ${job.nzbFileId} ownUsenetHash set`
-    );
+    if (!nzbFile) {
+      console.warn(`[uploads] NzbFile ${job.nzbFileId} not found when setting ownUsenetHash`);
+    } else {
+      await prisma.nzbFile.update({
+        where: { id: job.nzbFileId },
+        data: {
+          ownUsenetHash: nzbFile.hash,
+          ownNzbS3Key: nzbS3Key,
+          ownUsenetUploadedAt: new Date(),
+        },
+      });
+      console.log(
+        `[uploads] UploadJob ${id} completed — NzbFile ${job.nzbFileId} ownUsenetHash=${nzbFile.hash}`
+      );
+    }
   }
 
   console.log(`[uploads] UploadJob ${id} → ${status || job.status}`);
