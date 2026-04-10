@@ -31,33 +31,14 @@ router.post("/", async (req: AuthRequest, res: Response) => {
     return;
   }
 
-  // Verify NzbFile exists and doesn't already have our own upload
+  // Verify NzbFile exists
   const nzbFile = await prisma.nzbFile.findUnique({
     where: { id: nzbFileId },
-    include: { uploadJobs: { orderBy: { createdAt: "desc" }, take: 1 } },
+    select: { id: true, hash: true, s3Key: true, ownUsenetHash: true },
   });
 
   if (!nzbFile) {
     res.status(404).json({ error: "NzbFile not found" });
-    return;
-  }
-
-  if (nzbFile.ownUsenetHash) {
-    res.status(409).json({
-      error: "NzbFile already has an own Usenet upload",
-      ownUsenetHash: nzbFile.ownUsenetHash,
-    });
-    return;
-  }
-
-  // Check if there's already a running/pending upload job
-  const existingJob = nzbFile.uploadJobs[0];
-  if (existingJob && (existingJob.status === "queued" || existingJob.status === "running")) {
-    res.status(409).json({
-      error: "Upload job already in progress",
-      jobId: existingJob.id,
-      status: existingJob.status,
-    });
     return;
   }
 
@@ -66,18 +47,48 @@ router.post("/", async (req: AuthRequest, res: Response) => {
     return;
   }
 
-  // Create the upload job
-  const job = await prisma.uploadJob.create({
-    data: {
-      nzbFileId: nzbFile.id,
-      status: "queued",
-    },
-  });
+  // Atomically create upload job (prevents races from parallel requests)
+  let job;
+  try {
+    job = await prisma.$transaction(async (tx) => {
+      const nzb = await tx.nzbFile.findUnique({
+        where: { id: nzbFileId },
+        select: { ownUsenetHash: true },
+      });
+      if (nzb?.ownUsenetHash) throw new Error("ALREADY_UPLOADED");
+
+      const existing = await tx.uploadJob.findFirst({
+        where: { nzbFileId, status: { in: ["queued", "running"] } },
+      });
+      if (existing) throw new Error("ALREADY_IN_PROGRESS");
+
+      return tx.uploadJob.create({
+        data: { nzbFileId, status: "queued" },
+      });
+    });
+  } catch (txErr) {
+    const msg = (txErr as Error).message;
+    if (msg === "ALREADY_UPLOADED") {
+      res.status(409).json({
+        error: "NzbFile already has an own Usenet upload",
+        ownUsenetHash: nzbFile.ownUsenetHash,
+      });
+      return;
+    }
+    if (msg === "ALREADY_IN_PROGRESS") {
+      res.status(409).json({ error: "Upload job already in progress" });
+      return;
+    }
+    throw txErr;
+  }
 
   console.log(`[uploads] Created UploadJob ${job.id} for NzbFile ${nzbFile.id} (hash=${nzbFile.hash})`);
 
-  // Start upload VPS if Hetzner is configured
-  if (isHetznerConfigured()) {
+  // Start upload VPS if fully configured
+  const requiredEnv = ["SERVICE_TOKEN", "S3_ACCESS_KEY", "S3_SECRET_KEY", "S3_ENDPOINT", "S3_BUCKET", "USENET_PROVIDER_1_HOST", "USENET_PROVIDER_2_HOST", "USENET_PROVIDER_3_HOST"];
+  const missingEnv = requiredEnv.filter((k) => !process.env[k]);
+
+  if (isHetznerConfigured() && missingEnv.length === 0) {
     try {
       const providerEnvPrefixes = ["USENET_PROVIDER_1_", "USENET_PROVIDER_2_", "USENET_PROVIDER_3_"];
       const usenetProviders = providerEnvPrefixes
@@ -115,7 +126,6 @@ router.post("/", async (req: AuthRequest, res: Response) => {
         s3Key: nzbFile.s3Key!,
         apiBaseUrl: process.env.API_BASE_URL || "http://localhost:4000",
         apiToken: process.env.SERVICE_TOKEN || "",
-        hetznerApiToken: process.env.HETZNER_API_TOKEN || "",
         s3AccessKey: process.env.S3_ACCESS_KEY || "",
         s3SecretKey: process.env.S3_SECRET_KEY || "",
         s3Endpoint: process.env.S3_ENDPOINT || "",
@@ -250,6 +260,19 @@ router.patch("/:id", async (req: AuthRequest, res: Response) => {
     where: { id },
     data: updateData,
   });
+
+  // If completed or failed: delete the upload VPS server-side
+  // (Hetzner token is never exposed to the VPS)
+  if ((status === "completed" || status === "failed") && job.hetznerServerId) {
+    try {
+      const { deleteServer } = await import("../lib/hetzner.js");
+      await deleteServer(job.hetznerServerId);
+      console.log(`[uploads] VPS ${job.hetznerServerId} deleted after status=${status}`);
+    } catch (deleteErr) {
+      console.error(`[uploads] Failed to delete VPS ${job.hetznerServerId}:`, deleteErr);
+      // Non-blocking — zombie cleanup will catch it later
+    }
+  }
 
   // If completed with nzbS3Key, set ownUsenetHash on NzbFile.
   // ownUsenetHash is the NzbFile.hash itself — it's the unique identifier

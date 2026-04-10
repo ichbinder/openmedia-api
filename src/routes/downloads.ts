@@ -974,13 +974,43 @@ router.patch("/jobs/:id/status", async (req: AuthRequest, res: Response) => {
         if (nzbFile && !nzbFile.ownUsenetHash && nzbFile.s3Key) {
           const { isHetznerConfigured, provisionUploadVps } = await import("../lib/hetzner.js");
           if (isHetznerConfigured()) {
-            console.log(`[auto-upload] Triggering Usenet re-upload for NzbFile ${nzbFile.hash}`);
-            const uploadJob = await prisma.uploadJob.create({
-              data: { nzbFileId: currentJob.nzbFileId, status: "queued" },
+            // Atomically check/create upload job in a transaction to prevent races
+            const uploadJob = await prisma.$transaction(async (tx) => {
+              const nzb = await tx.nzbFile.findUnique({
+                where: { id: currentJob.nzbFileId },
+                select: { ownUsenetHash: true, s3Key: true, hash: true },
+              });
+              if (!nzb || nzb.ownUsenetHash || !nzb.s3Key) return null;
+
+              const existingJob = await tx.uploadJob.findFirst({
+                where: { nzbFileId: currentJob.nzbFileId, status: { in: ["queued", "running"] } },
+              });
+              if (existingJob) return null;
+
+              return tx.uploadJob.create({
+                data: { nzbFileId: currentJob.nzbFileId, status: "queued" },
+              });
             });
 
             // Provision upload VPS
+            if (!uploadJob) {
+              console.log(`[auto-upload] Skipping — upload already exists or ownUsenetHash set`);
+              return;
+            }
+
+            console.log(`[auto-upload] Triggering Usenet re-upload for NzbFile ${nzbFile.hash}`);
+
             try {
+              // Re-fetch nzbFile.s3Key since we're outside the transaction now
+              const nzbForProvision = await prisma.nzbFile.findUnique({
+                where: { id: currentJob.nzbFileId },
+                select: { hash: true, s3Key: true },
+              });
+              if (!nzbForProvision?.s3Key) {
+                console.warn(`[auto-upload] NzbFile has no s3Key after transaction`);
+                return;
+              }
+
               const providerEnvPrefixes = ["USENET_PROVIDER_1_", "USENET_PROVIDER_2_", "USENET_PROVIDER_3_"];
               const usenetProviders = providerEnvPrefixes
                 .map((prefix) => {
@@ -1004,11 +1034,10 @@ router.patch("/jobs/:id/status", async (req: AuthRequest, res: Response) => {
               if (usenetProviders.length >= 3) {
                 const result = await provisionUploadVps({
                   uploadJobId: uploadJob.id,
-                  nzbFileHash: nzbFile.hash,
-                  s3Key: nzbFile.s3Key,
+                  nzbFileHash: nzbForProvision.hash,
+                  s3Key: nzbForProvision.s3Key,
                   apiBaseUrl: process.env.API_BASE_URL || "http://localhost:4000",
                   apiToken: process.env.SERVICE_TOKEN || "",
-                  hetznerApiToken: process.env.HETZNER_API_TOKEN || "",
                   s3AccessKey: process.env.S3_ACCESS_KEY || "",
                   s3SecretKey: process.env.S3_SECRET_KEY || "",
                   s3Endpoint: process.env.S3_ENDPOINT || "",

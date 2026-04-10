@@ -509,7 +509,6 @@ export interface ProvisionUploadVpsParams {
   s3Key: string;          // S3 key of the MKV file to upload
   apiBaseUrl: string;
   apiToken: string;
-  hetznerApiToken: string;
   s3AccessKey: string;
   s3SecretKey: string;
   s3Endpoint: string;
@@ -529,12 +528,16 @@ export interface ProvisionUploadVpsParams {
 /**
  * Generate cloud-init for an ephemeral upload VPS.
  * Similar to generateCloudInit but for the upload pipeline.
+ *
+ * Security: HETZNER_API_TOKEN is NOT embedded in cloud-init. The VPS does not
+ * self-delete — instead, the API deletes the VPS server-side after the upload
+ * job completes or fails. This prevents token exposure from the VPS metadata endpoint.
  */
 export function generateUploadCloudInit(params: ProvisionUploadVpsParams): string {
   const dockerImage = params.dockerImage || "ghcr.io/ichbinder/openmedia-uploader:latest";
   const serverName = `upload-${params.nzbFileHash.substring(0, 8)}`;
 
-  // Build ENV for the upload container
+  // Build ENV for the upload container (no Hetzner token — VPS doesn't self-delete)
   const envLines = [
     `JOB_ID=${params.uploadJobId}`,
     `JOB_HASH=${params.nzbFileHash}`,
@@ -545,7 +548,6 @@ export function generateUploadCloudInit(params: ProvisionUploadVpsParams): strin
     `S3_SECRET_KEY=${params.s3SecretKey}`,
     `S3_ENDPOINT=${params.s3Endpoint}`,
     `S3_BUCKET=${params.s3Bucket}`,
-    `HETZNER_API_TOKEN=${params.hetznerApiToken}`,
   ];
 
   // Add 3 provider configs
@@ -590,27 +592,17 @@ runcmd:
     fi
 
     # Run upload container — it handles everything internally:
-    # S3→mkfifo→7z→PAR2→Nyuu→NZB→S3→API callback→self-delete
-    if ! docker run --name openmedia-uploader \\
+    # S3→mkfifo→7z→PAR2→Nyuu→NZB→S3→API callback
+    docker run --name openmedia-uploader \\
       --env-file /opt/openmedia-env \\
       -v /tmp:/opt/openmedia/tmp \\
-      "${dockerImage}"; then
-      fail_job "Upload container failed"
-      exit 1
-    fi
+      "${dockerImage}" || fail_job "Upload container failed"
 
-  - |
-    EXIT_CODE=$?
-    echo "openmedia-uploader exited with code $EXIT_CODE"
+    echo "openmedia-uploader exited with code $?"
     rm -f /opt/openmedia-env
 
-    # Self-delete via Hetzner metadata API
-    SERVER_ID=$(curl -sf http://169.254.169.254/hetzner/v1/metadata/instance-id || echo "")
-    if [ -n "$SERVER_ID" ]; then
-      echo "Self-deleting VPS $SERVER_ID..."
-      curl -sf -X DELETE "https://api.hetzner.cloud/v1/servers/$SERVER_ID" \\
-        -H "Authorization: Bearer ${params.hetznerApiToken}" || echo "Self-delete failed"
-    fi
+    # VPS deletion is handled by the API after PATCH /uploads/:id completed/failed.
+    # Do NOT embed Hetzner credentials in cloud-init.
 `;
 }
 
