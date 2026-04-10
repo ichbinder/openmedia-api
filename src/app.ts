@@ -6,6 +6,7 @@ import watchlistRoutes from "./routes/watchlist.js";
 import nzbRoutes from "./routes/nzb.js";
 import downloadsRoutes from "./routes/downloads.js";
 import storageRoutes from "./routes/storage.js";
+import uploadRoutes from "./routes/uploads.js";
 import configRoutes from "./routes/config.js";
 import libraryRoutes from "./routes/library.js";
 import searchHistoryRoutes from "./routes/search-history.js";
@@ -28,6 +29,7 @@ export function createApp() {
   app.use("/watchlist", watchlistRoutes);
   app.use("/nzb", nzbRoutes);
   app.use("/downloads", downloadsRoutes);
+  app.use("/uploads", uploadRoutes);
   app.use("/storage", storageRoutes);
   app.use("/config", configRoutes);
   app.use("/library", libraryRoutes);

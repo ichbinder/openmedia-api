@@ -494,3 +494,143 @@ runcmd:
       -H "Content-Type: application/json" || echo "Self-cleanup request failed (reconciler will handle)"
 `;
 }
+
+// ---------------------------------------------------------------------------
+// Upload VPS provisioning
+// ---------------------------------------------------------------------------
+
+export interface ProvisionUploadVpsParams {
+  uploadJobId: string;
+  nzbFileHash: string;
+  s3Key: string;          // S3 key of the MKV file to upload
+  apiBaseUrl: string;
+  apiToken: string;
+  hetznerApiToken: string;
+  s3AccessKey: string;
+  s3SecretKey: string;
+  s3Endpoint: string;
+  s3Bucket: string;
+  /** Usenet upload providers (3 providers) */
+  usenetProviders: Array<{
+    host: string;
+    port: number;
+    username: string;
+    password: string;
+    ssl: boolean;
+    connections: number;
+  }>;
+  dockerImage?: string;
+}
+
+/**
+ * Generate cloud-init for an ephemeral upload VPS.
+ * Similar to generateCloudInit but for the upload pipeline.
+ */
+export function generateUploadCloudInit(params: ProvisionUploadVpsParams): string {
+  const dockerImage = params.dockerImage || "ghcr.io/ichbinder/openmedia-uploader:latest";
+  const serverName = `upload-${params.nzbFileHash.substring(0, 8)}`;
+
+  // Build ENV for the upload container
+  const envLines = [
+    `JOB_ID=${params.uploadJobId}`,
+    `JOB_HASH=${params.nzbFileHash}`,
+    `S3_KEY=${params.s3Key}`,
+    `API_BASE_URL=${params.apiBaseUrl}`,
+    `SERVICE_TOKEN=${params.apiToken}`,
+    `S3_ACCESS_KEY=${params.s3AccessKey}`,
+    `S3_SECRET_KEY=${params.s3SecretKey}`,
+    `S3_ENDPOINT=${params.s3Endpoint}`,
+    `S3_BUCKET=${params.s3Bucket}`,
+    `HETZNER_API_TOKEN=${params.hetznerApiToken}`,
+  ];
+
+  // Add 3 provider configs
+  for (let i = 0; i < Math.min(params.usenetProviders.length, 3); i++) {
+    const p = params.usenetProviders[i];
+    const n = i + 1;
+    envLines.push(`USENET_HOST_${n}=${p.host}`);
+    envLines.push(`USENET_PORT_${n}=${p.port}`);
+    envLines.push(`USENET_USER_${n}=${p.username}`);
+    envLines.push(`USENET_PASS_${n}=${p.password}`);
+    envLines.push(`USENET_SSL_${n}=${p.ssl ? "1" : "0"}`);
+    envLines.push(`USENET_CONNS_${n}=${p.connections}`);
+  }
+
+  const envContent = envLines.join("\n");
+  const envBase64 = Buffer.from(envContent).toString("base64");
+
+  return `#cloud-config
+
+package_update: false
+
+write_files:
+  - path: /opt/openmedia-env
+    permissions: "0600"
+    encoding: b64
+    content: ${envBase64}
+
+runcmd:
+  - |
+    set -e
+
+    fail_job() {
+      curl -sf -X PATCH "${params.apiBaseUrl}/uploads/${params.uploadJobId}" \\
+        -H "Authorization: Bearer ${params.apiToken}" \\
+        -H "Content-Type: application/json" \\
+        -d "{\\"status\\":\\"failed\\",\\"error\\":\\"$1\\"}" || true
+    }
+
+    if ! docker pull "${dockerImage}"; then
+      fail_job "Docker pull failed: ${dockerImage}"
+      exit 1
+    fi
+
+    # Run upload container — it handles everything internally:
+    # S3→mkfifo→7z→PAR2→Nyuu→NZB→S3→API callback→self-delete
+    if ! docker run --name openmedia-uploader \\
+      --env-file /opt/openmedia-env \\
+      -v /tmp:/opt/openmedia/tmp \\
+      "${dockerImage}"; then
+      fail_job "Upload container failed"
+      exit 1
+    fi
+
+  - |
+    EXIT_CODE=$?
+    echo "openmedia-uploader exited with code $EXIT_CODE"
+    rm -f /opt/openmedia-env
+
+    # Self-delete via Hetzner metadata API
+    SERVER_ID=$(curl -sf http://169.254.169.254/hetzner/v1/metadata/instance-id || echo "")
+    if [ -n "$SERVER_ID" ]; then
+      echo "Self-deleting VPS $SERVER_ID..."
+      curl -sf -X DELETE "https://api.hetzner.cloud/v1/servers/$SERVER_ID" \\
+        -H "Authorization: Bearer ${params.hetznerApiToken}" || echo "Self-delete failed"
+    fi
+`;
+}
+
+/**
+ * Provision an ephemeral VPS for uploading MKV to Usenet.
+ */
+export async function provisionUploadVps(
+  params: ProvisionUploadVpsParams,
+): Promise<HetznerCreateServerResult> {
+  const cloudInit = generateUploadCloudInit(params);
+  const serverName = `upload-${params.nzbFileHash.substring(0, 8)}-${Date.now()}`;
+
+  console.log(`[hetzner] Provisioning upload VPS: ${serverName}`);
+
+  const result = await createServer({
+    name: serverName,
+    serverType: "cax21",  // 4 vCPU, 8GB RAM, 80GB Disk — enough for 20GB+ temp
+    userData: cloudInit,
+    labels: {
+      purpose: "openmedia-upload",
+      uploadJobId: params.uploadJobId,
+      nzbHash: params.nzbFileHash,
+    },
+  });
+
+  return result;
+}
