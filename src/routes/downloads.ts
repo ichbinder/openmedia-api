@@ -655,7 +655,7 @@ router.post("/request", async (req: AuthRequest, res: Response) => {
           resolution: parsed.resolution,
           audioLanguages: parsed.audioLanguages,
           codec: parsed.codec,
-          source: parsed.source,
+          source: parsed.source || "external",
         },
       });
 
@@ -961,40 +961,53 @@ router.patch("/jobs/:id/status", async (req: AuthRequest, res: Response) => {
         }
       }
 
-      // Auto-trigger Usenet re-upload for external NZBs (S05).
-      // Only trigger if: (1) ownUsenetHash is null (external NZB, not our own),
-      // (2) s3Key is set (file is on S3), (3) Hetzner is configured.
-      // If the NZB was already from us (ownUsenetHash set), skip — no re-upload needed.
+      // Auto-trigger Usenet re-upload for external NZBs (M025).
+      // Only trigger if: (1) NzbFile.source === 'external' (not our own),
+      // (2) no NzbFile with source='own' exists for this Movie,
+      // (3) s3Key is set, (4) Hetzner is configured.
       try {
         const nzbFile = await prisma.nzbFile.findUnique({
           where: { id: currentJob.nzbFileId },
-          select: { ownUsenetHash: true, s3Key: true, hash: true },
+          select: { source: true, s3Key: true, hash: true, movieId: true },
         });
 
-        if (nzbFile && !nzbFile.ownUsenetHash && nzbFile.s3Key) {
+        if (nzbFile && nzbFile.source === "external" && nzbFile.s3Key) {
           const { isHetznerConfigured, provisionUploadVps } = await import("../lib/hetzner.js");
           if (isHetznerConfigured()) {
-            // Atomically check/create upload job in a transaction to prevent races
+            // Atomically check/create upload job in a transaction
             const uploadJob = await prisma.$transaction(async (tx) => {
               const nzb = await tx.nzbFile.findUnique({
                 where: { id: currentJob.nzbFileId },
-                select: { ownUsenetHash: true, s3Key: true, hash: true },
+                select: { source: true, s3Key: true, hash: true, movieId: true },
               });
-              if (!nzb || nzb.ownUsenetHash || !nzb.s3Key) return null;
+              if (!nzb || nzb.source === "own" || !nzb.s3Key) return null;
 
+              // Check: does this Movie already have an own version?
+              if (nzb.movieId) {
+                const ownVersion = await tx.nzbFile.findFirst({
+                  where: { movieId: nzb.movieId, source: "own" },
+                  select: { id: true },
+                });
+                if (ownVersion) return null; // already have own version for this movie
+              }
+
+              // Check: is there already a running/pending upload?
               const existingJob = await tx.uploadJob.findFirst({
                 where: { nzbFileId: currentJob.nzbFileId, status: { in: ["queued", "running"] } },
               });
               if (existingJob) return null;
 
               return tx.uploadJob.create({
-                data: { nzbFileId: currentJob.nzbFileId, status: "queued" },
+                data: {
+                  nzbFileId: currentJob.nzbFileId,
+                  movieId: nzb.movieId,
+                  status: "queued",
+                },
               });
             });
 
-            // Provision upload VPS
             if (!uploadJob) {
-              console.log(`[auto-upload] Skipping — upload already exists or ownUsenetHash set`);
+              console.log(`[auto-upload] Skipping — source=own, own version exists, or upload already running`);
               return;
             }
 
@@ -1064,8 +1077,10 @@ router.patch("/jobs/:id/status", async (req: AuthRequest, res: Response) => {
           } else {
             console.log(`[auto-upload] Hetzner not configured — skipping upload trigger for ${nzbFile.hash}`);
           }
-        } else if (nzbFile?.ownUsenetHash) {
-          console.log(`[auto-upload] NzbFile ${nzbFile.hash} already has ownUsenetHash — skipping re-upload`);
+        } else if (nzbFile && nzbFile.source === "own") {
+          console.log(`[auto-upload] NzbFile ${nzbFile.hash} source=own — skipping re-upload`);
+        } else if (nzbFile && !nzbFile.s3Key) {
+          console.log(`[auto-upload] NzbFile ${nzbFile.hash} has no s3Key — skipping`);
         }
       } catch (uploadErr) {
         console.error("[auto-upload] Failed to create upload job:", uploadErr);

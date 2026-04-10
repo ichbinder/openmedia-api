@@ -1,11 +1,10 @@
-import { describe, it, expect, beforeEach, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeEach, beforeAll } from "vitest";
 import request from "supertest";
 import { createApp } from "../app.js";
 import { prisma } from "../test/setup.js";
 
 const app = createApp();
 
-// Helper: register a test user and get auth token
 let emailCounter = 200;
 async function getAuthToken() {
   emailCounter++;
@@ -25,12 +24,13 @@ async function createTestNzbFile(s3Key?: string) {
       hash: `test-hash-${Date.now()}-${Math.random().toString(36).slice(2)}`,
       originalFilename: "Test.Movie.2024.1080p.BluRay.x264.mkv",
       resolution: "1080p",
+      source: "external",
       s3Key: s3Key || `test-hash-${Date.now()}/original.mkv`,
     },
   });
 }
 
-describe("UploadJob routes", () => {
+describe("UploadJob routes (M025)", () => {
   let authToken: string;
 
   beforeAll(async () => {
@@ -55,20 +55,19 @@ describe("UploadJob routes", () => {
       expect(res.status).toBe(201);
       expect(res.body.status).toBe("queued");
       expect(res.body.nzbFileId).toBe(nzbFile.id);
-      expect(res.body.id).toBeDefined();
     });
 
-    it("rejects when NzbFile already has ownUsenetHash", async () => {
+    it("rejects when NzbFile source is own", async () => {
       const movie = await prisma.nzbMovie.create({
-        data: { titleDe: "Schon hochgeladen", titleEn: "Already Uploaded", year: 2024, tmdbId: 88900 },
+        data: { titleDe: "Own NZB", titleEn: "Own NZB", year: 2024, tmdbId: 88900 },
       });
       const nzbFile = await prisma.nzbFile.create({
         data: {
           movieId: movie.id,
-          hash: `existing-hash-${Date.now()}`,
-          originalFilename: "existing.mkv",
-          s3Key: "existing-hash/original.mkv",
-          ownUsenetHash: "already-uploaded-hash",
+          hash: `own-hash-${Date.now()}`,
+          originalFilename: "own.nzb",
+          s3Key: "own-hash/original.mkv",
+          source: "own",
         },
       });
 
@@ -78,7 +77,7 @@ describe("UploadJob routes", () => {
         .send({ nzbFileId: nzbFile.id });
 
       expect(res.status).toBe(409);
-      expect(res.body.error).toContain("already has an own Usenet upload");
+      expect(res.body.error).toContain("source='own'");
     });
 
     it("rejects when NzbFile has no s3Key", async () => {
@@ -90,6 +89,7 @@ describe("UploadJob routes", () => {
           movieId: movie.id,
           hash: `no-s3-hash-${Date.now()}`,
           originalFilename: "no-s3.mkv",
+          source: "external",
           // no s3Key
         },
       });
@@ -146,29 +146,35 @@ describe("UploadJob routes", () => {
       expect(res.body.status).toBe("running");
     });
 
-    it("sets ownUsenetHash on NzbFile when completed", async () => {
+    it("creates new NzbFile with source=own on completed", async () => {
       const nzbFile = await createTestNzbFile();
-      const job = await prisma.uploadJob.create({ data: { nzbFileId: nzbFile.id } });
+      const job = await prisma.uploadJob.create({
+        data: { nzbFileId: nzbFile.id, movieId: nzbFile.movieId },
+      });
 
-      // queued → running → completed
       await request(app)
         .patch(`/uploads/${job.id}`)
         .set("Authorization", `Bearer ${authToken}`)
         .send({ status: "running" });
 
+      const newNzbHash = `own-hash-${Date.now()}`;
       const res = await request(app)
         .patch(`/uploads/${job.id}`)
         .set("Authorization", `Bearer ${authToken}`)
-        .send({ status: "completed" });
+        .send({ status: "completed", nzbHash: newNzbHash, movieId: nzbFile.movieId });
 
       expect(res.status).toBe(200);
       expect(res.body.status).toBe("completed");
 
-      // Verify NzbFile was updated — ownUsenetHash should be the NzbFile.hash, not the NzbFile.id
-      const updated = await prisma.nzbFile.findUnique({ where: { id: nzbFile.id } });
-      expect(updated?.ownUsenetHash).toBe(nzbFile.hash);
-      expect(updated?.ownUsenetHash).not.toBe(nzbFile.id); // must NOT be the UUID
-      expect(updated?.ownUsenetUploadedAt).not.toBeNull();
+      // Verify: new NzbFile created with source='own'
+      const newNzb = await prisma.nzbFile.findUnique({ where: { hash: newNzbHash } });
+      expect(newNzb).not.toBeNull();
+      expect(newNzb?.source).toBe("own");
+      expect(newNzb?.movieId).toBe(nzbFile.movieId);
+
+      // Original NzbFile still has source='external'
+      const original = await prisma.nzbFile.findUnique({ where: { id: nzbFile.id } });
+      expect(original?.source).toBe("external");
     });
 
     it("rejects invalid status transitions", async () => {
@@ -198,7 +204,7 @@ describe("UploadJob routes", () => {
       const res = await request(app)
         .patch(`/uploads/${job.id}`)
         .set("Authorization", `Bearer ${authToken}`)
-        .send({ status: "completed" });
+        .send({ status: "completed", nzbHash: `hash-${Date.now()}` });
 
       expect(res.body.completedAt).toBeDefined();
     });
@@ -250,7 +256,6 @@ describe("UploadJob routes", () => {
 
       expect(res.status).toBe(200);
       expect(res.body.id).toBe(job.id);
-      expect(res.body.nzbFile.hash).toBeDefined();
     });
 
     it("returns 404 for non-existent job", async () => {

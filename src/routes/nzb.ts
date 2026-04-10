@@ -221,7 +221,7 @@ router.post("/files", async (req: AuthRequest, res: Response) => {
         audioLanguages: audioLanguages || [],
         subtitleLanguages: subtitleLanguages || [],
         codec: codec || null,
-        source: source || null,
+        source: source || "external",
       },
     });
 
@@ -469,7 +469,7 @@ router.post("/import", upload.single("nzb"), async (req: AuthRequest, res: Respo
           resolution: parsed.resolution,
           audioLanguages: parsed.audioLanguages,
           codec: parsed.codec,
-          source: parsed.source,
+          source: parsed.source || "external",
         },
       });
     } catch (err: any) {

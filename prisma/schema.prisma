@@ -82,7 +82,7 @@ model NzbFile {
   audioLanguages    String[] @default([]) @map("audio_languages")
   subtitleLanguages String[] @default([]) @map("subtitle_languages")
   codec             String?
-  source            String?
+  source            String   @default("external")  // 'external' | 'own'
   status            String   @default("untested")
   brokenReason      String?  @map("broken_reason")
   failedAttempts    Int      @default(0) @map("failed_attempts")
@@ -98,12 +98,6 @@ model NzbFile {
   lastAccessedAt       DateTime? @map("last_accessed_at")       // updated on every presigned URL request
   scheduledDeletionAt  DateTime? @map("scheduled_deletion_at")  // set when LRU cleanup marks for deletion
 
-  // Usenet re-upload (own copy)
-  // Set when we upload the MKV to Usenet ourselves via openmedia-uploader.
-  // If null, the NZB is external (from NZBDonkey) and not yet re-posted.
-  ownUsenetHash     String?  @map("own_usenet_hash")
-  ownUsenetUploadedAt DateTime? @map("own_usenet_uploaded_at")
-
   createdAt         DateTime @default(now()) @map("created_at")
   updatedAt         DateTime @updatedAt @map("updated_at")
 
@@ -118,7 +112,7 @@ model NzbFile {
   libraryUsers UserLibrary[]
 
   @@index([movieId])
-  @@index([ownUsenetHash])
+  @@index([source])
   @@map("nzb_files")
 }
 
@@ -190,6 +184,10 @@ model UploadJob {
   // Hetzner VPS tracking (upload VPS is ephemeral)
   hetznerServerId Int?     @map("hetzner_server_id")
   hetznerServerIp String?  @map("hetzner_server_ip")
+
+  // NZB result — set after Nyuu upload completes
+  nzbHash         String?  @map("nzb_hash")   // sha256 of the created NZB file
+  movieId         String?  @map("movie_id")   // target movie for the new NzbFile entry
 
   // Timing
   startedAt       DateTime? @map("started_at")
