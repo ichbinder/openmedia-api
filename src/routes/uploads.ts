@@ -34,7 +34,7 @@ router.post("/", async (req: AuthRequest, res: Response) => {
   // Verify NzbFile exists
   const nzbFile = await prisma.nzbFile.findUnique({
     where: { id: nzbFileId },
-    select: { id: true, hash: true, s3Key: true, ownUsenetHash: true },
+    select: { id: true, hash: true, s3Key: true, source: true },
   });
 
   if (!nzbFile) {
@@ -53,9 +53,9 @@ router.post("/", async (req: AuthRequest, res: Response) => {
     job = await prisma.$transaction(async (tx) => {
       const nzb = await tx.nzbFile.findUnique({
         where: { id: nzbFileId },
-        select: { ownUsenetHash: true },
+        select: { source: true },
       });
-      if (nzb?.ownUsenetHash) throw new Error("ALREADY_UPLOADED");
+      if (nzb?.source === "own") throw new Error("ALREADY_UPLOADED");
 
       const existing = await tx.uploadJob.findFirst({
         where: { nzbFileId, status: { in: ["queued", "running"] } },
@@ -70,8 +70,7 @@ router.post("/", async (req: AuthRequest, res: Response) => {
     const msg = (txErr as Error).message;
     if (msg === "ALREADY_UPLOADED") {
       res.status(409).json({
-        error: "NzbFile already has an own Usenet upload",
-        ownUsenetHash: nzbFile.ownUsenetHash,
+        error: "NzbFile is source='own' — already self-created",
       });
       return;
     }
@@ -224,7 +223,7 @@ router.get("/:id", async (req: AuthRequest, res: Response) => {
 // ---------------------------------------------------------------------------
 router.patch("/:id", async (req: AuthRequest, res: Response) => {
   const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
-  const { status, error, hetznerServerId, hetznerServerIp } = req.body;
+  const { status, error, nzbHash, movieId, hetznerServerId, hetznerServerIp } = req.body;
 
   const job = await prisma.uploadJob.findUnique({ where: { id } });
   if (!job) {
@@ -250,6 +249,8 @@ router.patch("/:id", async (req: AuthRequest, res: Response) => {
   if (error !== undefined) updateData.error = error;
   if (hetznerServerId) updateData.hetznerServerId = hetznerServerId;
   if (hetznerServerIp) updateData.hetznerServerIp = hetznerServerIp;
+  if (nzbHash) updateData.nzbHash = nzbHash;
+  if (movieId) updateData.movieId = movieId;
   if (status === "running" && !job.startedAt) updateData.startedAt = new Date();
   if (status === "completed" || status === "failed") {
     updateData.completedAt = new Date();
@@ -273,26 +274,38 @@ router.patch("/:id", async (req: AuthRequest, res: Response) => {
     }
   }
 
-  // If completed: set ownUsenetHash on NzbFile.
-  // The NZB is stored in the NZB-Service under {hash}.nzb (same hash as NzbFile.hash).
-  // SABnzbd can retrieve it from https://nzb.nettoken.de/nzb/{hash}.nzb
-  if (status === "completed") {
-    const nzbFile = await prisma.nzbFile.findUnique({
-      where: { id: job.nzbFileId },
-      select: { hash: true },
+  // If completed with nzbHash: create a new NzbFile entry (source='own').
+  // The new NzbFile represents our self-created NZB in the NZB-Service.
+  // It's linked to the same NzbMovie as the original download.
+  if (status === "completed" && nzbHash) {
+    const existingNzb = await prisma.nzbFile.findUnique({
+      where: { hash: nzbHash },
+      select: { id: true },
     });
-    if (!nzbFile) {
-      console.warn(`[uploads] NzbFile ${job.nzbFileId} not found when setting ownUsenetHash`);
+
+    if (existingNzb) {
+      console.log(`[uploads] NzbFile with hash ${nzbHash} already exists — skipping create`);
     } else {
-      await prisma.nzbFile.update({
+      // Get the original NzbFile for metadata
+      const originalFile = await prisma.nzbFile.findUnique({
         where: { id: job.nzbFileId },
+        select: { hash: true, originalFilename: true },
+      });
+
+      const targetMovieId = movieId || null;
+
+      const newNzbFile = await prisma.nzbFile.create({
         data: {
-          ownUsenetHash: nzbFile.hash,
-          ownUsenetUploadedAt: new Date(),
+          hash: nzbHash,
+          originalFilename: `${originalFile?.originalFilename || "unknown"}.own.nzb`,
+          source: "own",
+          status: "untested",
+          movieId: targetMovieId,
         },
       });
+
       console.log(
-        `[uploads] UploadJob ${id} completed — NzbFile ${job.nzbFileId} ownUsenetHash=${nzbFile.hash}`
+        `[uploads] Created NzbFile ${nzbHash} (source=own) for Movie ${targetMovieId || "none"}`
       );
     }
   }
