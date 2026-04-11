@@ -1045,7 +1045,7 @@ router.patch("/jobs/:id/status", async (req: AuthRequest, res: Response) => {
                       s3Key: nzbForProvision.s3Key,
                       movieId: nzbFile.movieId || undefined,
                       apiBaseUrl: process.env.API_BASE_URL || "http://localhost:4000",
-                      apiToken: process.env.SERVICE_TOKEN || "",
+                      apiToken: process.env.SERVICE_API_TOKEN || "",
                       s3AccessKey: process.env.S3_ACCESS_KEY || "",
                       s3SecretKey: process.env.S3_SECRET_KEY || "",
                       s3Endpoint: process.env.S3_ENDPOINT || "",
