@@ -655,7 +655,8 @@ router.post("/request", async (req: AuthRequest, res: Response) => {
           resolution: parsed.resolution,
           audioLanguages: parsed.audioLanguages,
           codec: parsed.codec,
-          source: parsed.source || "external",
+          source: "external",
+          releaseType: parsed.source || null,
         },
       });
 

@@ -83,6 +83,7 @@ model NzbFile {
   subtitleLanguages String[] @default([]) @map("subtitle_languages")
   codec             String?
   source            String   @default("external")  // 'external' | 'own'
+  releaseType       String?  @map("release_type")  // 'BluRay' | 'WEB-DL' | 'WEBRip' etc.
   status            String   @default("untested")
   brokenReason      String?  @map("broken_reason")
   failedAttempts    Int      @default(0) @map("failed_attempts")

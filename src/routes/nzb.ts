@@ -8,7 +8,7 @@ import { parseNzbName, calculateHash } from "../lib/nzb-parser.js";
 const nzbFileSelect = {
   id: true, hash: true, originalFilename: true, fileSize: true,
   resolution: true, audioLanguages: true, subtitleLanguages: true,
-  codec: true, source: true, status: true, brokenReason: true,
+  codec: true, source: true, releaseType: true, status: true, brokenReason: true,
   failedAttempts: true,
   s3Key: true, s3StreamKey: true, s3Bucket: true, fileExtension: true, downloadedAt: true,
   createdAt: true, updatedAt: true, movieId: true,
@@ -52,7 +52,7 @@ function serializeDuplicateResponse(existing: { movie: unknown } & Record<string
 router.get("/movies", async (_req: AuthRequest, res: Response) => {
   try {
     const movies = await prisma.nzbMovie.findMany({
-      include: { nzbFiles: { select: { id: true, hash: true, resolution: true, audioLanguages: true, status: true, brokenReason: true, failedAttempts: true, s3Key: true, s3StreamKey: true, downloadedAt: true } } },
+      include: { nzbFiles: { select: nzbFileSelect } },
       orderBy: { updatedAt: "desc" },
     });
     res.json({ movies: movies.map(serializeMovieWithFiles) });
@@ -195,13 +195,26 @@ router.get("/movies/by-tmdb/:tmdbId", async (req: AuthRequest, res: Response) =>
 // --- NZB File endpoints ---
 
 // POST /nzb/files — add NZB file to a movie
+// source is always "external" — only the upload pipeline sets "own" internally
 router.post("/files", async (req: AuthRequest, res: Response) => {
   try {
-    const { movieId, hash, originalFilename, fileSize, resolution, audioLanguages, subtitleLanguages, codec, source } = req.body;
+    const { movieId, hash, originalFilename, fileSize, resolution, audioLanguages, subtitleLanguages, codec, releaseType } = req.body;
 
     if (!movieId || !hash || !originalFilename) {
       res.status(400).json({ error: "movieId, hash und originalFilename sind erforderlich." });
       return;
+    }
+
+    if (releaseType !== undefined && releaseType !== null && typeof releaseType !== "string") {
+      res.status(400).json({ error: "releaseType muss ein String oder null sein." });
+      return;
+    }
+
+    if (fileSize !== undefined && fileSize !== null && fileSize !== "") {
+      if (!/^\d+$/.test(String(fileSize))) {
+        res.status(400).json({ error: "fileSize muss eine nicht-negative Ganzzahl sein." });
+        return;
+      }
     }
 
     // Verify movie exists
@@ -211,17 +224,22 @@ router.post("/files", async (req: AuthRequest, res: Response) => {
       return;
     }
 
+    const normalizedFileSize = fileSize === undefined || fileSize === null || fileSize === ""
+      ? null
+      : BigInt(fileSize);
+
     const nzbFile = await prisma.nzbFile.create({
       data: {
         movieId,
         hash,
         originalFilename,
-        fileSize: fileSize ? BigInt(fileSize) : null,
+        fileSize: normalizedFileSize,
         resolution: resolution || null,
         audioLanguages: audioLanguages || [],
         subtitleLanguages: subtitleLanguages || [],
         codec: codec || null,
-        source: source || "external",
+        source: "external",
+        releaseType: releaseType === "" ? null : releaseType ?? null,
       },
     });
 
@@ -240,7 +258,12 @@ router.post("/files", async (req: AuthRequest, res: Response) => {
 // PUT /nzb/files/:id — update NZB file metadata
 router.put("/files/:id", async (req: AuthRequest, res: Response) => {
   try {
-    const { resolution, audioLanguages, subtitleLanguages, codec, source, status, brokenReason } = req.body;
+    const { resolution, audioLanguages, subtitleLanguages, codec, releaseType, status, brokenReason } = req.body;
+
+    if (releaseType !== undefined && releaseType !== null && typeof releaseType !== "string") {
+      res.status(400).json({ error: "releaseType muss ein String oder null sein." });
+      return;
+    }
 
     // Validate status if provided
     if (status !== undefined && !VALID_STATUSES.includes(status)) {
@@ -258,7 +281,7 @@ router.put("/files/:id", async (req: AuthRequest, res: Response) => {
         ...(audioLanguages !== undefined && { audioLanguages }),
         ...(subtitleLanguages !== undefined && { subtitleLanguages }),
         ...(codec !== undefined && { codec }),
-        ...(source !== undefined && { source }),
+        ...(releaseType !== undefined && { releaseType: releaseType === "" ? null : releaseType }),
         ...(status !== undefined && { status }),
         ...(effectiveBrokenReason !== undefined && { brokenReason: effectiveBrokenReason }),
       },
@@ -469,7 +492,8 @@ router.post("/import", upload.single("nzb"), async (req: AuthRequest, res: Respo
           resolution: parsed.resolution,
           audioLanguages: parsed.audioLanguages,
           codec: parsed.codec,
-          source: parsed.source || "external",
+          source: "external",
+          releaseType: parsed.source || null,
         },
       });
     } catch (err: any) {

@@ -166,13 +166,15 @@ describe("NZB Routes", () => {
           resolution: "1080p",
           audioLanguages: ["de", "en"],
           codec: "x264",
-          source: "BluRay",
+          releaseType: "BluRay",
         });
 
       expect(res.status).toBe(201);
       expect(res.body.nzbFile.hash).toBe("abc123hash");
       expect(res.body.nzbFile.resolution).toBe("1080p");
       expect(res.body.nzbFile.audioLanguages).toEqual(["de", "en"]);
+      expect(res.body.nzbFile.source).toBe("external");
+      expect(res.body.nzbFile.releaseType).toBe("BluRay");
     });
 
     it("lehnt doppelten Hash ab", async () => {
