@@ -630,7 +630,7 @@ export async function provisionUploadVps(
     labels: {
       purpose: "openmedia-upload",
       uploadJobId: params.uploadJobId,
-      nzbHash: params.nzbFileHash,
+      nzbHash: params.nzbFileHash.substring(0, 63),
     },
   });
 
