@@ -194,6 +194,8 @@ router.get("/movies/by-tmdb/:tmdbId", async (req: AuthRequest, res: Response) =>
 
 // --- NZB File endpoints ---
 
+const VALID_SOURCES = ["external", "own"] as const;
+
 // POST /nzb/files — add NZB file to a movie
 router.post("/files", async (req: AuthRequest, res: Response) => {
   try {
@@ -201,6 +203,16 @@ router.post("/files", async (req: AuthRequest, res: Response) => {
 
     if (!movieId || !hash || !originalFilename) {
       res.status(400).json({ error: "movieId, hash und originalFilename sind erforderlich." });
+      return;
+    }
+
+    if (source !== undefined && !VALID_SOURCES.includes(source)) {
+      res.status(400).json({ error: "source muss 'external' oder 'own' sein." });
+      return;
+    }
+
+    if (releaseType !== undefined && releaseType !== null && typeof releaseType !== "string") {
+      res.status(400).json({ error: "releaseType muss ein String oder null sein." });
       return;
     }
 
@@ -221,8 +233,8 @@ router.post("/files", async (req: AuthRequest, res: Response) => {
         audioLanguages: audioLanguages || [],
         subtitleLanguages: subtitleLanguages || [],
         codec: codec || null,
-        source: source || "external",
-        releaseType: releaseType || null,
+        source: source ?? "external",
+        releaseType: releaseType === "" ? null : releaseType ?? null,
       },
     });
 
@@ -243,6 +255,16 @@ router.put("/files/:id", async (req: AuthRequest, res: Response) => {
   try {
     const { resolution, audioLanguages, subtitleLanguages, codec, source, releaseType, status, brokenReason } = req.body;
 
+    if (source !== undefined && !VALID_SOURCES.includes(source)) {
+      res.status(400).json({ error: "source muss 'external' oder 'own' sein." });
+      return;
+    }
+
+    if (releaseType !== undefined && releaseType !== null && typeof releaseType !== "string") {
+      res.status(400).json({ error: "releaseType muss ein String oder null sein." });
+      return;
+    }
+
     // Validate status if provided
     if (status !== undefined && !VALID_STATUSES.includes(status)) {
       res.status(400).json({ error: "Status muss 'ok', 'broken' oder 'untested' sein." });
@@ -260,7 +282,7 @@ router.put("/files/:id", async (req: AuthRequest, res: Response) => {
         ...(subtitleLanguages !== undefined && { subtitleLanguages }),
         ...(codec !== undefined && { codec }),
         ...(source !== undefined && { source }),
-        ...(releaseType !== undefined && { releaseType }),
+        ...(releaseType !== undefined && { releaseType: releaseType === "" ? null : releaseType }),
         ...(status !== undefined && { status }),
         ...(effectiveBrokenReason !== undefined && { brokenReason: effectiveBrokenReason }),
       },
