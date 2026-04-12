@@ -2,6 +2,7 @@ import { Router, type Response } from "express";
 import prisma from "../lib/prisma.js";
 import { requireAuth, type AuthRequest } from "../middleware/auth.js";
 import { isHetznerConfigured, provisionUploadVps } from "../lib/hetzner.js";
+import { parseUploadProvidersFromEnv } from "../lib/usenet-config.js";
 
 const router = Router();
 
@@ -89,24 +90,7 @@ router.post("/", async (req: AuthRequest, res: Response) => {
 
   if (isHetznerConfigured() && missingEnv.length === 0) {
     try {
-      const usenetProviders: Array<{
-        host: string; port: number; username: string;
-        password: string; ssl: boolean; connections: number;
-      }> = [];
-      for (let i = 1; i <= 3; i++) {
-        const prefix = `USENET_PROVIDER_${i}_`;
-        const host = process.env[`${prefix}HOST`];
-        const user = process.env[`${prefix}USER`];
-        if (!host || !user) continue;
-        usenetProviders.push({
-          host,
-          port: Number(process.env[`${prefix}PORT`] || "563"),
-          username: user,
-          password: process.env[`${prefix}PASS`] || "",
-          ssl: process.env[`${prefix}SSL`] !== "0",
-          connections: Number(process.env[`${prefix}CONNS`] || "20"),
-        });
-      }
+      const usenetProviders = parseUploadProvidersFromEnv();
 
       if (usenetProviders.length === 0) {
         console.warn("[uploads] No usenet providers configured — skipping VPS provisioning");

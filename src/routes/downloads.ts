@@ -8,6 +8,7 @@ import { searchTmdbMovie, searchTmdbMovieById, type TmdbMovieResult } from "../l
 import { markJobFailed } from "../lib/job-failure.js";
 import { computeReviewExpiresAt, computeInitialTmdbRetryAfter } from "../lib/review-config.js";
 import { storeNzbInService } from "../lib/nzb-service.js";
+import { parseUploadProvidersFromEnv } from "../lib/usenet-config.js";
 
 const router = Router();
 
@@ -1018,24 +1019,7 @@ router.patch("/jobs/:id/status", async (req: AuthRequest, res: Response) => {
                 select: { hash: true, s3Key: true },
               });
               if (nzbForProvision?.s3Key) {
-                const usenetProviders: Array<{
-                    host: string; port: number; username: string;
-                    password: string; ssl: boolean; connections: number;
-                  }> = [];
-                for (let i = 1; i <= 3; i++) {
-                  const prefix = `USENET_PROVIDER_${i}_`;
-                  const host = process.env[`${prefix}HOST`];
-                  const user = process.env[`${prefix}USER`];
-                  if (!host || !user) continue;
-                  usenetProviders.push({
-                    host,
-                    port: Number(process.env[`${prefix}PORT`] || "563"),
-                    username: user,
-                    password: process.env[`${prefix}PASS`] || "",
-                    ssl: process.env[`${prefix}SSL`] !== "0",
-                    connections: Number(process.env[`${prefix}CONNS`] || "20"),
-                  });
-                }
+                const usenetProviders = parseUploadProvidersFromEnv();
 
                 if (usenetProviders.length >= 1) {
                   try {
