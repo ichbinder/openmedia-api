@@ -84,80 +84,72 @@ router.post("/", async (req: AuthRequest, res: Response) => {
   console.log(`[uploads] Created UploadJob ${job.id} for NzbFile ${nzbFile.id} (hash=${nzbFile.hash})`);
 
   // Start upload VPS if fully configured
-  const requiredEnv = ["SERVICE_API_TOKEN", "S3_ACCESS_KEY", "S3_SECRET_KEY", "S3_ENDPOINT", "S3_BUCKET", "NZB_SERVICE_URL", "NZB_SERVICE_TOKEN", "USENET_PROVIDER_1_HOST", "USENET_PROVIDER_2_HOST", "USENET_PROVIDER_3_HOST"];
+  const requiredEnv = ["SERVICE_API_TOKEN", "S3_ACCESS_KEY", "S3_SECRET_KEY", "S3_ENDPOINT", "S3_BUCKET", "NZB_SERVICE_URL", "NZB_SERVICE_TOKEN"];
   const missingEnv = requiredEnv.filter((k) => !process.env[k]);
 
   if (isHetznerConfigured() && missingEnv.length === 0) {
     try {
-      const providerEnvPrefixes = ["USENET_PROVIDER_1_", "USENET_PROVIDER_2_", "USENET_PROVIDER_3_"];
-      const usenetProviders = providerEnvPrefixes
-        .map((prefix, i) => {
-          const host = process.env[`${prefix}HOST`];
-          const user = process.env[`${prefix}USER`];
-          if (!host || !user) return null;
-          return {
-            host,
-            port: Number(process.env[`${prefix}PORT`] || "563"),
-            username: user,
-            password: process.env[`${prefix}PASS`] || "",
-            ssl: process.env[`${prefix}SSL`] !== "0",
-            connections: Number(process.env[`${prefix}CONNS`] || "10"),
-          };
-        })
-        .filter(Boolean) as Array<{
-          host: string;
-          port: number;
-          username: string;
-          password: string;
-          ssl: boolean;
-          connections: number;
-        }>;
-
-      if (usenetProviders.length < 3) {
-        console.warn(
-          `[uploads] Only ${usenetProviders.length}/3 usenet providers configured — upload may fail`
-        );
+      const usenetProviders: Array<{
+        host: string; port: number; username: string;
+        password: string; ssl: boolean; connections: number;
+      }> = [];
+      for (let i = 1; i <= 3; i++) {
+        const prefix = `USENET_PROVIDER_${i}_`;
+        const host = process.env[`${prefix}HOST`];
+        const user = process.env[`${prefix}USER`];
+        if (!host || !user) continue;
+        usenetProviders.push({
+          host,
+          port: Number(process.env[`${prefix}PORT`] || "563"),
+          username: user,
+          password: process.env[`${prefix}PASS`] || "",
+          ssl: process.env[`${prefix}SSL`] !== "0",
+          connections: Number(process.env[`${prefix}CONNS`] || "20"),
+        });
       }
 
-      const result = await provisionUploadVps({
-        uploadJobId: job.id,
-        nzbFileHash: nzbFile.hash,
-        s3Key: nzbFile.s3Key!,
-        apiBaseUrl: process.env.API_BASE_URL || "http://localhost:4000",
-        apiToken: process.env.SERVICE_API_TOKEN || "",
-        s3AccessKey: process.env.S3_ACCESS_KEY || "",
-        s3SecretKey: process.env.S3_SECRET_KEY || "",
-        s3Endpoint: process.env.S3_ENDPOINT || "",
-        s3Bucket: process.env.S3_BUCKET || "",
-        nzbServiceUrl: process.env.NZB_SERVICE_URL || "https://nzb.nettoken.de",
-        nzbServiceToken: process.env.NZB_SERVICE_TOKEN || "",
-        usenetProviders,
-      });
+      if (usenetProviders.length === 0) {
+        console.warn("[uploads] No usenet providers configured — skipping VPS provisioning");
+      } else {
+        const result = await provisionUploadVps({
+          uploadJobId: job.id,
+          nzbFileHash: nzbFile.hash,
+          s3Key: nzbFile.s3Key!,
+          apiBaseUrl: process.env.API_BASE_URL || "http://localhost:4000",
+          apiToken: process.env.SERVICE_API_TOKEN || "",
+          s3AccessKey: process.env.S3_ACCESS_KEY || "",
+          s3SecretKey: process.env.S3_SECRET_KEY || "",
+          s3Endpoint: process.env.S3_ENDPOINT || "",
+          s3Bucket: process.env.S3_BUCKET || "",
+          nzbServiceUrl: process.env.NZB_SERVICE_URL || "https://nzb.nettoken.de",
+          nzbServiceToken: process.env.NZB_SERVICE_TOKEN || "",
+          usenetProviders,
+        });
 
-      // Update job with VPS info
-      await prisma.uploadJob.update({
-        where: { id: job.id },
-        data: {
+        await prisma.uploadJob.update({
+          where: { id: job.id },
+          data: {
+            status: "running",
+            hetznerServerId: result.server.id,
+            hetznerServerIp: result.server.publicIpv4,
+            startedAt: new Date(),
+          },
+        });
+
+        console.log(
+          `[uploads] Upload VPS provisioned: ${result.server.name} (id=${result.server.id}, ip=${result.server.publicIpv4})`
+        );
+
+        res.status(201).json({
+          id: job.id,
+          nzbFileId: job.nzbFileId,
           status: "running",
           hetznerServerId: result.server.id,
           hetznerServerIp: result.server.publicIpv4,
-          startedAt: new Date(),
-        },
-      });
-
-      console.log(
-        `[uploads] Upload VPS provisioned: ${result.server.name} (id=${result.server.id}, ip=${result.server.publicIpv4})`
-      );
-
-      res.status(201).json({
-        id: job.id,
-        nzbFileId: job.nzbFileId,
-        status: "running",
-        hetznerServerId: result.server.id,
-        hetznerServerIp: result.server.publicIpv4,
-        createdAt: job.createdAt,
-      });
-      return;
+          createdAt: job.createdAt,
+        });
+        return;
+      }
     } catch (err) {
       console.error(`[uploads] VPS provisioning failed: ${(err as Error).message}`);
       // Job stays as 'queued' — user can retry manually or reconciler picks it up
