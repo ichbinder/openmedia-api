@@ -625,8 +625,10 @@ export async function provisionUploadVps(
 
   const result = await createServer({
     name: serverName,
-    serverType: "cax21",  // 4 vCPU, 8GB RAM, 80GB Disk — enough for 20GB+ temp
+    serverType: "cpx21",  // 3 vCPU x86, 4GB RAM, 80GB Disk (Nyuu needs x86)
+    location: "ash",     // cpx21 only available in ash (US)
     userData: cloudInit,
+    sshKeys: ["jakob-macbook"],
     labels: {
       purpose: "openmedia-upload",
       uploadJobId: params.uploadJobId,
