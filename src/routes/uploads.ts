@@ -35,7 +35,7 @@ router.post("/", async (req: AuthRequest, res: Response) => {
   // Verify NzbFile exists
   const nzbFile = await prisma.nzbFile.findUnique({
     where: { id: nzbFileId },
-    select: { id: true, hash: true, s3Key: true, source: true },
+    select: { id: true, hash: true, s3Key: true, source: true, movieId: true },
   });
 
   if (!nzbFile) {
@@ -107,6 +107,7 @@ router.post("/", async (req: AuthRequest, res: Response) => {
           s3Bucket: process.env.S3_BUCKET || "",
           nzbServiceUrl: process.env.NZB_SERVICE_URL || "https://nzb.nettoken.de",
           nzbServiceToken: process.env.NZB_SERVICE_TOKEN || "",
+          movieId: nzbFile.movieId || undefined,
           usenetProviders,
         });
 
