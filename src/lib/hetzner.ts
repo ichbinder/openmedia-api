@@ -507,7 +507,6 @@ export interface ProvisionUploadVpsParams {
   uploadJobId: string;
   nzbFileHash: string;
   s3Key: string;          // S3 key of the MKV file to upload
-  movieId?: string;       // target Movie for new NzbFile entry
   apiBaseUrl: string;
   apiToken: string;
   s3AccessKey: string;
@@ -552,7 +551,6 @@ export function generateUploadCloudInit(params: ProvisionUploadVpsParams): strin
     `S3_BUCKET=${params.s3Bucket}`,
     `NZB_SERVICE_URL=${params.nzbServiceUrl}`,
     `NZB_SERVICE_TOKEN=${params.nzbServiceToken}`,
-    `MOVIE_ID=${params.movieId || ""}`,
   ];
 
   // Add 3 provider configs
@@ -627,7 +625,7 @@ export async function provisionUploadVps(
     serverType: "cpx42",  // 8 vCPU x86, 16GB RAM — more power for PAR2 + Nyuu
     location: "hel1",     // Helsinki — close to Hetzner S3 and EU Usenet providers
     userData: cloudInit,
-    sshKeys: ["jakob-macbook"],
+    ...(process.env.HETZNER_SSH_KEY ? { sshKeys: [process.env.HETZNER_SSH_KEY] } : {}),
     labels: {
       purpose: "openmedia-upload",
       uploadJobId: params.uploadJobId,
