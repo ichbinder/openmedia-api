@@ -84,14 +84,14 @@ export function parseUploadProvidersFromEnv(): UploadProvider[] {
     const user = process.env[`${prefix}USER`];
     if (!host || !user) continue;
 
-    const rawPort = parseInt(process.env[`${prefix}PORT`] || "", 10);
-    const port = Number.isInteger(rawPort) && rawPort >= 1 && rawPort <= 65535 ? rawPort : 563;
+    const portStr = process.env[`${prefix}PORT`] || "";
+    const port = /^\d+$/.test(portStr) && Number(portStr) >= 1 && Number(portStr) <= 65535 ? Number(portStr) : 563;
 
     const rawSsl = process.env[`${prefix}SSL`];
     const ssl = rawSsl !== "0" && rawSsl !== "false" && rawSsl !== "no";
 
-    const rawConns = parseInt(process.env[`${prefix}CONNS`] || "", 10);
-    const connections = Number.isInteger(rawConns) && rawConns >= 1 ? rawConns : 20;
+    const connsStr = process.env[`${prefix}CONNS`] || "";
+    const connections = /^\d+$/.test(connsStr) && Number(connsStr) >= 1 ? Number(connsStr) : 20;
 
     providers.push({ host, port, username: user, password: process.env[`${prefix}PASS`] || "", ssl, connections });
   }

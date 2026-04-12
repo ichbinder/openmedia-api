@@ -1,7 +1,7 @@
 import { Router, type Response } from "express";
 import prisma from "../lib/prisma.js";
 import { requireAuth, type AuthRequest } from "../middleware/auth.js";
-import { isHetznerConfigured, provisionUploadVps } from "../lib/hetzner.js";
+import { isHetznerConfigured, provisionUploadVps, deleteServer } from "../lib/hetzner.js";
 import { parseUploadProvidersFromEnv } from "../lib/usenet-config.js";
 
 const router = Router();
@@ -110,15 +110,21 @@ router.post("/", async (req: AuthRequest, res: Response) => {
           usenetProviders,
         });
 
-        await prisma.uploadJob.update({
-          where: { id: job.id },
-          data: {
-            status: "running",
-            hetznerServerId: result.server.id,
-            hetznerServerIp: result.server.publicIpv4,
-            startedAt: new Date(),
-          },
-        });
+        try {
+          await prisma.uploadJob.update({
+            where: { id: job.id },
+            data: {
+              status: "running",
+              hetznerServerId: result.server.id,
+              hetznerServerIp: result.server.publicIpv4,
+              startedAt: new Date(),
+            },
+          });
+        } catch (dbErr) {
+          console.error(`[uploads] DB update failed after VPS provisioning — deleting orphan server ${result.server.id}: ${(dbErr as Error).message}`);
+          deleteServer(result.server.id).catch(() => {});
+          throw dbErr;
+        }
 
         console.log(
           `[uploads] Upload VPS provisioned: ${result.server.name} (id=${result.server.id}, ip=${result.server.publicIpv4})`
