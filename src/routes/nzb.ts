@@ -8,7 +8,7 @@ import { parseNzbName, calculateHash } from "../lib/nzb-parser.js";
 const nzbFileSelect = {
   id: true, hash: true, originalFilename: true, fileSize: true,
   resolution: true, audioLanguages: true, subtitleLanguages: true,
-  codec: true, source: true, status: true, brokenReason: true,
+  codec: true, source: true, releaseType: true, status: true, brokenReason: true,
   failedAttempts: true,
   s3Key: true, s3StreamKey: true, s3Bucket: true, fileExtension: true, downloadedAt: true,
   createdAt: true, updatedAt: true, movieId: true,
@@ -197,7 +197,7 @@ router.get("/movies/by-tmdb/:tmdbId", async (req: AuthRequest, res: Response) =>
 // POST /nzb/files — add NZB file to a movie
 router.post("/files", async (req: AuthRequest, res: Response) => {
   try {
-    const { movieId, hash, originalFilename, fileSize, resolution, audioLanguages, subtitleLanguages, codec, source } = req.body;
+    const { movieId, hash, originalFilename, fileSize, resolution, audioLanguages, subtitleLanguages, codec, source, releaseType } = req.body;
 
     if (!movieId || !hash || !originalFilename) {
       res.status(400).json({ error: "movieId, hash und originalFilename sind erforderlich." });
@@ -222,6 +222,7 @@ router.post("/files", async (req: AuthRequest, res: Response) => {
         subtitleLanguages: subtitleLanguages || [],
         codec: codec || null,
         source: source || "external",
+        releaseType: releaseType || null,
       },
     });
 
@@ -240,7 +241,7 @@ router.post("/files", async (req: AuthRequest, res: Response) => {
 // PUT /nzb/files/:id — update NZB file metadata
 router.put("/files/:id", async (req: AuthRequest, res: Response) => {
   try {
-    const { resolution, audioLanguages, subtitleLanguages, codec, source, status, brokenReason } = req.body;
+    const { resolution, audioLanguages, subtitleLanguages, codec, source, releaseType, status, brokenReason } = req.body;
 
     // Validate status if provided
     if (status !== undefined && !VALID_STATUSES.includes(status)) {
@@ -259,6 +260,7 @@ router.put("/files/:id", async (req: AuthRequest, res: Response) => {
         ...(subtitleLanguages !== undefined && { subtitleLanguages }),
         ...(codec !== undefined && { codec }),
         ...(source !== undefined && { source }),
+        ...(releaseType !== undefined && { releaseType }),
         ...(status !== undefined && { status }),
         ...(effectiveBrokenReason !== undefined && { brokenReason: effectiveBrokenReason }),
       },
@@ -469,7 +471,8 @@ router.post("/import", upload.single("nzb"), async (req: AuthRequest, res: Respo
           resolution: parsed.resolution,
           audioLanguages: parsed.audioLanguages,
           codec: parsed.codec,
-          source: parsed.source || "external",
+          source: "external",
+          releaseType: parsed.source || null,
         },
       });
     } catch (err: any) {
