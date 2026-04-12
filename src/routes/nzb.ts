@@ -52,7 +52,7 @@ function serializeDuplicateResponse(existing: { movie: unknown } & Record<string
 router.get("/movies", async (_req: AuthRequest, res: Response) => {
   try {
     const movies = await prisma.nzbMovie.findMany({
-      include: { nzbFiles: { select: { id: true, hash: true, resolution: true, audioLanguages: true, status: true, brokenReason: true, failedAttempts: true, s3Key: true, s3StreamKey: true, downloadedAt: true } } },
+      include: { nzbFiles: { select: nzbFileSelect } },
       orderBy: { updatedAt: "desc" },
     });
     res.json({ movies: movies.map(serializeMovieWithFiles) });
@@ -214,6 +214,13 @@ router.post("/files", async (req: AuthRequest, res: Response) => {
     if (releaseType !== undefined && releaseType !== null && typeof releaseType !== "string") {
       res.status(400).json({ error: "releaseType muss ein String oder null sein." });
       return;
+    }
+
+    if (fileSize !== undefined && fileSize !== null && fileSize !== "") {
+      if (!/^\d+$/.test(String(fileSize))) {
+        res.status(400).json({ error: "fileSize muss eine nicht-negative Ganzzahl sein." });
+        return;
+      }
     }
 
     // Verify movie exists
