@@ -61,3 +61,39 @@ export function parseUsenetServersFromEnv(): UsenetServer[] {
 
   return servers;
 }
+
+/** Provider shape used by upload VPS provisioning. */
+export interface UploadProvider {
+  host: string;
+  port: number;
+  username: string;
+  password: string;
+  ssl: boolean;
+  connections: number;
+}
+
+/**
+ * Parse upload providers from USENET_PROVIDER_{1..3}_* env vars.
+ * Skips slots where HOST or USER is missing. Returns 0-3 providers.
+ */
+export function parseUploadProvidersFromEnv(): UploadProvider[] {
+  const providers: UploadProvider[] = [];
+  for (let i = 1; i <= 3; i++) {
+    const prefix = `USENET_PROVIDER_${i}_`;
+    const host = process.env[`${prefix}HOST`];
+    const user = process.env[`${prefix}USER`];
+    if (!host || !user) continue;
+
+    const portStr = process.env[`${prefix}PORT`] || "";
+    const port = /^\d+$/.test(portStr) && Number(portStr) >= 1 && Number(portStr) <= 65535 ? Number(portStr) : 563;
+
+    const rawSsl = process.env[`${prefix}SSL`];
+    const ssl = rawSsl !== "0" && rawSsl !== "false" && rawSsl !== "no";
+
+    const connsStr = process.env[`${prefix}CONNS`] || "";
+    const connections = /^\d+$/.test(connsStr) && Number(connsStr) >= 1 ? Number(connsStr) : 20;
+
+    providers.push({ host, port, username: user, password: process.env[`${prefix}PASS`] || "", ssl, connections });
+  }
+  return providers;
+}

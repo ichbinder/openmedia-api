@@ -8,6 +8,7 @@ import { searchTmdbMovie, searchTmdbMovieById, type TmdbMovieResult } from "../l
 import { markJobFailed } from "../lib/job-failure.js";
 import { computeReviewExpiresAt, computeInitialTmdbRetryAfter } from "../lib/review-config.js";
 import { storeNzbInService } from "../lib/nzb-service.js";
+import { parseUploadProvidersFromEnv } from "../lib/usenet-config.js";
 
 const router = Router();
 
@@ -1018,27 +1019,9 @@ router.patch("/jobs/:id/status", async (req: AuthRequest, res: Response) => {
                 select: { hash: true, s3Key: true },
               });
               if (nzbForProvision?.s3Key) {
-                const providerEnvPrefixes = ["USENET_PROVIDER_1_", "USENET_PROVIDER_2_", "USENET_PROVIDER_3_"];
-                const usenetProviders = providerEnvPrefixes
-                  .map((prefix) => {
-                    const host = process.env[`${prefix}HOST`];
-                    const user = process.env[`${prefix}USER`];
-                    if (!host || !user) return null;
-                    return {
-                      host,
-                      port: Number(process.env[`${prefix}PORT`] || "563"),
-                      username: user,
-                      password: process.env[`${prefix}PASS`] || "",
-                      ssl: process.env[`${prefix}SSL`] !== "0",
-                      connections: Number(process.env[`${prefix}CONNS`] || "10"),
-                    };
-                  })
-                  .filter(Boolean) as Array<{
-                    host: string; port: number; username: string;
-                    password: string; ssl: boolean; connections: number;
-                  }>;
+                const usenetProviders = parseUploadProvidersFromEnv();
 
-                if (usenetProviders.length >= 3) {
+                if (usenetProviders.length >= 1) {
                   try {
                     const result = await provisionUploadVps({
                       uploadJobId: uploadJob.id,
@@ -1070,7 +1053,7 @@ router.patch("/jobs/:id/status", async (req: AuthRequest, res: Response) => {
                     // UploadJob stays queued — reconciler can retry later
                   }
                 } else {
-                  console.warn(`[auto-upload] Only ${usenetProviders.length}/3 providers configured — UploadJob ${uploadJob.id} stays queued`);
+                  console.warn(`[auto-upload] No usenet providers configured — UploadJob ${uploadJob.id} stays queued`);
                 }
               } else {
                 console.warn(`[auto-upload] NzbFile has no s3Key after transaction`);
