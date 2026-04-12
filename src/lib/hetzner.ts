@@ -538,7 +538,6 @@ export interface ProvisionUploadVpsParams {
  */
 export function generateUploadCloudInit(params: ProvisionUploadVpsParams): string {
   const dockerImage = params.dockerImage || "ghcr.io/ichbinder/openmedia-uploader:latest";
-  const serverName = `upload-${params.nzbFileHash.substring(0, 8)}`;
 
   // Build ENV for the upload container (no Hetzner token — VPS doesn't self-delete)
   const envLines = [
@@ -619,14 +618,14 @@ export async function provisionUploadVps(
   params: ProvisionUploadVpsParams,
 ): Promise<HetznerCreateServerResult> {
   const cloudInit = generateUploadCloudInit(params);
-  const serverName = `upload-${params.nzbFileHash.substring(0, 8)}-${Date.now()}`;
+  const serverName = `up-${params.nzbFileHash.substring(0, 8)}`;
 
   console.log(`[hetzner] Provisioning upload VPS: ${serverName}`);
 
   const result = await createServer({
     name: serverName,
-    serverType: "cpx21",  // 3 vCPU x86, 4GB RAM, 80GB Disk (Nyuu needs x86)
-    location: "ash",     // cpx21 only available in ash (US)
+    serverType: "cpx42",  // 8 vCPU x86, 16GB RAM — more power for PAR2 + Nyuu
+    location: "hel1",     // Helsinki — close to Hetzner S3 and EU Usenet providers
     userData: cloudInit,
     sshKeys: ["jakob-macbook"],
     labels: {
