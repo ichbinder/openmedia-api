@@ -194,20 +194,14 @@ router.get("/movies/by-tmdb/:tmdbId", async (req: AuthRequest, res: Response) =>
 
 // --- NZB File endpoints ---
 
-const VALID_SOURCES = ["external", "own"] as const;
-
 // POST /nzb/files — add NZB file to a movie
+// source is always "external" — only the upload pipeline sets "own" internally
 router.post("/files", async (req: AuthRequest, res: Response) => {
   try {
-    const { movieId, hash, originalFilename, fileSize, resolution, audioLanguages, subtitleLanguages, codec, source, releaseType } = req.body;
+    const { movieId, hash, originalFilename, fileSize, resolution, audioLanguages, subtitleLanguages, codec, releaseType } = req.body;
 
     if (!movieId || !hash || !originalFilename) {
       res.status(400).json({ error: "movieId, hash und originalFilename sind erforderlich." });
-      return;
-    }
-
-    if (source !== undefined && !VALID_SOURCES.includes(source)) {
-      res.status(400).json({ error: "source muss 'external' oder 'own' sein." });
       return;
     }
 
@@ -230,17 +224,21 @@ router.post("/files", async (req: AuthRequest, res: Response) => {
       return;
     }
 
+    const normalizedFileSize = fileSize === undefined || fileSize === null || fileSize === ""
+      ? null
+      : BigInt(fileSize);
+
     const nzbFile = await prisma.nzbFile.create({
       data: {
         movieId,
         hash,
         originalFilename,
-        fileSize: fileSize ? BigInt(fileSize) : null,
+        fileSize: normalizedFileSize,
         resolution: resolution || null,
         audioLanguages: audioLanguages || [],
         subtitleLanguages: subtitleLanguages || [],
         codec: codec || null,
-        source: source ?? "external",
+        source: "external",
         releaseType: releaseType === "" ? null : releaseType ?? null,
       },
     });
@@ -260,12 +258,7 @@ router.post("/files", async (req: AuthRequest, res: Response) => {
 // PUT /nzb/files/:id — update NZB file metadata
 router.put("/files/:id", async (req: AuthRequest, res: Response) => {
   try {
-    const { resolution, audioLanguages, subtitleLanguages, codec, source, releaseType, status, brokenReason } = req.body;
-
-    if (source !== undefined && !VALID_SOURCES.includes(source)) {
-      res.status(400).json({ error: "source muss 'external' oder 'own' sein." });
-      return;
-    }
+    const { resolution, audioLanguages, subtitleLanguages, codec, releaseType, status, brokenReason } = req.body;
 
     if (releaseType !== undefined && releaseType !== null && typeof releaseType !== "string") {
       res.status(400).json({ error: "releaseType muss ein String oder null sein." });
@@ -288,7 +281,6 @@ router.put("/files/:id", async (req: AuthRequest, res: Response) => {
         ...(audioLanguages !== undefined && { audioLanguages }),
         ...(subtitleLanguages !== undefined && { subtitleLanguages }),
         ...(codec !== undefined && { codec }),
-        ...(source !== undefined && { source }),
         ...(releaseType !== undefined && { releaseType: releaseType === "" ? null : releaseType }),
         ...(status !== undefined && { status }),
         ...(effectiveBrokenReason !== undefined && { brokenReason: effectiveBrokenReason }),

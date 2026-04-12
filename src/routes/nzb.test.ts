@@ -166,7 +166,6 @@ describe("NZB Routes", () => {
           resolution: "1080p",
           audioLanguages: ["de", "en"],
           codec: "x264",
-          source: "external",
           releaseType: "BluRay",
         });
 
