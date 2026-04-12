@@ -35,7 +35,7 @@ router.post("/", async (req: AuthRequest, res: Response) => {
   // Verify NzbFile exists
   const nzbFile = await prisma.nzbFile.findUnique({
     where: { id: nzbFileId },
-    select: { id: true, hash: true, s3Key: true, source: true, movieId: true },
+    select: { id: true, hash: true, s3Key: true, source: true },
   });
 
   if (!nzbFile) {
@@ -107,7 +107,6 @@ router.post("/", async (req: AuthRequest, res: Response) => {
           s3Bucket: process.env.S3_BUCKET || "",
           nzbServiceUrl: process.env.NZB_SERVICE_URL || "https://nzb.nettoken.de",
           nzbServiceToken: process.env.NZB_SERVICE_TOKEN || "",
-          movieId: nzbFile.movieId || undefined,
           usenetProviders,
         });
 
@@ -208,7 +207,7 @@ router.get("/:id", async (req: AuthRequest, res: Response) => {
 // ---------------------------------------------------------------------------
 router.patch("/:id", async (req: AuthRequest, res: Response) => {
   const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
-  const { status, error, nzbHash, movieId, hetznerServerId, hetznerServerIp } = req.body;
+  const { status, error, nzbHash, hetznerServerId, hetznerServerIp } = req.body;
 
   const job = await prisma.uploadJob.findUnique({ where: { id } });
   if (!job) {
@@ -235,7 +234,6 @@ router.patch("/:id", async (req: AuthRequest, res: Response) => {
   if (hetznerServerId) updateData.hetznerServerId = hetznerServerId;
   if (hetznerServerIp) updateData.hetznerServerIp = hetznerServerIp;
   if (nzbHash) updateData.nzbHash = nzbHash;
-  if (movieId) updateData.movieId = movieId;
   if (status === "running" && !job.startedAt) updateData.startedAt = new Date();
   if (status === "completed" || status === "failed") {
     updateData.completedAt = new Date();
@@ -274,10 +272,10 @@ router.patch("/:id", async (req: AuthRequest, res: Response) => {
       // Get the original NzbFile for metadata
       const originalFile = await prisma.nzbFile.findUnique({
         where: { id: job.nzbFileId },
-        select: { hash: true, originalFilename: true },
+        select: { hash: true, originalFilename: true, movieId: true },
       });
 
-      const targetMovieId = movieId || null;
+      const targetMovieId = originalFile?.movieId ?? null;
 
       const newNzbFile = await prisma.nzbFile.create({
         data: {
