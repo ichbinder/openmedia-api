@@ -3,10 +3,24 @@ import prisma from "../lib/prisma.js";
 import { requireAuth, type AuthRequest } from "../middleware/auth.js";
 import { isHetznerConfigured, provisionUploadVps, deleteServer } from "../lib/hetzner.js";
 import { parseUploadProvidersFromEnv } from "../lib/usenet-config.js";
+import { resolveQualityTier } from "../lib/nzb-parser.js";
 
 const router = Router();
 
 router.use(requireAuth);
+
+/** Safely coerce a value to integer, returning null on invalid input. */
+function safeInt(v: unknown): number | null {
+  if (v == null) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.round(n) : null;
+}
+
+/** Safely coerce a value to BigInt, returning null on invalid input. */
+function safeBigInt(v: unknown): bigint | null {
+  if (v == null) return null;
+  try { return BigInt(v as string | number); } catch { return null; }
+}
 
 // ---------------------------------------------------------------------------
 // Valid statuses for upload jobs
@@ -207,7 +221,7 @@ router.get("/:id", async (req: AuthRequest, res: Response) => {
 // ---------------------------------------------------------------------------
 router.patch("/:id", async (req: AuthRequest, res: Response) => {
   const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
-  const { status, error, nzbHash, hetznerServerId, hetznerServerIp } = req.body;
+  const { status, error, nzbHash, hetznerServerId, hetznerServerIp, metadata } = req.body;
 
   const job = await prisma.uploadJob.findUnique({ where: { id } });
   if (!job) {
@@ -277,6 +291,9 @@ router.patch("/:id", async (req: AuthRequest, res: Response) => {
 
       const targetMovieId = originalFile?.movieId ?? null;
 
+      // Build metadata fields from the upload callback
+      const meta = metadata && typeof metadata === "object" ? metadata : {};
+
       const newNzbFile = await prisma.nzbFile.create({
         data: {
           hash: nzbHash,
@@ -284,11 +301,31 @@ router.patch("/:id", async (req: AuthRequest, res: Response) => {
           source: "own",
           status: "untested",
           movieId: targetMovieId,
+          // Media metadata from ffprobe (if provided) — safe coercion to prevent 500s
+          qualityTier: resolveQualityTier(String(meta.qualityTier || meta.resolution || "") || null),
+          resolution: typeof meta.resolution === "string" ? meta.resolution : null,
+          codec: typeof meta.codec === "string" ? meta.codec : null,
+          videoWidth: safeInt(meta.videoWidth),
+          videoHeight: safeInt(meta.videoHeight),
+          videoBitrate: safeInt(meta.videoBitrate),
+          videoFramerate: typeof meta.videoFramerate === "string" ? meta.videoFramerate : null,
+          videoColorDepth: safeInt(meta.videoColorDepth),
+          hdr: meta.hdr != null ? Boolean(meta.hdr) : null,
+          hdrFormat: typeof meta.hdrFormat === "string" ? meta.hdrFormat : null,
+          audioCodec: typeof meta.audioCodec === "string" ? meta.audioCodec : null,
+          audioChannels: typeof meta.audioChannels === "string" ? meta.audioChannels : null,
+          audioBitrate: safeInt(meta.audioBitrate),
+          audioLanguages: Array.isArray(meta.audioLanguages) ? meta.audioLanguages : [],
+          subtitleLanguages: Array.isArray(meta.subtitleLanguages) ? meta.subtitleLanguages : [],
+          duration: safeInt(meta.duration),
+          fileSize: safeBigInt(meta.fileSize),
+          mediaInfo: meta.mediaInfo && typeof meta.mediaInfo === "object" ? meta.mediaInfo : undefined,
         },
       });
 
       console.log(
-        `[uploads] Created NzbFile ${nzbHash} (source=own) for Movie ${targetMovieId || "none"}`
+        `[uploads] Created NzbFile ${nzbHash} (source=own) for Movie ${targetMovieId || "none"}` +
+        (meta.qualityTier ? ` [${meta.qualityTier} ${meta.codec || "?"}]` : "")
       );
     }
   }

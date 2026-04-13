@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseNzbName, calculateHash } from "./nzb-parser.js";
+import { parseNzbName, calculateHash, resolveQualityTier } from "./nzb-parser.js";
 
 describe("parseNzbName", () => {
   it("parst Standard-Release-Name", () => {
@@ -7,6 +7,7 @@ describe("parseNzbName", () => {
     expect(result.title).toBe("The Godfather");
     expect(result.year).toBe(1972);
     expect(result.resolution).toBe("1080p");
+    expect(result.qualityTier).toBe("1080p");
     expect(result.codec).toBe("x264");
     expect(result.source).toBe("BluRay");
   });
@@ -15,6 +16,7 @@ describe("parseNzbName", () => {
     const result = parseNzbName("Der.Pate.German.DL.2160p.WEB-DL.x265-GROUP.nzb");
     expect(result.title).toBe("Der Pate");
     expect(result.resolution).toBe("2160p");
+    expect(result.qualityTier).toBe("2160p");
     expect(result.audioLanguages).toContain("de");
     expect(result.audioLanguages).toContain("en");
     expect(result.codec).toBe("x265");
@@ -24,11 +26,13 @@ describe("parseNzbName", () => {
   it("parst 4K/UHD", () => {
     const result = parseNzbName("Movie.Name.2024.4K.UHD.BluRay.x265.nzb");
     expect(result.resolution).toBe("2160p");
+    expect(result.qualityTier).toBe("2160p");
   });
 
   it("parst 720p WEBRip", () => {
     const result = parseNzbName("Some.Movie.720p.WEBRip.x264.nzb");
     expect(result.resolution).toBe("720p");
+    expect(result.qualityTier).toBe("720p");
     expect(result.source).toBe("WEBRip");
   });
 
@@ -46,6 +50,7 @@ describe("parseNzbName", () => {
     const result = parseNzbName("random-file.nzb");
     expect(result.title).toBe("random-file");
     expect(result.resolution).toBeNull();
+    expect(result.qualityTier).toBeNull();
     expect(result.codec).toBeNull();
     expect(result.source).toBeNull();
   });
@@ -76,6 +81,30 @@ describe("parseNzbName", () => {
     const result = parseNzbName("Movie.2024.German.DL.1080p.BluRay.x264-GROUP.nzb");
     expect(result.audioLanguages).toContain("de");
     expect(result.audioLanguages).toContain("en");
+  });
+});
+
+describe("resolveQualityTier", () => {
+  it("mappt Standard-Auflösungen", () => {
+    expect(resolveQualityTier("1080p")).toBe("1080p");
+    expect(resolveQualityTier("720p")).toBe("720p");
+    expect(resolveQualityTier("2160p")).toBe("2160p");
+    expect(resolveQualityTier("480p")).toBe("480p");
+  });
+
+  it("mappt 576p auf 480p", () => {
+    expect(resolveQualityTier("576p")).toBe("480p");
+  });
+
+  it("mappt 4K/UHD auf 2160p", () => {
+    expect(resolveQualityTier("4K")).toBe("2160p");
+    expect(resolveQualityTier("4k")).toBe("2160p");
+    expect(resolveQualityTier("UHD")).toBe("2160p");
+  });
+
+  it("gibt null für null/unbekannt", () => {
+    expect(resolveQualityTier(null)).toBeNull();
+    expect(resolveQualityTier("unknown")).toBeNull();
   });
 });
 
