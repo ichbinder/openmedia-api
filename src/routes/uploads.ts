@@ -3,6 +3,7 @@ import prisma from "../lib/prisma.js";
 import { requireAuth, type AuthRequest } from "../middleware/auth.js";
 import { isHetznerConfigured, provisionUploadVps, deleteServer } from "../lib/hetzner.js";
 import { parseUploadProvidersFromEnv } from "../lib/usenet-config.js";
+import { resolveQualityTier } from "../lib/nzb-parser.js";
 
 const router = Router();
 
@@ -288,7 +289,7 @@ router.patch("/:id", async (req: AuthRequest, res: Response) => {
           status: "untested",
           movieId: targetMovieId,
           // Media metadata from ffprobe (if provided)
-          qualityTier: meta.qualityTier || null,
+          qualityTier: resolveQualityTier(meta.qualityTier || meta.resolution || null),
           resolution: meta.resolution || null,
           codec: meta.codec || null,
           videoWidth: meta.videoWidth != null ? Number(meta.videoWidth) : null,

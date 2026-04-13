@@ -209,6 +209,11 @@ router.post("/files", async (req: AuthRequest, res: Response) => {
       return;
     }
 
+    if (resolution !== undefined && resolution !== null && typeof resolution !== "string") {
+      res.status(400).json({ error: "resolution muss ein String oder null sein." });
+      return;
+    }
+
     if (releaseType !== undefined && releaseType !== null && typeof releaseType !== "string") {
       res.status(400).json({ error: "releaseType muss ein String oder null sein." });
       return;
