@@ -270,6 +270,11 @@ router.put("/files/:id", async (req: AuthRequest, res: Response) => {
   try {
     const { resolution, audioLanguages, subtitleLanguages, codec, releaseType, status, brokenReason } = req.body;
 
+    if (resolution !== undefined && resolution !== null && typeof resolution !== "string") {
+      res.status(400).json({ error: "resolution muss ein String oder null sein." });
+      return;
+    }
+
     if (releaseType !== undefined && releaseType !== null && typeof releaseType !== "string") {
       res.status(400).json({ error: "releaseType muss ein String oder null sein." });
       return;

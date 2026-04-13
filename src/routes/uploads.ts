@@ -9,6 +9,19 @@ const router = Router();
 
 router.use(requireAuth);
 
+/** Safely coerce a value to integer, returning null on invalid input. */
+function safeInt(v: unknown): number | null {
+  if (v == null) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.round(n) : null;
+}
+
+/** Safely coerce a value to BigInt, returning null on invalid input. */
+function safeBigInt(v: unknown): bigint | null {
+  if (v == null) return null;
+  try { return BigInt(v as string | number); } catch { return null; }
+}
+
 // ---------------------------------------------------------------------------
 // Valid statuses for upload jobs
 // ---------------------------------------------------------------------------
@@ -288,25 +301,25 @@ router.patch("/:id", async (req: AuthRequest, res: Response) => {
           source: "own",
           status: "untested",
           movieId: targetMovieId,
-          // Media metadata from ffprobe (if provided)
-          qualityTier: resolveQualityTier(meta.qualityTier || meta.resolution || null),
-          resolution: meta.resolution || null,
-          codec: meta.codec || null,
-          videoWidth: meta.videoWidth != null ? Number(meta.videoWidth) : null,
-          videoHeight: meta.videoHeight != null ? Number(meta.videoHeight) : null,
-          videoBitrate: meta.videoBitrate != null ? Number(meta.videoBitrate) : null,
-          videoFramerate: meta.videoFramerate || null,
-          videoColorDepth: meta.videoColorDepth != null ? Number(meta.videoColorDepth) : null,
+          // Media metadata from ffprobe (if provided) — safe coercion to prevent 500s
+          qualityTier: resolveQualityTier(String(meta.qualityTier || meta.resolution || "") || null),
+          resolution: typeof meta.resolution === "string" ? meta.resolution : null,
+          codec: typeof meta.codec === "string" ? meta.codec : null,
+          videoWidth: safeInt(meta.videoWidth),
+          videoHeight: safeInt(meta.videoHeight),
+          videoBitrate: safeInt(meta.videoBitrate),
+          videoFramerate: typeof meta.videoFramerate === "string" ? meta.videoFramerate : null,
+          videoColorDepth: safeInt(meta.videoColorDepth),
           hdr: meta.hdr != null ? Boolean(meta.hdr) : null,
-          hdrFormat: meta.hdrFormat || null,
-          audioCodec: meta.audioCodec || null,
-          audioChannels: meta.audioChannels || null,
-          audioBitrate: meta.audioBitrate != null ? Number(meta.audioBitrate) : null,
+          hdrFormat: typeof meta.hdrFormat === "string" ? meta.hdrFormat : null,
+          audioCodec: typeof meta.audioCodec === "string" ? meta.audioCodec : null,
+          audioChannels: typeof meta.audioChannels === "string" ? meta.audioChannels : null,
+          audioBitrate: safeInt(meta.audioBitrate),
           audioLanguages: Array.isArray(meta.audioLanguages) ? meta.audioLanguages : [],
           subtitleLanguages: Array.isArray(meta.subtitleLanguages) ? meta.subtitleLanguages : [],
-          duration: meta.duration != null ? Number(meta.duration) : null,
-          fileSize: meta.fileSize != null ? BigInt(meta.fileSize) : null,
-          mediaInfo: meta.mediaInfo || undefined,
+          duration: safeInt(meta.duration),
+          fileSize: safeBigInt(meta.fileSize),
+          mediaInfo: meta.mediaInfo && typeof meta.mediaInfo === "object" ? meta.mediaInfo : undefined,
         },
       });
 
