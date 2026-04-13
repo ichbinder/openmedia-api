@@ -279,10 +279,14 @@ router.put("/files/:id", async (req: AuthRequest, res: Response) => {
     // Auto-clear brokenReason when status is not "broken"
     const effectiveBrokenReason = status && status !== "broken" ? null : brokenReason;
 
+    // Re-derive qualityTier when resolution changes
+    const derivedQualityTier = resolution !== undefined ? resolveQualityTier(resolution) : undefined;
+
     const nzbFile = await prisma.nzbFile.update({
       where: { id: String(req.params.id) },
       data: {
         ...(resolution !== undefined && { resolution }),
+        ...(derivedQualityTier !== undefined && { qualityTier: derivedQualityTier }),
         ...(audioLanguages !== undefined && { audioLanguages }),
         ...(subtitleLanguages !== undefined && { subtitleLanguages }),
         ...(codec !== undefined && { codec }),
