@@ -15,7 +15,7 @@ router.get("/", async (req: AuthRequest, res: Response) => {
       include: {
         nzbFile: {
           select: {
-            id: true, hash: true, resolution: true, fileExtension: true,
+            id: true, hash: true, resolution: true, qualityTier: true, fileExtension: true,
             s3Key: true, s3StreamKey: true, s3Bucket: true, downloadedAt: true,
             lastAccessedAt: true, scheduledDeletionAt: true,
             movie: { select: { id: true, tmdbId: true, titleDe: true, titleEn: true, year: true, posterPath: true } },

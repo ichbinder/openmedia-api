@@ -2,14 +2,18 @@ import { Router, type Response } from "express";
 import multer from "multer";
 import prisma from "../lib/prisma.js";
 import { requireAuth, type AuthRequest } from "../middleware/auth.js";
-import { parseNzbName, calculateHash } from "../lib/nzb-parser.js";
+import { parseNzbName, calculateHash, resolveQualityTier } from "../lib/nzb-parser.js";
 
 // Select fields for NzbFile responses
 const nzbFileSelect = {
   id: true, hash: true, originalFilename: true, fileSize: true,
-  resolution: true, audioLanguages: true, subtitleLanguages: true,
+  resolution: true, qualityTier: true, audioLanguages: true, subtitleLanguages: true,
   codec: true, source: true, releaseType: true, status: true, brokenReason: true,
   failedAttempts: true,
+  videoWidth: true, videoHeight: true, videoBitrate: true, videoFramerate: true,
+  videoColorDepth: true, hdr: true, hdrFormat: true,
+  audioCodec: true, audioChannels: true, audioBitrate: true,
+  duration: true, mediaInfo: true,
   s3Key: true, s3StreamKey: true, s3Bucket: true, fileExtension: true, downloadedAt: true,
   createdAt: true, updatedAt: true, movieId: true,
 } as const;
@@ -235,6 +239,7 @@ router.post("/files", async (req: AuthRequest, res: Response) => {
         originalFilename,
         fileSize: normalizedFileSize,
         resolution: resolution || null,
+        qualityTier: resolveQualityTier(resolution || null),
         audioLanguages: audioLanguages || [],
         subtitleLanguages: subtitleLanguages || [],
         codec: codec || null,
@@ -490,6 +495,7 @@ router.post("/import", upload.single("nzb"), async (req: AuthRequest, res: Respo
           originalFilename,
           fileSize: file.buffer.length ? BigInt(file.buffer.length) : null,
           resolution: parsed.resolution,
+          qualityTier: parsed.qualityTier,
           audioLanguages: parsed.audioLanguages,
           codec: parsed.codec,
           source: "external",

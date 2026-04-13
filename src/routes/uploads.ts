@@ -207,7 +207,7 @@ router.get("/:id", async (req: AuthRequest, res: Response) => {
 // ---------------------------------------------------------------------------
 router.patch("/:id", async (req: AuthRequest, res: Response) => {
   const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
-  const { status, error, nzbHash, hetznerServerId, hetznerServerIp } = req.body;
+  const { status, error, nzbHash, hetznerServerId, hetznerServerIp, metadata } = req.body;
 
   const job = await prisma.uploadJob.findUnique({ where: { id } });
   if (!job) {
@@ -277,6 +277,9 @@ router.patch("/:id", async (req: AuthRequest, res: Response) => {
 
       const targetMovieId = originalFile?.movieId ?? null;
 
+      // Build metadata fields from the upload callback
+      const meta = metadata && typeof metadata === "object" ? metadata : {};
+
       const newNzbFile = await prisma.nzbFile.create({
         data: {
           hash: nzbHash,
@@ -284,11 +287,31 @@ router.patch("/:id", async (req: AuthRequest, res: Response) => {
           source: "own",
           status: "untested",
           movieId: targetMovieId,
+          // Media metadata from ffprobe (if provided)
+          qualityTier: meta.qualityTier || null,
+          resolution: meta.resolution || null,
+          codec: meta.codec || null,
+          videoWidth: meta.videoWidth != null ? Number(meta.videoWidth) : null,
+          videoHeight: meta.videoHeight != null ? Number(meta.videoHeight) : null,
+          videoBitrate: meta.videoBitrate != null ? Number(meta.videoBitrate) : null,
+          videoFramerate: meta.videoFramerate || null,
+          videoColorDepth: meta.videoColorDepth != null ? Number(meta.videoColorDepth) : null,
+          hdr: meta.hdr != null ? Boolean(meta.hdr) : null,
+          hdrFormat: meta.hdrFormat || null,
+          audioCodec: meta.audioCodec || null,
+          audioChannels: meta.audioChannels || null,
+          audioBitrate: meta.audioBitrate != null ? Number(meta.audioBitrate) : null,
+          audioLanguages: Array.isArray(meta.audioLanguages) ? meta.audioLanguages : [],
+          subtitleLanguages: Array.isArray(meta.subtitleLanguages) ? meta.subtitleLanguages : [],
+          duration: meta.duration != null ? Number(meta.duration) : null,
+          fileSize: meta.fileSize != null ? BigInt(meta.fileSize) : null,
+          mediaInfo: meta.mediaInfo || undefined,
         },
       });
 
       console.log(
-        `[uploads] Created NzbFile ${nzbHash} (source=own) for Movie ${targetMovieId || "none"}`
+        `[uploads] Created NzbFile ${nzbHash} (source=own) for Movie ${targetMovieId || "none"}` +
+        (meta.qualityTier ? ` [${meta.qualityTier} ${meta.codec || "?"}]` : "")
       );
     }
   }

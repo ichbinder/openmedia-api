@@ -10,12 +10,25 @@ export interface ParsedNzbName {
   year: number | null;
   /** Resolution: "720p", "1080p", "2160p", etc. */
   resolution: string | null;
+  /** Normalized quality tier: "480p", "720p", "1080p", "2160p" */
+  qualityTier: string | null;
   /** Audio languages found */
   audioLanguages: string[];
   /** Video codec */
   codec: string | null;
   /** Source type */
   source: string | null;
+}
+
+/** Map resolution string to normalized quality tier */
+export function resolveQualityTier(resolution: string | null): string | null {
+  if (!resolution) return null;
+  const r = resolution.toLowerCase();
+  if (r === "2160p" || r === "4k" || r === "uhd") return "2160p";
+  if (r === "1080p") return "1080p";
+  if (r === "720p") return "720p";
+  if (r === "480p" || r === "576p") return "480p";
+  return null;
 }
 
 // Known resolution patterns
@@ -128,7 +141,9 @@ export function parseNzbName(filename: string): ParsedNzbName {
   // Extract title: everything before the first technical marker
   const title = extractTitle(name, year);
 
-  return { title, year, resolution, audioLanguages, codec, source };
+  const qualityTier = resolveQualityTier(resolution);
+
+  return { title, year, resolution, qualityTier, audioLanguages, codec, source };
 }
 
 /**

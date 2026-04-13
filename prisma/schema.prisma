@@ -79,6 +79,7 @@ model NzbFile {
   originalFilename  String   @map("original_filename")
   fileSize          BigInt?  @map("file_size")
   resolution        String?
+  qualityTier       String?  @map("quality_tier")    // normalized: "480p", "720p", "1080p", "2160p"
   audioLanguages    String[] @default([]) @map("audio_languages")
   subtitleLanguages String[] @default([]) @map("subtitle_languages")
   codec             String?
@@ -87,6 +88,20 @@ model NzbFile {
   status            String   @default("untested")
   brokenReason      String?  @map("broken_reason")
   failedAttempts    Int      @default(0) @map("failed_attempts")
+
+  // Media metadata from ffprobe (populated for source='own' uploads)
+  videoWidth        Int?     @map("video_width")
+  videoHeight       Int?     @map("video_height")
+  videoBitrate      Int?     @map("video_bitrate")       // kbps
+  videoFramerate    String?  @map("video_framerate")      // "23.976", "25", "29.97"
+  videoColorDepth   Int?     @map("video_color_depth")    // 8, 10, 12
+  hdr               Boolean? @map("hdr")
+  hdrFormat         String?  @map("hdr_format")           // "HDR10", "HDR10+", "Dolby Vision", "HLG"
+  audioCodec        String?  @map("audio_codec")          // primary track: "AAC", "DTS", "AC3"
+  audioChannels     String?  @map("audio_channels")       // primary track: "2.0", "5.1", "7.1"
+  audioBitrate      Int?     @map("audio_bitrate")        // primary track kbps
+  duration          Int?     @map("duration")             // seconds
+  mediaInfo         Json?    @map("media_info")           // full ffprobe JSON output
 
   // S3 storage reference (set after successful download + upload)
   s3Key             String?  @map("s3_key")
