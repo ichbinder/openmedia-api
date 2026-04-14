@@ -13,7 +13,7 @@ const nzbFileSelect = {
   videoWidth: true, videoHeight: true, videoBitrate: true, videoFramerate: true,
   videoColorDepth: true, hdr: true, hdrFormat: true,
   audioCodec: true, audioChannels: true, audioBitrate: true,
-  duration: true,
+  duration: true, mediaInfo: true,
   s3Key: true, s3StreamKey: true, s3Bucket: true, fileExtension: true, downloadedAt: true,
   createdAt: true, updatedAt: true, movieId: true,
 } as const;

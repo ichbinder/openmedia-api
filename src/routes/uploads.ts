@@ -23,6 +23,7 @@ function safeBool(v: unknown): boolean {
   return Boolean(v);
 }
 
+
 /** Safely coerce a value to BigInt, returning null on invalid input. */
 function safeBigInt(v: unknown): bigint | null {
   if (v == null) return null;
@@ -332,6 +333,9 @@ router.patch("/:id", async (req: AuthRequest, res: Response) => {
       });
 
       const targetMovieId = originalFile?.movieId ?? null;
+
+      // Build metadata fields from the upload callback
+      const meta = metadata && typeof metadata === "object" ? metadata : {};
 
       const newNzbFile = await prisma.nzbFile.create({
         data: {

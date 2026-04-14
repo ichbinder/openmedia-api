@@ -122,6 +122,30 @@ describe("resolveQualityTier", () => {
   });
 });
 
+describe("resolveQualityTier", () => {
+  it("mappt Standard-Auflösungen", () => {
+    expect(resolveQualityTier("1080p")).toBe("1080p");
+    expect(resolveQualityTier("720p")).toBe("720p");
+    expect(resolveQualityTier("2160p")).toBe("2160p");
+    expect(resolveQualityTier("480p")).toBe("480p");
+  });
+
+  it("mappt 576p auf 480p", () => {
+    expect(resolveQualityTier("576p")).toBe("480p");
+  });
+
+  it("mappt 4K/UHD auf 2160p", () => {
+    expect(resolveQualityTier("4K")).toBe("2160p");
+    expect(resolveQualityTier("4k")).toBe("2160p");
+    expect(resolveQualityTier("UHD")).toBe("2160p");
+  });
+
+  it("gibt null für null/unbekannt", () => {
+    expect(resolveQualityTier(null)).toBeNull();
+    expect(resolveQualityTier("unknown")).toBeNull();
+  });
+});
+
 describe("calculateHash", () => {
   it("berechnet SHA-256 Hash", () => {
     const hash = calculateHash(Buffer.from("test content"));
