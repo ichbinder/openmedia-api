@@ -16,11 +16,21 @@ function safeInt(v: unknown): number | null {
   return Number.isFinite(n) ? Math.round(n) : null;
 }
 
-/** Safely coerce a value to boolean, handling string "false"/"0" correctly. */
-function safeBool(v: unknown): boolean {
-  if (typeof v === "string") return v === "true" || v === "1";
-  if (typeof v === "number") return v !== 0;
-  return Boolean(v);
+/**
+ * Safely coerce a value to boolean | null.
+ * Returns null for unparseable values so existing metadata is NOT overwritten
+ * with a wrong false. Only canonical boolean representations are accepted.
+ */
+function safeBoolValue(v: unknown): boolean | null {
+  if (typeof v === "boolean") return v;
+  if (typeof v === "number") return v === 1 ? true : v === 0 ? false : null;
+  if (typeof v === "string") {
+    const low = v.toLowerCase();
+    if (low === "true" || low === "1") return true;
+    if (low === "false" || low === "0") return false;
+    return null; // unparseable — don't persist as false
+  }
+  return null;
 }
 
 
@@ -261,10 +271,104 @@ router.patch("/:id", async (req: AuthRequest, res: Response) => {
     updateData.completedAt = new Date();
   }
 
-  const updated = await prisma.uploadJob.update({
-    where: { id },
-    data: updateData,
-  });
+  // If completed: wrap the status update, metadata persistence, and new NzbFile
+  // creation in a single transaction so failures don't leave the job in an
+  // inconsistent "completed" state with half-written metadata.
+  // If not completed, just update the job normally.
+  let updated: Awaited<ReturnType<typeof prisma.uploadJob.update>> | undefined;
+
+  if (status === "completed") {
+    const meta = metadata && typeof metadata === "object" ? metadata : {};
+    const hasMetadata = Object.keys(meta).length > 0;
+    const existingNzb = nzbHash
+      ? await prisma.nzbFile.findUnique({ where: { hash: nzbHash }, select: { id: true } })
+      : null;
+
+    updated = await prisma.$transaction(async (tx) => {
+      // 1. Update job status
+      const jobUpdated = await tx.uploadJob.update({ where: { id }, data: updateData });
+
+      // 2. Update original NzbFile with ffprobe metadata (only valid, non-null values)
+      if (hasMetadata) {
+        const metaUpdate: Record<string, unknown> = {};
+        if (meta.qualityTier || meta.resolution) metaUpdate.qualityTier = resolveQualityTier(String(meta.qualityTier || meta.resolution || ""));
+        if (typeof meta.resolution === "string") metaUpdate.resolution = meta.resolution;
+        if (typeof meta.codec === "string") metaUpdate.codec = meta.codec;
+        const nw = safeInt(meta.videoWidth); if (nw != null) metaUpdate.videoWidth = nw;
+        const nh = safeInt(meta.videoHeight); if (nh != null) metaUpdate.videoHeight = nh;
+        const nb = safeInt(meta.videoBitrate); if (nb != null) metaUpdate.videoBitrate = nb;
+        if (typeof meta.videoFramerate === "string") metaUpdate.videoFramerate = meta.videoFramerate;
+        const nd = safeInt(meta.videoColorDepth); if (nd != null) metaUpdate.videoColorDepth = nd;
+        const hb = safeBoolValue(meta.hdr); if (hb != null) metaUpdate.hdr = hb;
+        if (typeof meta.hdrFormat === "string") metaUpdate.hdrFormat = meta.hdrFormat;
+        if (typeof meta.audioCodec === "string") metaUpdate.audioCodec = meta.audioCodec;
+        if (typeof meta.audioChannels === "string") metaUpdate.audioChannels = meta.audioChannels;
+        const ab = safeInt(meta.audioBitrate); if (ab != null) metaUpdate.audioBitrate = ab;
+        if (Array.isArray(meta.audioLanguages)) metaUpdate.audioLanguages = meta.audioLanguages;
+        if (Array.isArray(meta.subtitleLanguages)) metaUpdate.subtitleLanguages = meta.subtitleLanguages;
+        const dur = safeInt(meta.duration); if (dur != null) metaUpdate.duration = dur;
+        const fs = safeBigInt(meta.fileSize); if (fs != null) metaUpdate.fileSize = fs;
+        if (meta.mediaInfo && typeof meta.mediaInfo === "object") metaUpdate.mediaInfo = meta.mediaInfo;
+
+        if (Object.keys(metaUpdate).length > 0) {
+          await tx.nzbFile.update({ where: { id: job.nzbFileId }, data: metaUpdate });
+          console.log(`[uploads] Updated original NzbFile ${job.nzbFileId} with ffprobe metadata [${meta.qualityTier || "?"} ${meta.codec || "?"}]`);
+        }
+      }
+
+      // 3. Create new NzbFile (source='own') if nzbHash provided
+      if (nzbHash && !existingNzb) {
+        const originalFile = await tx.nzbFile.findUnique({
+          where: { id: job.nzbFileId },
+          select: { hash: true, originalFilename: true, movieId: true },
+        });
+
+        const targetMovieId = originalFile?.movieId ?? null;
+
+        await tx.nzbFile.create({
+          data: {
+            hash: nzbHash,
+            originalFilename: `${originalFile?.originalFilename || "unknown"}.own.nzb`,
+            source: "own",
+            status: "untested",
+            movieId: targetMovieId,
+            qualityTier: resolveQualityTier(String(meta.qualityTier || meta.resolution || "") || null),
+            resolution: typeof meta.resolution === "string" ? meta.resolution : null,
+            codec: typeof meta.codec === "string" ? meta.codec : null,
+            videoWidth: safeInt(meta.videoWidth),
+            videoHeight: safeInt(meta.videoHeight),
+            videoBitrate: safeInt(meta.videoBitrate),
+            videoFramerate: typeof meta.videoFramerate === "string" ? meta.videoFramerate : null,
+            videoColorDepth: safeInt(meta.videoColorDepth),
+            hdr: meta.hdr != null ? safeBoolValue(meta.hdr) : null,
+            hdrFormat: typeof meta.hdrFormat === "string" ? meta.hdrFormat : null,
+            audioCodec: typeof meta.audioCodec === "string" ? meta.audioCodec : null,
+            audioChannels: typeof meta.audioChannels === "string" ? meta.audioChannels : null,
+            audioBitrate: safeInt(meta.audioBitrate),
+            audioLanguages: Array.isArray(meta.audioLanguages) ? meta.audioLanguages : [],
+            subtitleLanguages: Array.isArray(meta.subtitleLanguages) ? meta.subtitleLanguages : [],
+            duration: safeInt(meta.duration),
+            fileSize: safeBigInt(meta.fileSize),
+            mediaInfo: meta.mediaInfo && typeof meta.mediaInfo === "object" ? meta.mediaInfo : undefined,
+          },
+        });
+
+        console.log(
+          `[uploads] Created NzbFile ${nzbHash} (source=own) for Movie ${targetMovieId || "none"}` +
+          (meta.qualityTier ? ` [${meta.qualityTier} ${meta.codec || "?"}]` : "")
+        );
+      } else if (nzbHash && existingNzb) {
+        console.log(`[uploads] NzbFile with hash ${nzbHash} already exists — skipping create`);
+      }
+
+      return jobUpdated;
+    });
+  } else {
+    updated = await prisma.uploadJob.update({
+      where: { id },
+      data: updateData,
+    });
+  }
 
   // If completed or failed: delete the upload VPS server-side
   // (Hetzner token is never exposed to the VPS)
@@ -272,104 +376,10 @@ router.patch("/:id", async (req: AuthRequest, res: Response) => {
     try {
       const { deleteServer } = await import("../lib/hetzner.js");
       await deleteServer(job.hetznerServerId);
-      console.log(`[uploads] VPS ${job.hetznerServerId} deleted after status=${status}`);
+      console.log(`[updates] VPS ${job.hetznerServerId} deleted after status=${status}`);
     } catch (deleteErr) {
       console.error(`[uploads] Failed to delete VPS ${job.hetznerServerId}:`, deleteErr);
       // Non-blocking — zombie cleanup will catch it later
-    }
-  }
-
-  // If metadata provided: also update the original NzbFile with ffprobe data.
-  // The original NzbFile (external) may only have NZB-parsed resolution/codec.
-  const meta = metadata && typeof metadata === "object" ? metadata : {};
-  const hasMetadata = Object.keys(meta).length > 0;
-
-  if (hasMetadata && status === "completed") {
-    const metaUpdate: Record<string, unknown> = {};
-    if (meta.qualityTier || meta.resolution) metaUpdate.qualityTier = resolveQualityTier(String(meta.qualityTier || meta.resolution || ""));
-    if (typeof meta.resolution === "string") metaUpdate.resolution = meta.resolution;
-    if (typeof meta.codec === "string") metaUpdate.codec = meta.codec;
-    if (meta.videoWidth != null) metaUpdate.videoWidth = safeInt(meta.videoWidth);
-    if (meta.videoHeight != null) metaUpdate.videoHeight = safeInt(meta.videoHeight);
-    if (meta.videoBitrate != null) metaUpdate.videoBitrate = safeInt(meta.videoBitrate);
-    if (typeof meta.videoFramerate === "string") metaUpdate.videoFramerate = meta.videoFramerate;
-    if (meta.videoColorDepth != null) metaUpdate.videoColorDepth = safeInt(meta.videoColorDepth);
-    if (meta.hdr != null) metaUpdate.hdr = safeBool(meta.hdr);
-    if (typeof meta.hdrFormat === "string") metaUpdate.hdrFormat = meta.hdrFormat;
-    if (typeof meta.audioCodec === "string") metaUpdate.audioCodec = meta.audioCodec;
-    if (typeof meta.audioChannels === "string") metaUpdate.audioChannels = meta.audioChannels;
-    if (meta.audioBitrate != null) metaUpdate.audioBitrate = safeInt(meta.audioBitrate);
-    if (Array.isArray(meta.audioLanguages)) metaUpdate.audioLanguages = meta.audioLanguages;
-    if (Array.isArray(meta.subtitleLanguages)) metaUpdate.subtitleLanguages = meta.subtitleLanguages;
-    if (meta.duration != null) metaUpdate.duration = safeInt(meta.duration);
-    if (meta.fileSize != null) metaUpdate.fileSize = safeBigInt(meta.fileSize);
-    if (meta.mediaInfo && typeof meta.mediaInfo === "object") metaUpdate.mediaInfo = meta.mediaInfo;
-
-    if (Object.keys(metaUpdate).length > 0) {
-      await prisma.nzbFile.update({
-        where: { id: job.nzbFileId },
-        data: metaUpdate,
-      });
-      console.log(`[uploads] Updated original NzbFile ${job.nzbFileId} with ffprobe metadata [${meta.qualityTier || "?"} ${meta.codec || "?"}]`);
-    }
-  }
-
-  // If completed with nzbHash: create a new NzbFile entry (source='own').
-  // The new NzbFile represents our self-created NZB in the NZB-Service.
-  // It's linked to the same NzbMovie as the original download.
-  if (status === "completed" && nzbHash) {
-    const existingNzb = await prisma.nzbFile.findUnique({
-      where: { hash: nzbHash },
-      select: { id: true },
-    });
-
-    if (existingNzb) {
-      console.log(`[uploads] NzbFile with hash ${nzbHash} already exists — skipping create`);
-    } else {
-      // Get the original NzbFile for metadata
-      const originalFile = await prisma.nzbFile.findUnique({
-        where: { id: job.nzbFileId },
-        select: { hash: true, originalFilename: true, movieId: true },
-      });
-
-      const targetMovieId = originalFile?.movieId ?? null;
-
-      // Build metadata fields from the upload callback
-      const meta = metadata && typeof metadata === "object" ? metadata : {};
-
-      const newNzbFile = await prisma.nzbFile.create({
-        data: {
-          hash: nzbHash,
-          originalFilename: `${originalFile?.originalFilename || "unknown"}.own.nzb`,
-          source: "own",
-          status: "untested",
-          movieId: targetMovieId,
-          // Media metadata from ffprobe (if provided) — safe coercion to prevent 500s
-          qualityTier: resolveQualityTier(String(meta.qualityTier || meta.resolution || "") || null),
-          resolution: typeof meta.resolution === "string" ? meta.resolution : null,
-          codec: typeof meta.codec === "string" ? meta.codec : null,
-          videoWidth: safeInt(meta.videoWidth),
-          videoHeight: safeInt(meta.videoHeight),
-          videoBitrate: safeInt(meta.videoBitrate),
-          videoFramerate: typeof meta.videoFramerate === "string" ? meta.videoFramerate : null,
-          videoColorDepth: safeInt(meta.videoColorDepth),
-          hdr: meta.hdr != null ? safeBool(meta.hdr) : null,
-          hdrFormat: typeof meta.hdrFormat === "string" ? meta.hdrFormat : null,
-          audioCodec: typeof meta.audioCodec === "string" ? meta.audioCodec : null,
-          audioChannels: typeof meta.audioChannels === "string" ? meta.audioChannels : null,
-          audioBitrate: safeInt(meta.audioBitrate),
-          audioLanguages: Array.isArray(meta.audioLanguages) ? meta.audioLanguages : [],
-          subtitleLanguages: Array.isArray(meta.subtitleLanguages) ? meta.subtitleLanguages : [],
-          duration: safeInt(meta.duration),
-          fileSize: safeBigInt(meta.fileSize),
-          mediaInfo: meta.mediaInfo && typeof meta.mediaInfo === "object" ? meta.mediaInfo : undefined,
-        },
-      });
-
-      console.log(
-        `[uploads] Created NzbFile ${nzbHash} (source=own) for Movie ${targetMovieId || "none"}` +
-        (meta.qualityTier ? ` [${meta.qualityTier} ${meta.codec || "?"}]` : "")
-      );
     }
   }
 
@@ -377,7 +387,7 @@ router.patch("/:id", async (req: AuthRequest, res: Response) => {
   res.json({
     id: updated.id,
     status: updated.status,
-    completedAt: updated.completedAt,
+    completedAt: updated!.completedAt,
   });
 });
 

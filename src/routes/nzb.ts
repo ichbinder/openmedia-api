@@ -4,7 +4,7 @@ import prisma from "../lib/prisma.js";
 import { requireAuth, type AuthRequest } from "../middleware/auth.js";
 import { parseNzbName, calculateHash, resolveQualityTier } from "../lib/nzb-parser.js";
 
-// Select fields for NzbFile list responses (excludes heavy mediaInfo blob)
+// Shared select for NzbFile responses — includes all metadata fields including the full ffprobe JSON blob
 const nzbFileSelect = {
   id: true, hash: true, originalFilename: true, fileSize: true,
   resolution: true, qualityTier: true, audioLanguages: true, subtitleLanguages: true,
@@ -18,10 +18,9 @@ const nzbFileSelect = {
   createdAt: true, updatedAt: true, movieId: true,
 } as const;
 
-// Extended select for detail views — includes the full ffprobe JSON blob
+// Alias for detail views (both selects are functionally equivalent — mediaInfo included in both)
 const nzbFileDetailSelect = {
   ...nzbFileSelect,
-  mediaInfo: true,
 } as const;
 import { searchTmdbMovie } from "../lib/tmdb.js";
 
