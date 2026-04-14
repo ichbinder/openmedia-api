@@ -89,7 +89,7 @@ model NzbFile {
   brokenReason      String?  @map("broken_reason")
   failedAttempts    Int      @default(0) @map("failed_attempts")
 
-  // Media metadata from ffprobe (populated for source='own' uploads)
+  // Media metadata from ffprobe (populated for both source='own' and source='external' NzbFiles)
   videoWidth        Int?     @map("video_width")
   videoHeight       Int?     @map("video_height")
   videoBitrate      Int?     @map("video_bitrate")       // kbps

@@ -16,6 +16,13 @@ function safeInt(v: unknown): number | null {
   return Number.isFinite(n) ? Math.round(n) : null;
 }
 
+/** Safely coerce a value to boolean, handling string "false"/"0" correctly. */
+function safeBool(v: unknown): boolean {
+  if (typeof v === "string") return v === "true" || v === "1";
+  if (typeof v === "number") return v !== 0;
+  return Boolean(v);
+}
+
 /** Safely coerce a value to BigInt, returning null on invalid input. */
 function safeBigInt(v: unknown): bigint | null {
   if (v == null) return null;
@@ -276,7 +283,7 @@ router.patch("/:id", async (req: AuthRequest, res: Response) => {
   const meta = metadata && typeof metadata === "object" ? metadata : {};
   const hasMetadata = Object.keys(meta).length > 0;
 
-  if (hasMetadata) {
+  if (hasMetadata && status === "completed") {
     const metaUpdate: Record<string, unknown> = {};
     if (meta.qualityTier || meta.resolution) metaUpdate.qualityTier = resolveQualityTier(String(meta.qualityTier || meta.resolution || ""));
     if (typeof meta.resolution === "string") metaUpdate.resolution = meta.resolution;
@@ -286,7 +293,7 @@ router.patch("/:id", async (req: AuthRequest, res: Response) => {
     if (meta.videoBitrate != null) metaUpdate.videoBitrate = safeInt(meta.videoBitrate);
     if (typeof meta.videoFramerate === "string") metaUpdate.videoFramerate = meta.videoFramerate;
     if (meta.videoColorDepth != null) metaUpdate.videoColorDepth = safeInt(meta.videoColorDepth);
-    if (meta.hdr != null) metaUpdate.hdr = Boolean(meta.hdr);
+    if (meta.hdr != null) metaUpdate.hdr = safeBool(meta.hdr);
     if (typeof meta.hdrFormat === "string") metaUpdate.hdrFormat = meta.hdrFormat;
     if (typeof meta.audioCodec === "string") metaUpdate.audioCodec = meta.audioCodec;
     if (typeof meta.audioChannels === "string") metaUpdate.audioChannels = meta.audioChannels;
@@ -297,11 +304,13 @@ router.patch("/:id", async (req: AuthRequest, res: Response) => {
     if (meta.fileSize != null) metaUpdate.fileSize = safeBigInt(meta.fileSize);
     if (meta.mediaInfo && typeof meta.mediaInfo === "object") metaUpdate.mediaInfo = meta.mediaInfo;
 
-    await prisma.nzbFile.update({
-      where: { id: job.nzbFileId },
-      data: metaUpdate,
-    });
-    console.log(`[uploads] Updated original NzbFile ${job.nzbFileId} with ffprobe metadata [${meta.qualityTier || "?"} ${meta.codec || "?"}]`);
+    if (Object.keys(metaUpdate).length > 0) {
+      await prisma.nzbFile.update({
+        where: { id: job.nzbFileId },
+        data: metaUpdate,
+      });
+      console.log(`[uploads] Updated original NzbFile ${job.nzbFileId} with ffprobe metadata [${meta.qualityTier || "?"} ${meta.codec || "?"}]`);
+    }
   }
 
   // If completed with nzbHash: create a new NzbFile entry (source='own').
@@ -340,7 +349,7 @@ router.patch("/:id", async (req: AuthRequest, res: Response) => {
           videoBitrate: safeInt(meta.videoBitrate),
           videoFramerate: typeof meta.videoFramerate === "string" ? meta.videoFramerate : null,
           videoColorDepth: safeInt(meta.videoColorDepth),
-          hdr: meta.hdr != null ? Boolean(meta.hdr) : null,
+          hdr: meta.hdr != null ? safeBool(meta.hdr) : null,
           hdrFormat: typeof meta.hdrFormat === "string" ? meta.hdrFormat : null,
           audioCodec: typeof meta.audioCodec === "string" ? meta.audioCodec : null,
           audioChannels: typeof meta.audioChannels === "string" ? meta.audioChannels : null,

@@ -82,6 +82,20 @@ describe("parseNzbName", () => {
     expect(result.audioLanguages).toContain("de");
     expect(result.audioLanguages).toContain("en");
   });
+
+  it("parst 480p und entfernt es aus Titel", () => {
+    const result = parseNzbName("Old.Movie.2001.480p.DVDRip.XviD-GROUP.nzb");
+    expect(result.title).toBe("Old Movie");
+    expect(result.resolution).toBe("480p");
+    expect(result.qualityTier).toBe("480p");
+  });
+
+  it("parst 576p und entfernt es aus Titel", () => {
+    const result = parseNzbName("Euro.Film.2005.576p.DVDRip.x264-GROUP.nzb");
+    expect(result.title).toBe("Euro Film");
+    expect(result.resolution).toBe("576p");
+    expect(result.qualityTier).toBe("480p");
+  });
 });
 
 describe("resolveQualityTier", () => {
