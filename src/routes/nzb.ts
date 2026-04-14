@@ -4,7 +4,7 @@ import prisma from "../lib/prisma.js";
 import { requireAuth, type AuthRequest } from "../middleware/auth.js";
 import { parseNzbName, calculateHash, resolveQualityTier } from "../lib/nzb-parser.js";
 
-// Select fields for NzbFile responses
+// Select fields for NzbFile list responses (excludes heavy mediaInfo blob)
 const nzbFileSelect = {
   id: true, hash: true, originalFilename: true, fileSize: true,
   resolution: true, qualityTier: true, audioLanguages: true, subtitleLanguages: true,
@@ -16,6 +16,12 @@ const nzbFileSelect = {
   duration: true, mediaInfo: true,
   s3Key: true, s3StreamKey: true, s3Bucket: true, fileExtension: true, downloadedAt: true,
   createdAt: true, updatedAt: true, movieId: true,
+} as const;
+
+// Extended select for detail views — includes the full ffprobe JSON blob
+const nzbFileDetailSelect = {
+  ...nzbFileSelect,
+  mediaInfo: true,
 } as const;
 import { searchTmdbMovie } from "../lib/tmdb.js";
 
@@ -71,7 +77,7 @@ router.get("/movies/:id", async (req: AuthRequest, res: Response) => {
   try {
     const movie = await prisma.nzbMovie.findUnique({
       where: { id: String(req.params.id) },
-      include: { nzbFiles: { select: nzbFileSelect } },
+      include: { nzbFiles: { select: nzbFileDetailSelect } },
     });
 
     if (!movie) {

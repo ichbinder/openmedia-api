@@ -161,7 +161,7 @@ function extractTitle(name: string, year: number | null): string {
 
   // Cut at first technical keyword if before year
   const technicalPatterns = [
-    /\b(720p|1080p|2160p|4k|uhd)\b/i,
+    /\b(480p|576p|720p|1080p|2160p|4k|uhd)\b/i,
     /\b(x264|x265|h264|h265|hevc|xvid|av1)\b/i,
     /\b(BluRay|WEB-DL|WEBRip|HDTV|DVDRip|BDRip|BRRip|Remux)\b/i,
     /\b(German|English|French|Spanish|Italian|DL)\b/i,
