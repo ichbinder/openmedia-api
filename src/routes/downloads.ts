@@ -984,13 +984,18 @@ router.patch("/jobs/:id/status", async (req: AuthRequest, res: Response) => {
               });
               if (!nzb || nzb.source === "own" || !nzb.s3Key) return null;
 
-              // Check: does this Movie already have an own version?
+              // Check: does this Movie already have a healthy own version?
+              // Expired/broken own versions don't count — their Usenet content is unavailable
               if (nzb.movieId) {
                 const ownVersion = await tx.nzbFile.findFirst({
-                  where: { movieId: nzb.movieId, source: "own" },
+                  where: {
+                    movieId: nzb.movieId,
+                    source: "own",
+                    status: { notIn: ["expired", "broken"] },
+                  },
                   select: { id: true },
                 });
-                if (ownVersion) return null; // already have own version for this movie
+                if (ownVersion) return null; // already have healthy own version for this movie
               }
 
               // Check: is there already a running/pending upload?
@@ -1009,7 +1014,7 @@ router.patch("/jobs/:id/status", async (req: AuthRequest, res: Response) => {
             });
 
             if (!uploadJob) {
-              console.log(`[auto-upload] Skipping — source=own, own version exists, or upload already running`);
+              console.log(`[auto-upload] Skipping — healthy own version exists, or upload already running`);
             } else {
               console.log(`[auto-upload] Triggering Usenet re-upload for NzbFile ${nzbFile.hash}`);
 
