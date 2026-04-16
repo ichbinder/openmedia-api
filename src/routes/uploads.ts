@@ -280,13 +280,14 @@ router.patch("/:id", async (req: AuthRequest, res: Response) => {
   if (status === "completed") {
     const meta = metadata && typeof metadata === "object" ? metadata : {};
     const hasMetadata = Object.keys(meta).length > 0;
-    const existingNzb = nzbHash
-      ? await prisma.nzbFile.findUnique({ where: { hash: nzbHash }, select: { id: true } })
-      : null;
-
     updated = await prisma.$transaction(async (tx) => {
       // 1. Update job status
       const jobUpdated = await tx.uploadJob.update({ where: { id }, data: updateData });
+
+      // Check for existing NzbFile inside the transaction to prevent race conditions
+      const existingNzb = nzbHash
+        ? await tx.nzbFile.findUnique({ where: { hash: nzbHash }, select: { id: true } })
+        : null;
 
       // 2. Update original NzbFile with ffprobe metadata (only valid, non-null values)
       if (hasMetadata) {
@@ -376,7 +377,7 @@ router.patch("/:id", async (req: AuthRequest, res: Response) => {
     try {
       const { deleteServer } = await import("../lib/hetzner.js");
       await deleteServer(job.hetznerServerId);
-      console.log(`[updates] VPS ${job.hetznerServerId} deleted after status=${status}`);
+      console.log(`[uploads] VPS ${job.hetznerServerId} deleted after status=${status}`);
     } catch (deleteErr) {
       console.error(`[uploads] Failed to delete VPS ${job.hetznerServerId}:`, deleteErr);
       // Non-blocking — zombie cleanup will catch it later
