@@ -6,3 +6,4 @@ generated/
 *.log
 .DS_Store
 nzb-files/
+test-results/

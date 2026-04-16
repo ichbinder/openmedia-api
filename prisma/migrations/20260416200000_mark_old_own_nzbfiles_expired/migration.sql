@@ -14,4 +14,4 @@ WHERE "source" = 'own'
   AND "s3_key" IS NULL
   AND "s3_stream_key" IS NULL
   AND "created_at" < '2026-04-08T00:00:00Z'
-  AND "status" != 'expired';
+  AND "status" NOT IN ('expired', 'broken');

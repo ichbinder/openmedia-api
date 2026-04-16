@@ -376,7 +376,7 @@ router.patch("/:id", async (req: AuthRequest, res: Response) => {
     try {
       const { deleteServer } = await import("../lib/hetzner.js");
       await deleteServer(job.hetznerServerId);
-      console.log(`[updates] VPS ${job.hetznerServerId} deleted after status=${status}`);
+      console.log(`[uploads] VPS ${job.hetznerServerId} deleted after status=${status}`);
     } catch (deleteErr) {
       console.error(`[uploads] Failed to delete VPS ${job.hetznerServerId}:`, deleteErr);
       // Non-blocking — zombie cleanup will catch it later
