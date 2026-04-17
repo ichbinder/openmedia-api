@@ -98,8 +98,15 @@ router.put("/entries", requireAuth, requireAdmin, async (req: AuthRequest, res: 
   try {
     const { categoryName, key, value, encrypted, displayName, description } = req.body;
 
-    if (!categoryName || !key || value === undefined) {
+    if (!categoryName || typeof categoryName !== "string" ||
+        !key || typeof key !== "string" ||
+        value === undefined || value === null) {
       res.status(400).json({ error: "categoryName, key, and value are required." });
+      return;
+    }
+
+    if (encrypted !== undefined && typeof encrypted !== "boolean") {
+      res.status(400).json({ error: "encrypted must be a boolean." });
       return;
     }
 

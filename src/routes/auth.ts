@@ -45,7 +45,7 @@ router.post("/register", async (req: Request, res: Response) => {
 
     console.log(`[auth] User registered: ${user.email}`);
 
-    const adminEmails = (process.env.ADMIN_EMAILS || "").split(",").map((e) => e.trim()).filter(Boolean);
+    const adminEmails = (process.env.ADMIN_EMAILS || "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
     res.status(201).json({
       user: { id: user.id, email: user.email, name: user.name, isAdmin: adminEmails.includes(user.email) },
       token,
@@ -85,7 +85,7 @@ router.post("/login", async (req: Request, res: Response) => {
 
     console.log(`[auth] User logged in: ${user.email}`);
 
-    const loginAdminEmails = (process.env.ADMIN_EMAILS || "").split(",").map((e) => e.trim()).filter(Boolean);
+    const loginAdminEmails = (process.env.ADMIN_EMAILS || "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
     res.json({
       user: { id: user.id, email: user.email, name: user.name, isAdmin: loginAdminEmails.includes(user.email) },
       token,
@@ -110,8 +110,8 @@ router.get("/me", requireAuth, async (req: AuthRequest, res: Response) => {
     }
 
     // Check admin status via ADMIN_EMAILS env var (same logic as requireAdmin middleware)
-    const adminEmails = (process.env.ADMIN_EMAILS || "").split(",").map((e) => e.trim()).filter(Boolean);
-    const isAdmin = adminEmails.includes(user.email);
+    const adminEmails = (process.env.ADMIN_EMAILS || "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
+    const isAdmin = adminEmails.includes(user.email.toLowerCase());
 
     res.json({ user: { ...user, isAdmin } });
   } catch (err) {

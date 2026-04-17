@@ -53,6 +53,8 @@ async function seedProfile() {
 
 describe("Admin Config Routes", () => {
   const originalKey = process.env.ENCRYPTION_MASTER_KEY;
+  const originalAdminEmails = process.env.ADMIN_EMAILS;
+  const originalServiceToken = process.env.SERVICE_API_TOKEN;
 
   beforeEach(async () => {
     process.env.ENCRYPTION_MASTER_KEY = TEST_MASTER_KEY;
@@ -69,13 +71,14 @@ describe("Admin Config Routes", () => {
     await prisma.configCategory.deleteMany();
     await prisma.user.deleteMany({ where: { email: { contains: "config" } } });
 
-    if (originalKey) {
-      process.env.ENCRYPTION_MASTER_KEY = originalKey;
-    } else {
-      delete process.env.ENCRYPTION_MASTER_KEY;
-    }
-    delete process.env.ADMIN_EMAILS;
-    delete process.env.SERVICE_API_TOKEN;
+    // Restore original env vars
+    const restore = (key: string, original: string | undefined) => {
+      if (original !== undefined) process.env[key] = original;
+      else delete process.env[key];
+    };
+    restore("ENCRYPTION_MASTER_KEY", originalKey);
+    restore("ADMIN_EMAILS", originalAdminEmails);
+    restore("SERVICE_API_TOKEN", originalServiceToken);
   });
 
   describe("auth and authorization", () => {

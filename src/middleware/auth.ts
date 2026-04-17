@@ -67,9 +67,9 @@ export function requireAuth(req: AuthRequest, res: Response, next: NextFunction)
  * Must be used after requireAuth.
  */
 export function requireAdmin(req: AuthRequest, res: Response, next: NextFunction): void {
-  const adminEmails = (process.env.ADMIN_EMAILS || "").split(",").map((e) => e.trim()).filter(Boolean);
+  const adminEmails = (process.env.ADMIN_EMAILS || "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
 
-  if (!req.user?.email || !adminEmails.includes(req.user.email)) {
+  if (!req.user?.email || !adminEmails.includes(req.user.email.toLowerCase())) {
     res.status(403).json({ error: "Admin-Zugriff erforderlich." });
     return;
   }
@@ -86,7 +86,8 @@ export function requireServiceToken(req: Request, res: Response, next: NextFunct
   const serviceToken = process.env.SERVICE_API_TOKEN;
 
   if (!serviceToken) {
-    res.status(503).json({ error: "Service token not configured." });
+    console.error("[auth] SERVICE_API_TOKEN not configured — rejecting service request");
+    res.status(401).json({ error: "Invalid service token." });
     return;
   }
 
