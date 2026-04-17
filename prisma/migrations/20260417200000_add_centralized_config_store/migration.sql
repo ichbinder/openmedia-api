@@ -55,8 +55,10 @@ CREATE TABLE "config_history" (
     "old_value" TEXT,
     "new_value" TEXT,
     "changed_by" TEXT,
+    "entry_key" TEXT,
+    "category_name" TEXT,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "entry_id" TEXT NOT NULL,
+    "entry_id" TEXT,
 
     CONSTRAINT "config_history_pkey" PRIMARY KEY ("id")
 );
@@ -92,7 +94,7 @@ ALTER TABLE "config_profile_categories" ADD CONSTRAINT "config_profile_categorie
 ALTER TABLE "config_profile_categories" ADD CONSTRAINT "config_profile_categories_category_id_fkey" FOREIGN KEY ("category_id") REFERENCES "config_categories"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "config_history" ADD CONSTRAINT "config_history_entry_id_fkey" FOREIGN KEY ("entry_id") REFERENCES "config_entries"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "config_history" ADD CONSTRAINT "config_history_entry_id_fkey" FOREIGN KEY ("entry_id") REFERENCES "config_entries"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- Seed: Default categories
 INSERT INTO "config_categories" ("id", "name", "display_name", "description", "created_at", "updated_at") VALUES

@@ -155,11 +155,11 @@ export async function upsertEntry(
     tag = enc.tag;
   }
 
-  const existing = await prisma.configEntry.findUnique({
-    where: { categoryId_key: { categoryId: category.id, key: input.key } },
-  });
-
   const entry = await prisma.$transaction(async (tx) => {
+    const existing = await tx.configEntry.findUnique({
+      where: { categoryId_key: { categoryId: category.id, key: input.key } },
+    });
+
     const result = await tx.configEntry.upsert({
       where: { categoryId_key: { categoryId: category.id, key: input.key } },
       create: {
@@ -183,10 +183,11 @@ export async function upsertEntry(
       include: { category: { select: { name: true } } },
     });
 
-    // Record history — store "encrypted" marker, never plaintext secrets
     await tx.configHistory.create({
       data: {
         entryId: result.id,
+        entryKey: input.key,
+        categoryName: input.categoryName,
         action: existing ? "updated" : "created",
         oldValue: existing ? (existing.encrypted ? "[encrypted]" : existing.value) : null,
         newValue: isEncrypted ? "[encrypted]" : input.value,
@@ -228,6 +229,8 @@ export async function deleteEntry(
     await tx.configHistory.create({
       data: {
         entryId: entry.id,
+        entryKey: key,
+        categoryName: categoryName,
         action: "deleted",
         oldValue: entry.encrypted ? "[encrypted]" : entry.value,
         newValue: null,

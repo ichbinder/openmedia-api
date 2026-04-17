@@ -5,7 +5,7 @@
  */
 
 import { Router, type Response } from "express";
-import { requireAuth, type AuthRequest } from "../middleware/auth.js";
+import { requireAuth, requireAdmin, requireServiceToken, type AuthRequest } from "../middleware/auth.js";
 import { isEncryptionConfigured } from "../lib/crypto.js";
 import {
   listCategories,
@@ -21,12 +21,10 @@ import {
 
 const router = Router();
 
-router.use(requireAuth);
-
 // ─── Categories ───────────────────────────────────────────────────────
 
 /** GET /admin/config/categories — list all categories with entry counts */
-router.get("/categories", async (_req: AuthRequest, res: Response) => {
+router.get("/categories", requireAuth, requireAdmin, async (_req: AuthRequest, res: Response) => {
   try {
     const categories = await listCategories();
     res.json({ categories });
@@ -37,7 +35,7 @@ router.get("/categories", async (_req: AuthRequest, res: Response) => {
 });
 
 /** POST /admin/config/categories — create a new category */
-router.post("/categories", async (req: AuthRequest, res: Response) => {
+router.post("/categories", requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
   try {
     const { name, displayName, description } = req.body;
     if (!name || !displayName) {
@@ -60,7 +58,7 @@ router.post("/categories", async (req: AuthRequest, res: Response) => {
 // ─── Entries ──────────────────────────────────────────────────────────
 
 /** GET /admin/config/entries/:categoryName — list entries in a category */
-router.get("/entries/:categoryName", async (req: AuthRequest, res: Response) => {
+router.get("/entries/:categoryName", requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
   try {
     const reveal = req.query.reveal === "true";
     if (reveal && !isEncryptionConfigured()) {
@@ -76,7 +74,7 @@ router.get("/entries/:categoryName", async (req: AuthRequest, res: Response) => 
 });
 
 /** GET /admin/config/entries/:categoryName/:key — get a single entry */
-router.get("/entries/:categoryName/:key", async (req: AuthRequest, res: Response) => {
+router.get("/entries/:categoryName/:key", requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
   try {
     const reveal = req.query.reveal === "true";
     if (reveal && !isEncryptionConfigured()) {
@@ -96,7 +94,7 @@ router.get("/entries/:categoryName/:key", async (req: AuthRequest, res: Response
 });
 
 /** PUT /admin/config/entries — create or update an entry */
-router.put("/entries", async (req: AuthRequest, res: Response) => {
+router.put("/entries", requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
   try {
     const { categoryName, key, value, encrypted, displayName, description } = req.body;
 
@@ -105,13 +103,16 @@ router.put("/entries", async (req: AuthRequest, res: Response) => {
       return;
     }
 
+    // Serialize objects/arrays to JSON, reject non-serializable types
+    const serializedValue = typeof value === "string" ? value : JSON.stringify(value);
+
     if (encrypted && !isEncryptionConfigured()) {
       res.status(503).json({ error: "Encryption not configured." });
       return;
     }
 
     const entry = await upsertEntry(
-      { categoryName, key, value: String(value), encrypted, displayName, description },
+      { categoryName, key, value: serializedValue, encrypted, displayName, description },
       req.user?.userId,
     );
 
@@ -128,7 +129,7 @@ router.put("/entries", async (req: AuthRequest, res: Response) => {
 });
 
 /** DELETE /admin/config/entries/:categoryName/:key — delete an entry */
-router.delete("/entries/:categoryName/:key", async (req: AuthRequest, res: Response) => {
+router.delete("/entries/:categoryName/:key", requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
   try {
     const deleted = await deleteEntry(
       String(req.params.categoryName),
@@ -150,7 +151,7 @@ router.delete("/entries/:categoryName/:key", async (req: AuthRequest, res: Respo
 // ─── Profiles ─────────────────────────────────────────────────────────
 
 /** GET /admin/config/profiles — list all profiles with their category mappings */
-router.get("/profiles", async (_req: AuthRequest, res: Response) => {
+router.get("/profiles", requireAuth, requireAdmin, async (_req: AuthRequest, res: Response) => {
   try {
     const profiles = await listProfiles();
     res.json({ profiles });
@@ -163,7 +164,7 @@ router.get("/profiles", async (_req: AuthRequest, res: Response) => {
 // ─── VPS Config Endpoint ──────────────────────────────────────────────
 
 /** GET /admin/config/vps?type=download_vps|upload_vps — returns flat config for a VPS profile */
-router.get("/vps", async (req: AuthRequest, res: Response) => {
+router.get("/vps", requireServiceToken, async (req: AuthRequest, res: Response) => {
   try {
     const profileType = req.query.type as string;
     if (!profileType) {
@@ -193,7 +194,7 @@ router.get("/vps", async (req: AuthRequest, res: Response) => {
 // ─── History ──────────────────────────────────────────────────────────
 
 /** GET /admin/config/history/:categoryName/:key — entry change history */
-router.get("/history/:categoryName/:key", async (req: AuthRequest, res: Response) => {
+router.get("/history/:categoryName/:key", requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
   try {
     const history = await getEntryHistory(String(req.params.categoryName), String(req.params.key));
     res.json({ history });

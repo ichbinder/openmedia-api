@@ -7,11 +7,13 @@ import { randomBytes } from "node:crypto";
 
 const app = createApp();
 const TEST_MASTER_KEY = randomBytes(32).toString("hex");
+const ADMIN_EMAIL = `admin-config-${Date.now()}@test.de`;
+const SERVICE_TOKEN = "test-service-token-" + randomBytes(8).toString("hex");
 
 async function createTestUserAndToken() {
   const user = await prisma.user.create({
     data: {
-      email: `admin-config-${Date.now()}@test.de`,
+      email: ADMIN_EMAIL,
       password: "$2b$10$hash",
       name: "Admin Config Test",
     },
@@ -54,6 +56,8 @@ describe("Admin Config Routes", () => {
 
   beforeEach(async () => {
     process.env.ENCRYPTION_MASTER_KEY = TEST_MASTER_KEY;
+    process.env.ADMIN_EMAILS = ADMIN_EMAIL;
+    process.env.SERVICE_API_TOKEN = SERVICE_TOKEN;
   });
 
   afterEach(async () => {
@@ -69,12 +73,31 @@ describe("Admin Config Routes", () => {
     } else {
       delete process.env.ENCRYPTION_MASTER_KEY;
     }
+    delete process.env.ADMIN_EMAILS;
+    delete process.env.SERVICE_API_TOKEN;
   });
 
-  describe("without auth", () => {
+  describe("auth and authorization", () => {
     it("rejects unauthenticated requests", async () => {
       const res = await request(app).get("/admin/config/categories");
       expect(res.status).toBe(401);
+    });
+
+    it("rejects non-admin users", async () => {
+      const nonAdmin = await prisma.user.create({
+        data: {
+          email: `nonadmin-${Date.now()}@test.de`,
+          password: "$2b$10$hash",
+          name: "Non-Admin",
+        },
+      });
+      const token = signToken({ userId: nonAdmin.id, email: nonAdmin.email });
+
+      const res = await request(app)
+        .get("/admin/config/categories")
+        .set("Authorization", `Bearer ${token}`);
+
+      expect(res.status).toBe(403);
     });
   });
 
@@ -227,12 +250,12 @@ describe("Admin Config Routes", () => {
       expect(res.body.profiles[0].categories).toHaveLength(2);
     });
 
-    it("GET /admin/config/vps?type=download_vps — returns profile config", async () => {
+    it("GET /admin/config/vps?type=download_vps — returns profile config via service token", async () => {
       const { token } = await createTestUserAndToken();
       await seedCategories();
       await seedProfile();
 
-      // Add some entries
+      // Add some entries (via admin)
       await request(app)
         .put("/admin/config/entries")
         .set("Authorization", `Bearer ${token}`)
@@ -243,24 +266,31 @@ describe("Admin Config Routes", () => {
         .set("Authorization", `Bearer ${token}`)
         .send({ categoryName: "s3", key: "access_key", value: "AKID123", encrypted: true });
 
+      // Fetch via service token (as VPS would)
       const res = await request(app)
         .get("/admin/config/vps?type=download_vps")
-        .set("Authorization", `Bearer ${token}`);
+        .set("Authorization", `Bearer ${SERVICE_TOKEN}`);
 
       expect(res.status).toBe(200);
       expect(res.body.profile).toBe("download_vps");
       expect(res.body.config.s3.endpoint).toBe("https://fsn1.example.com");
-      expect(res.body.config.s3.access_key).toBe("AKID123"); // Decrypted in VPS response
+      expect(res.body.config.s3.access_key).toBe("AKID123");
     });
 
     it("GET /admin/config/vps — returns 400 without type", async () => {
-      const { token } = await createTestUserAndToken();
-
       const res = await request(app)
         .get("/admin/config/vps")
-        .set("Authorization", `Bearer ${token}`);
+        .set("Authorization", `Bearer ${SERVICE_TOKEN}`);
 
       expect(res.status).toBe(400);
+    });
+
+    it("GET /admin/config/vps — rejects invalid service token", async () => {
+      const res = await request(app)
+        .get("/admin/config/vps?type=download_vps")
+        .set("Authorization", "Bearer wrong-token");
+
+      expect(res.status).toBe(401);
     });
   });
 

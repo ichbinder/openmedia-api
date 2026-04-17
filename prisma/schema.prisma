@@ -314,15 +314,17 @@ model ConfigProfileCategory {
 }
 
 model ConfigHistory {
-  id        String   @id @default(uuid())
-  action    String                                     // "created", "updated", "deleted"
-  oldValue  String?  @map("old_value") @db.Text        // previous value (encrypted if entry was encrypted)
-  newValue  String?  @map("new_value") @db.Text        // new value (encrypted if entry was encrypted)
-  changedBy String?  @map("changed_by")                // userId or "system"
-  createdAt DateTime @default(now()) @map("created_at")
+  id         String   @id @default(uuid())
+  action     String                                     // "created", "updated", "deleted"
+  oldValue   String?  @map("old_value") @db.Text        // previous value ("[encrypted]" if secret)
+  newValue   String?  @map("new_value") @db.Text        // new value ("[encrypted]" if secret)
+  changedBy  String?  @map("changed_by")                // userId or "system"
+  entryKey   String?  @map("entry_key")                 // preserved key for audit after entry deletion
+  categoryName String? @map("category_name")            // preserved category for audit after entry deletion
+  createdAt  DateTime @default(now()) @map("created_at")
 
-  entry   ConfigEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
-  entryId String      @map("entry_id")
+  entry   ConfigEntry? @relation(fields: [entryId], references: [id], onDelete: SetNull)
+  entryId String?      @map("entry_id")
 
   @@index([entryId])
   @@index([createdAt])
