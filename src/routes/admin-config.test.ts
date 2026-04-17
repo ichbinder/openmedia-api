@@ -67,7 +67,7 @@ describe("Admin Config Routes", () => {
     await prisma.configProfileCategory.deleteMany();
     await prisma.configProfile.deleteMany();
     await prisma.configCategory.deleteMany();
-    await prisma.user.deleteMany({ where: { email: { contains: "config" } } });
+    await prisma.user.deleteMany({ where: { email: { endsWith: "@test.de" } } });
 
     if (originalKey) {
       process.env.ENCRYPTION_MASTER_KEY = originalKey;
