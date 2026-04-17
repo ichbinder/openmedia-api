@@ -200,7 +200,8 @@ export async function getUploadVpsConfig(): Promise<UploadVpsConfig | null> {
 /** Check if DB config has the minimum keys needed for download provisioning. */
 function hasRequiredDownloadKeys(config: Record<string, Record<string, string>>): boolean {
   const s3 = config.s3;
-  return !!(s3 && s3.access_key && s3.secret_key && s3.endpoint && s3.bucket);
+  const nzb = config.nzb_service;
+  return !!(s3 && s3.access_key && s3.secret_key && s3.endpoint && s3.bucket && nzb && nzb.url);
 }
 
 /** Check if DB config has the minimum keys needed for upload provisioning. */
