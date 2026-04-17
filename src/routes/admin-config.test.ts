@@ -113,7 +113,9 @@ describe("Admin Config Routes", () => {
 
       expect(res.status).toBe(200);
       expect(res.body.categories).toHaveLength(2);
-      expect(res.body.categories[0].name).toBe("s3");
+      const names = res.body.categories.map((c: { name: string }) => c.name);
+      expect(names).toContain("s3");
+      expect(names).toContain("usenet_download");
     });
 
     it("POST /admin/config/categories — creates a category", async () => {
