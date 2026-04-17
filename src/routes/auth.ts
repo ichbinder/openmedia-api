@@ -45,8 +45,9 @@ router.post("/register", async (req: Request, res: Response) => {
 
     console.log(`[auth] User registered: ${user.email}`);
 
+    const adminEmails = (process.env.ADMIN_EMAILS || "").split(",").map((e) => e.trim()).filter(Boolean);
     res.status(201).json({
-      user: { id: user.id, email: user.email, name: user.name },
+      user: { id: user.id, email: user.email, name: user.name, isAdmin: adminEmails.includes(user.email) },
       token,
     });
   } catch (err) {
@@ -84,8 +85,9 @@ router.post("/login", async (req: Request, res: Response) => {
 
     console.log(`[auth] User logged in: ${user.email}`);
 
+    const loginAdminEmails = (process.env.ADMIN_EMAILS || "").split(",").map((e) => e.trim()).filter(Boolean);
     res.json({
-      user: { id: user.id, email: user.email, name: user.name },
+      user: { id: user.id, email: user.email, name: user.name, isAdmin: loginAdminEmails.includes(user.email) },
       token,
     });
   } catch (err) {
@@ -107,7 +109,11 @@ router.get("/me", requireAuth, async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    res.json({ user });
+    // Check admin status via ADMIN_EMAILS env var (same logic as requireAdmin middleware)
+    const adminEmails = (process.env.ADMIN_EMAILS || "").split(",").map((e) => e.trim()).filter(Boolean);
+    const isAdmin = adminEmails.includes(user.email);
+
+    res.json({ user: { ...user, isAdmin } });
   } catch (err) {
     console.error("[auth] Me error:", err);
     res.status(500).json({ error: "Fehler beim Laden der Benutzerdaten." });
