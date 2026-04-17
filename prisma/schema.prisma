@@ -248,3 +248,85 @@ model EncryptedConfig {
 
   @@map("encrypted_configs")
 }
+
+// ─── Centralized Config Store ──────────────────────────────────────────
+
+model ConfigCategory {
+  id          String   @id @default(uuid())
+  name        String   @unique                        // "s3", "usenet_download", "usenet_upload"
+  displayName String   @map("display_name")           // "S3 Storage", "Usenet Download"
+  description String   @default("")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  entries  ConfigEntry[]
+  profiles ConfigProfileCategory[]
+
+  @@map("config_categories")
+}
+
+model ConfigEntry {
+  id          String   @id @default(uuid())
+  key         String                                   // "access_key", "servers" (unique within category)
+  value       String   @db.Text                        // plaintext or AES-256-GCM encrypted (JSON for complex values)
+  encrypted   Boolean  @default(false)                 // true → value is AES-256-GCM encrypted
+  iv          String?                                  // hex-encoded IV (only when encrypted)
+  tag         String?                                  // hex-encoded auth tag (only when encrypted)
+  displayName String   @default("") @map("display_name") // "Access Key", "Usenet Servers"
+  description String   @default("")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  category   ConfigCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  categoryId String         @map("category_id")
+
+  history ConfigHistory[]
+
+  @@unique([categoryId, key])
+  @@index([categoryId])
+  @@map("config_entries")
+}
+
+model ConfigProfile {
+  id          String   @id @default(uuid())
+  name        String   @unique                         // "download_vps", "upload_vps"
+  displayName String   @map("display_name")            // "Download VPS", "Upload VPS"
+  description String   @default("")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  categories ConfigProfileCategory[]
+
+  @@map("config_profiles")
+}
+
+model ConfigProfileCategory {
+  id         String @id @default(uuid())
+
+  profile    ConfigProfile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  profileId  String         @map("profile_id")
+
+  category   ConfigCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  categoryId String         @map("category_id")
+
+  @@unique([profileId, categoryId])
+  @@map("config_profile_categories")
+}
+
+model ConfigHistory {
+  id         String   @id @default(uuid())
+  action     String                                     // "created", "updated", "deleted"
+  oldValue   String?  @map("old_value") @db.Text        // previous value ("[encrypted]" if secret)
+  newValue   String?  @map("new_value") @db.Text        // new value ("[encrypted]" if secret)
+  changedBy  String?  @map("changed_by")                // userId or "system"
+  entryKey   String?  @map("entry_key")                 // preserved key for audit after entry deletion
+  categoryName String? @map("category_name")            // preserved category for audit after entry deletion
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  entry   ConfigEntry? @relation(fields: [entryId], references: [id], onDelete: SetNull)
+  entryId String?      @map("entry_id")
+
+  @@index([entryId])
+  @@index([createdAt])
+  @@map("config_history")
+}

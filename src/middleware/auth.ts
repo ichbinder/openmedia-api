@@ -1,5 +1,6 @@
 import { type Request, type Response, type NextFunction } from "express";
 import jwt from "jsonwebtoken";
+import { timingSafeEqual } from "node:crypto";
 import prisma from "../lib/prisma.js";
 import { isApiToken, hashToken } from "../lib/api-token.js";
 
@@ -61,6 +62,44 @@ export function requireAuth(req: AuthRequest, res: Response, next: NextFunction)
  * Authenticate an om_ API token via DB lookup.
  * Checks: exists, not revoked, not expired. Updates lastUsedAt (fire-and-forget).
  */
+/**
+ * Admin middleware — checks if the authenticated user's email is in ADMIN_EMAILS.
+ * Must be used after requireAuth.
+ */
+export function requireAdmin(req: AuthRequest, res: Response, next: NextFunction): void {
+  const adminEmails = (process.env.ADMIN_EMAILS || "").split(",").map((e) => e.trim()).filter(Boolean);
+
+  if (!req.user?.email || !adminEmails.includes(req.user.email)) {
+    res.status(403).json({ error: "Admin-Zugriff erforderlich." });
+    return;
+  }
+
+  next();
+}
+
+/**
+ * Service token middleware — validates the SERVICE_API_TOKEN for machine-to-machine auth.
+ * Used by VPS instances to fetch config.
+ */
+export function requireServiceToken(req: Request, res: Response, next: NextFunction): void {
+  const authHeader = req.headers.authorization;
+  const serviceToken = process.env.SERVICE_API_TOKEN;
+
+  if (!serviceToken) {
+    res.status(503).json({ error: "Service token not configured." });
+    return;
+  }
+
+  const provided = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : "";
+  if (!provided || provided.length !== serviceToken.length ||
+      !timingSafeEqual(Buffer.from(provided), Buffer.from(serviceToken))) {
+    res.status(401).json({ error: "Invalid service token." });
+    return;
+  }
+
+  next();
+}
+
 async function authenticateApiToken(
   plaintext: string,
   req: AuthRequest,
