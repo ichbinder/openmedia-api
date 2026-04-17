@@ -61,12 +61,13 @@ describe("Admin Config Routes", () => {
   });
 
   afterEach(async () => {
-    // Clean up config tables
+    // Clean up config tables and test users
     await prisma.configHistory.deleteMany();
     await prisma.configEntry.deleteMany();
     await prisma.configProfileCategory.deleteMany();
     await prisma.configProfile.deleteMany();
     await prisma.configCategory.deleteMany();
+    await prisma.user.deleteMany({ where: { email: { contains: "config" } } });
 
     if (originalKey) {
       process.env.ENCRYPTION_MASTER_KEY = originalKey;
