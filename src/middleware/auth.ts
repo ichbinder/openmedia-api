@@ -1,5 +1,6 @@
 import { type Request, type Response, type NextFunction } from "express";
 import jwt from "jsonwebtoken";
+import { timingSafeEqual } from "node:crypto";
 import prisma from "../lib/prisma.js";
 import { isApiToken, hashToken } from "../lib/api-token.js";
 
@@ -89,7 +90,9 @@ export function requireServiceToken(req: Request, res: Response, next: NextFunct
     return;
   }
 
-  if (!authHeader?.startsWith("Bearer ") || authHeader.slice(7) !== serviceToken) {
+  const provided = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : "";
+  if (!provided || provided.length !== serviceToken.length ||
+      !timingSafeEqual(Buffer.from(provided), Buffer.from(serviceToken))) {
     res.status(401).json({ error: "Invalid service token." });
     return;
   }
