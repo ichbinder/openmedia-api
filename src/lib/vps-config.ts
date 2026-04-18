@@ -208,12 +208,18 @@ export async function getUploadVpsConfig(): Promise<UploadVpsConfig | null> {
 function hasRequiredDownloadKeys(config: Record<string, Record<string, string>>): boolean {
   const s3 = config.s3;
   const nzb = config.nzb_service;
-  return !!(s3 && s3.access_key && s3.secret_key && s3.endpoint && s3.bucket && nzb && nzb.url);
+  const runtime = config.runtime;
+  return !!(s3 && s3.access_key && s3.secret_key && s3.endpoint && s3.bucket &&
+    nzb && nzb.url &&
+    runtime && runtime.api_base_url && runtime.service_api_token);
 }
 
 /** Check if DB config has the minimum keys needed for upload provisioning. */
 function hasRequiredUploadKeys(config: Record<string, Record<string, string>>): boolean {
   const s3 = config.s3;
   const nzb = config.nzb_service;
-  return !!(s3 && s3.access_key && s3.secret_key && s3.endpoint && s3.bucket && nzb && nzb.url);
+  const runtime = config.runtime;
+  return !!(s3 && s3.access_key && s3.secret_key && s3.endpoint && s3.bucket &&
+    nzb && nzb.url && nzb.token &&
+    runtime && runtime.api_base_url && runtime.service_api_token);
 }
