@@ -9,6 +9,7 @@ import { markJobFailed } from "../lib/job-failure.js";
 import { computeReviewExpiresAt, computeInitialTmdbRetryAfter } from "../lib/review-config.js";
 import { storeNzbInService } from "../lib/nzb-service.js";
 import { getUploadVpsConfig } from "../lib/vps-config.js";
+import { generateServiceToken, storeServiceToken, deleteServiceTokens } from "../lib/service-token.js";
 
 const router = Router();
 
@@ -1028,19 +1029,16 @@ router.patch("/jobs/:id/status", async (req: AuthRequest, res: Response) => {
 
                 if (uploadConfig) {
                   try {
+                    const { plaintext: serviceToken, hash: tokenHash } = generateServiceToken();
+                    await storeServiceToken(tokenHash, uploadJob.id, "upload");
+
+                    const serverName = `up-${nzbForProvision.hash.substring(0, 8)}`;
                     const result = await provisionUploadVps({
-                      uploadJobId: uploadJob.id,
+                      jobId: uploadJob.id,
                       nzbFileHash: nzbForProvision.hash,
-                      s3Key: nzbForProvision.s3Key,
                       apiBaseUrl: uploadConfig.apiBaseUrl,
-                      apiToken: uploadConfig.apiToken,
-                      s3AccessKey: uploadConfig.s3AccessKey,
-                      s3SecretKey: uploadConfig.s3SecretKey,
-                      s3Endpoint: uploadConfig.s3Endpoint,
-                      s3Bucket: uploadConfig.s3Bucket,
-                      nzbServiceUrl: uploadConfig.nzbServiceUrl,
-                      nzbServiceToken: uploadConfig.nzbServiceToken,
-                      usenetProviders: uploadConfig.usenetProviders,
+                      serviceToken,
+                      serverName,
                     });
                     await prisma.uploadJob.update({
                       where: { id: uploadJob.id },
@@ -1053,6 +1051,7 @@ router.patch("/jobs/:id/status", async (req: AuthRequest, res: Response) => {
                     });
                     console.log(`[auto-upload] Upload VPS provisioned: ${result.server.name} (id=${result.server.id})`);
                   } catch (provErr) {
+                    deleteServiceTokens(uploadJob.id).catch(() => {});
                     console.error(`[auto-upload] VPS provisioning failed: ${(provErr as Error).message}`);
                     // UploadJob stays queued — reconciler can retry later
                   }
@@ -1222,7 +1221,6 @@ import {
   findZombieServers,
   generateCloudInit,
 } from "../lib/hetzner.js";
-import { parseUsenetServersFromEnv } from "../lib/usenet-config.js";
 import { addMapping, removeMapping } from "../lib/caddy-mapping.js";
 
 // GET /downloads/jobs/:id/link — generate presigned download URL for a completed job
@@ -1639,18 +1637,16 @@ router.post("/jobs/:id/provision", async (req: AuthRequest, res: Response) => {
 
     const serverName = `dl-${job.id.slice(0, 8)}`;
 
+    // Generate per-VPS service token
+    const { generateServiceToken, storeServiceToken, deleteServiceTokens } = await import("../lib/service-token.js");
+    const { plaintext: serviceTokenPlaintext, hash: serviceTokenHash } = generateServiceToken();
+    await storeServiceToken(serviceTokenHash, job.id, "download");
+    console.log(`[download-vps] ServiceToken created for job ${job.id}`);
+
     const cloudInit = generateCloudInit({
       jobId: job.id,
-      nzbHash: job.nzbFile.hash,
-      nzbUrl: `${nzbServiceUrl}/nzb/${job.nzbFile.hash}.nzb`,
       apiBaseUrl: process.env.API_BASE_URL!,
-      apiToken: process.env.SERVICE_API_TOKEN || req.headers.authorization?.replace("Bearer ", "") || "",
-      s3AccessKey: process.env.S3_ACCESS_KEY!,
-      s3SecretKey: process.env.S3_SECRET_KEY!,
-      s3Endpoint: process.env.S3_ENDPOINT!,
-      s3Bucket: process.env.S3_BUCKET!,
-      s3Region: process.env.S3_REGION || "hel1",
-      usenetServers: parseUsenetServersFromEnv(),
+      serviceToken: serviceTokenPlaintext,
       dockerImage: process.env.DOWNLOADER_DOCKER_IMAGE || "ghcr.io/ichbinder/openmedia-downloader:latest",
       serverName,
     });
@@ -1671,6 +1667,11 @@ router.post("/jobs/:id/provision", async (req: AuthRequest, res: Response) => {
         networks: networkId ? [networkId] : undefined,
       });
     } catch (err: any) {
+      // Clean up orphaned ServiceToken — VPS was never created
+      try {
+        await deleteServiceTokens(job.id);
+      } catch (_) { /* best-effort cleanup */ }
+
       // Rollback job status on server creation failure
       await prisma.downloadJob.update({
         where: { id: job.id },
@@ -1740,6 +1741,13 @@ router.post("/jobs/:id/cleanup", async (req: AuthRequest, res: Response) => {
 
     const serverName = `dl-${job.id.slice(0, 8)}`;
     const deleted = await deleteServer(job.hetznerServerId);
+
+    // Delete service tokens for this job (non-fatal)
+    try {
+      await deleteServiceTokens(job.id);
+    } catch (tokenErr: any) {
+      console.error(`[download-vps] Token cleanup failed (non-fatal): ${tokenErr.message}`);
+    }
 
     // Remove Caddy reverse proxy mapping
     try {

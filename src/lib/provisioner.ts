@@ -15,6 +15,7 @@ import { isHetznerConfigured, createServer, generateCloudInit } from "./hetzner.
 import { markJobFailed } from "./job-failure.js";
 import { addMapping } from "./caddy-mapping.js";
 import { getDownloadVpsConfig } from "./vps-config.js";
+import { generateServiceToken, storeServiceToken, deleteServiceTokens } from "./service-token.js";
 
 type ProvisionMode = "hetzner" | "local" | "false";
 
@@ -91,6 +92,7 @@ async function provisionHetznerVPS(job: any): Promise<void> {
   }
 
   // Resolve config from DB config store (preferred) or ENV (fallback)
+  // Still needed for apiBaseUrl and dockerImage
   const config = await getDownloadVpsConfig();
   if (!config) {
     const error = "Missing download VPS config (neither DB config store nor ENV vars are sufficient)";
@@ -99,23 +101,29 @@ async function provisionHetznerVPS(job: any): Promise<void> {
     return;
   }
 
+  // Generate per-VPS service token — plaintext goes to cloud-init, hash stored in DB
+  const { plaintext: serviceTokenPlaintext, hash: serviceTokenHash } = generateServiceToken();
+  try {
+    await storeServiceToken(serviceTokenHash, job.id, "download");
+    console.log(`[provision] ServiceToken created for job ${job.id}`);
+  } catch (err: any) {
+    const error = `ServiceToken storage failed: ${err.message}`;
+    console.error(`[provision] ${error}`);
+    await markJobFailed({ jobId: job.id, error, source: "provision", expectedStatus: "provisioning" });
+    return;
+  }
+
   const serverName = `dl-${job.id.slice(0, 8)}`;
 
+  // Cloud-init now only carries 3 ENV vars — VPS fetches all config at boot via bootstrap API
   const cloudInit = generateCloudInit({
     jobId: job.id,
-    nzbHash: job.nzbFile.hash,
-    nzbUrl: `${config.nzbServiceUrl}/nzb/${job.nzbFile.hash}.nzb`,
     apiBaseUrl: config.apiBaseUrl,
-    apiToken: config.apiToken,
-    s3AccessKey: config.s3AccessKey,
-    s3SecretKey: config.s3SecretKey,
-    s3Endpoint: config.s3Endpoint,
-    s3Bucket: config.s3Bucket,
-    s3Region: config.s3Region,
-    usenetServers: config.usenetServers,
+    serviceToken: serviceTokenPlaintext,
     dockerImage: config.dockerImage,
     serverName,
   });
+
   const rawNetworkId = process.env.HETZNER_NETWORK_ID;
   const networkId = rawNetworkId ? parseInt(rawNetworkId, 10) : undefined;
   if (rawNetworkId && (!networkId || isNaN(networkId))) {
@@ -152,6 +160,14 @@ async function provisionHetznerVPS(job: any): Promise<void> {
 
     console.log(`[provision] Hetzner VPS created: ${serverName} (ID: ${result.server.id}, public: ${result.server.publicIpv4}, private: ${result.server.privateIp})`);
   } catch (err: any) {
+    // Clean up orphaned ServiceToken — VPS was never created so token is useless
+    try {
+      await deleteServiceTokens(job.id);
+      console.log(`[provision] Orphaned ServiceToken cleaned up for job ${job.id}`);
+    } catch (cleanupErr: any) {
+      console.error(`[provision] ServiceToken cleanup failed: ${cleanupErr.message}`);
+    }
+
     const error = `Hetzner VPS creation failed: ${err.message}`;
     console.error(`[provision] ${error}`);
     await markJobFailed({ jobId: job.id, error, source: "provision", expectedStatus: "provisioning" });
@@ -162,7 +178,6 @@ async function provisionHetznerVPS(job: any): Promise<void> {
 
 async function provisionLocalDocker(job: any): Promise<void> {
   const containerName = `dl-${job.id.slice(0, 8)}`;
-  const hash = job.nzbFile.hash;
 
   const config = await getDownloadVpsConfig();
   if (!config) {
@@ -172,18 +187,23 @@ async function provisionLocalDocker(job: any): Promise<void> {
     return;
   }
 
+  // Generate per-container service token (same pattern as Hetzner path)
+  const { plaintext: serviceTokenPlaintext, hash: serviceTokenHash } = generateServiceToken();
+  try {
+    await storeServiceToken(serviceTokenHash, job.id, "download");
+    console.log(`[provision] ServiceToken created for local job ${job.id}`);
+  } catch (err: any) {
+    const error = `ServiceToken storage failed: ${err.message}`;
+    console.error(`[provision] ${error}`);
+    await markJobFailed({ jobId: job.id, error, source: "provision", expectedStatus: "provisioning" });
+    return;
+  }
+
+  // Only 3 ENV vars — container fetches config at boot via bootstrap API
   const envVars = [
     `JOB_ID=${job.id}`,
-    `JOB_HASH=${hash}`,
-    `NZB_URL=${config.nzbServiceUrl}/nzb/${hash}.nzb`,
     `API_BASE_URL=${config.apiBaseUrl}`,
-    `SERVICE_TOKEN=${config.apiToken}`,
-    `USENET_SERVERS=${JSON.stringify(config.usenetServers)}`,
-    `S3_ACCESS_KEY=${config.s3AccessKey}`,
-    `S3_SECRET_KEY=${config.s3SecretKey}`,
-    `S3_ENDPOINT=${config.s3Endpoint}`,
-    `S3_BUCKET=${config.s3Bucket}`,
-    `S3_REGION=${config.s3Region}`,
+    `SERVICE_TOKEN=${serviceTokenPlaintext}`,
   ];
 
   const envFlags = envVars.map((v) => `-e "${v}"`).join(" \\\n    ");

@@ -9,6 +9,7 @@ import storageRoutes from "./routes/storage.js";
 import uploadRoutes from "./routes/uploads.js";
 import configRoutes from "./routes/config.js";
 import adminConfigRoutes from "./routes/admin-config.js";
+import serviceApiRoutes from "./routes/service-api.js";
 import libraryRoutes from "./routes/library.js";
 import searchHistoryRoutes from "./routes/search-history.js";
 import testRoutes from "./routes/test.js";
@@ -34,6 +35,7 @@ export function createApp() {
   app.use("/storage", storageRoutes);
   app.use("/config", configRoutes);
   app.use("/admin/config", adminConfigRoutes);
+  app.use("/service", serviceApiRoutes);
   app.use("/library", libraryRoutes);
   app.use("/search-history", searchHistoryRoutes);
 

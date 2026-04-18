@@ -220,6 +220,17 @@ model UploadJob {
   @@map("upload_jobs")
 }
 
+model ServiceToken {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique @map("token_hash")  // SHA-256 hash — plaintext never stored
+  jobId     String   @map("job_id")
+  jobType   String   @map("job_type")             // 'download' | 'upload'
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([jobId])
+  @@map("service_tokens")
+}
+
 model SearchHistory {
   id          String   @id @default(uuid())
   movieId     Int      @map("movie_id")
