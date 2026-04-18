@@ -25,8 +25,16 @@ router.get("/jobs/:id/bootstrap", async (req: AuthRequest, res: Response) => {
     const requestedJobId = String(req.params.id);
 
     // Scoped access: DB-issued tokens can only access their own job.
-    // Static ENV tokens (no req.serviceToken) can access any job (backward compat).
-    if (req.serviceToken && req.serviceToken.jobId !== requestedJobId) {
+    if (!req.serviceToken) {
+      // Legacy static token — reject unless migration flag is set
+      if (process.env.ENABLE_LEGACY_SERVICE_TOKEN === "true") {
+        console.warn(`[service-api] Legacy static token used for job ${requestedJobId} — migrate to per-job tokens`);
+      } else {
+        console.log(`[service-api] Static token rejected — per-job token required for bootstrap`);
+        res.status(401).json({ error: "Per-job service token required." });
+        return;
+      }
+    } else if (req.serviceToken.jobId !== requestedJobId) {
       console.log(
         `[service-api] Token scoped to job ${req.serviceToken.jobId} tried to access job ${requestedJobId}`,
       );

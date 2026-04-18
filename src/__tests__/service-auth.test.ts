@@ -35,8 +35,21 @@ describe("ServiceToken auth middleware", () => {
     return job;
   }
 
-  it("requireServiceToken accepts valid static ENV token", async () => {
+  it("requireServiceToken rejects static ENV token on bootstrap (per-job required)", async () => {
     process.env.SERVICE_API_TOKEN = "static-test-token-12345";
+    delete process.env.ENABLE_LEGACY_SERVICE_TOKEN;
+    const job = await createTestJob();
+
+    const res = await request(app)
+      .get(`/service/jobs/${job.id}/bootstrap`)
+      .set("Authorization", "Bearer static-test-token-12345");
+
+    expect(res.status).toBe(401);
+  });
+
+  it("requireServiceToken accepts static ENV token with legacy flag enabled", async () => {
+    process.env.SERVICE_API_TOKEN = "static-test-token-12345";
+    process.env.ENABLE_LEGACY_SERVICE_TOKEN = "true";
     const job = await createTestJob();
 
     const res = await request(app)
@@ -45,6 +58,7 @@ describe("ServiceToken auth middleware", () => {
 
     // Should pass auth (may fail on config, but NOT 401)
     expect(res.status).not.toBe(401);
+    delete process.env.ENABLE_LEGACY_SERVICE_TOKEN;
   });
 
   it("requireServiceToken accepts valid DB token and sets req.serviceToken", async () => {

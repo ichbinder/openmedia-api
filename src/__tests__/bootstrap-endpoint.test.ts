@@ -158,11 +158,12 @@ describe("Bootstrap endpoint", () => {
 
   it("GET /service/jobs/:id/bootstrap with non-existent job returns 404", async () => {
     delete process.env.SERVICE_API_TOKEN;
-    process.env.SERVICE_API_TOKEN = "static-token-for-404-test";
+    const { plaintext, hash } = generateServiceToken();
+    await storeServiceToken(hash, "nonexistent-job-id", "download");
 
     const res = await request(app)
       .get("/service/jobs/nonexistent-job-id/bootstrap")
-      .set("Authorization", "Bearer static-token-for-404-test");
+      .set("Authorization", `Bearer ${plaintext}`);
 
     expect(res.status).toBe(404);
   });
@@ -293,11 +294,12 @@ describe("Upload bootstrap endpoint", () => {
 
   it("GET /service/jobs/:id/bootstrap with non-existent upload job returns 404", async () => {
     delete process.env.SERVICE_API_TOKEN;
-    process.env.SERVICE_API_TOKEN = "static-token-for-upload-404";
+    const { plaintext, hash } = generateServiceToken();
+    await storeServiceToken(hash, "nonexistent-upload-id", "upload");
 
     const res = await request(app)
       .get("/service/jobs/nonexistent-upload-id/bootstrap")
-      .set("Authorization", "Bearer static-token-for-upload-404");
+      .set("Authorization", `Bearer ${plaintext}`);
 
     expect(res.status).toBe(404);
   });
