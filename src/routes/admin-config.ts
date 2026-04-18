@@ -111,7 +111,13 @@ router.put("/entries", requireAuth, requireAdmin, async (req: AuthRequest, res: 
     }
 
     // Serialize objects/arrays to JSON, reject non-serializable types
-    const serializedValue = typeof value === "string" ? value : JSON.stringify(value);
+    let serializedValue: string;
+    try {
+      serializedValue = typeof value === "string" ? value : JSON.stringify(value);
+    } catch {
+      res.status(400).json({ error: "Invalid request payload: non-serializable value." });
+      return;
+    }
 
     if (encrypted && !isEncryptionConfigured()) {
       res.status(503).json({ error: "Encryption not configured." });

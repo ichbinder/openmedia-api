@@ -180,7 +180,7 @@ export async function getUploadVpsConfig(): Promise<UploadVpsConfig | null> {
   }
 
   // Fallback: ENV-based config
-  const required = ["SERVICE_API_TOKEN", "S3_ACCESS_KEY", "S3_SECRET_KEY", "S3_ENDPOINT", "S3_BUCKET", "NZB_SERVICE_URL", "NZB_SERVICE_TOKEN"];
+  const required = ["API_BASE_URL", "SERVICE_API_TOKEN", "S3_ACCESS_KEY", "S3_SECRET_KEY", "S3_ENDPOINT", "S3_BUCKET", "NZB_SERVICE_URL", "NZB_SERVICE_TOKEN"];
   const missing = required.filter((k) => !process.env[k]);
   if (missing.length > 0) return null;
 
@@ -190,14 +190,14 @@ export async function getUploadVpsConfig(): Promise<UploadVpsConfig | null> {
   console.log(`[vps-config] Upload config loaded from ENV (${usenetProviders.length} providers)`);
   return {
     source: "env",
-    apiBaseUrl: process.env.API_BASE_URL || "http://localhost:4000",
-    apiToken: process.env.SERVICE_API_TOKEN || "",
-    s3AccessKey: process.env.S3_ACCESS_KEY || "",
-    s3SecretKey: process.env.S3_SECRET_KEY || "",
-    s3Endpoint: process.env.S3_ENDPOINT || "",
-    s3Bucket: process.env.S3_BUCKET || "",
+    apiBaseUrl: process.env.API_BASE_URL!,
+    apiToken: process.env.SERVICE_API_TOKEN!,
+    s3AccessKey: process.env.S3_ACCESS_KEY!,
+    s3SecretKey: process.env.S3_SECRET_KEY!,
+    s3Endpoint: process.env.S3_ENDPOINT!,
+    s3Bucket: process.env.S3_BUCKET!,
     nzbServiceUrl: process.env.NZB_SERVICE_URL!,
-    nzbServiceToken: process.env.NZB_SERVICE_TOKEN || "",
+    nzbServiceToken: process.env.NZB_SERVICE_TOKEN!,
     usenetProviders,
   };
 }
