@@ -67,7 +67,16 @@ router.get("/jobs/:id/bootstrap", async (req: AuthRequest, res: Response) => {
           originalFilename: nzbFile.originalFilename,
           status: downloadJob.status,
         },
-        config,
+        config: {
+          apiBaseUrl: config.apiBaseUrl,
+          s3AccessKey: config.s3AccessKey,
+          s3SecretKey: config.s3SecretKey,
+          s3Endpoint: config.s3Endpoint,
+          s3Bucket: config.s3Bucket,
+          s3Region: config.s3Region,
+          nzbServiceUrl: config.nzbServiceUrl,
+          usenetServers: config.usenetServers,
+        },
       });
       return;
     }

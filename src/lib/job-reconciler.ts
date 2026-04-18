@@ -635,7 +635,7 @@ export async function reconcileStaleJobs(): Promise<ReconcileResult> {
         const uploadServers = await listServers("purpose=openmedia-upload");
 
         for (const server of uploadServers) {
-          const jobId = server.labels["job-id"];
+          const jobId = server.labels["uploadJobId"];
           if (!jobId) continue;
 
           const job = await prisma.uploadJob.findUnique({
