@@ -1,7 +1,30 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import request from "supertest";
 import { createApp } from "../app.js";
 import { prisma } from "../test/setup.js";
+
+// Mock Hetzner so the auto-upload trigger doesn't hit real APIs
+vi.mock("../lib/hetzner.js", () => ({
+  isHetznerConfigured: vi.fn().mockReturnValue(true),
+  provisionUploadVps: vi.fn().mockResolvedValue({
+    server: { id: 1, name: "mock-upload", publicIpv4: "1.2.3.4" },
+  }),
+}));
+
+// Mock vps-config so getUploadVpsConfig returns a valid config
+vi.mock("../lib/vps-config.js", () => ({
+  getUploadVpsConfig: vi.fn().mockResolvedValue({
+    apiBaseUrl: "http://localhost:3000",
+    apiToken: "mock-token",
+    s3AccessKey: "mock-access",
+    s3SecretKey: "mock-secret",
+    s3Endpoint: "https://s3.mock.com",
+    s3Bucket: "mock-bucket",
+    nzbServiceUrl: "http://nzb.mock.com",
+    nzbServiceToken: "mock-nzb-token",
+    usenetProviders: [],
+  }),
+}));
 
 const app = createApp();
 
@@ -479,6 +502,151 @@ describe("Downloads Routes", () => {
         .set("Authorization", `Bearer ${token}`);
 
       expect(res.status).toBe(404);
+    });
+  });
+
+  // --- Auto-upload trigger (M025) ---
+
+  describe("auto-upload trigger", () => {
+    /** Walk a download job through the full lifecycle to completed */
+    async function completeDownloadJob(jobId: string, nzbFileHash: string, authToken: string) {
+      await request(app)
+        .patch(`/downloads/jobs/${jobId}/status`)
+        .set("Authorization", `Bearer ${authToken}`)
+        .send({ status: "provisioning" });
+      await request(app)
+        .patch(`/downloads/jobs/${jobId}/status`)
+        .set("Authorization", `Bearer ${authToken}`)
+        .send({ status: "downloading", progress: 50 });
+      await request(app)
+        .patch(`/downloads/jobs/${jobId}/status`)
+        .set("Authorization", `Bearer ${authToken}`)
+        .send({ status: "uploading", progress: 90 });
+      const completeRes = await request(app)
+        .patch(`/downloads/jobs/${jobId}/status`)
+        .set("Authorization", `Bearer ${authToken}`)
+        .send({
+          status: "completed",
+          s3Key: `${nzbFileHash}/${nzbFileHash}.mkv`,
+          s3Bucket: "openmedia-files",
+          fileExtension: ".mkv",
+        });
+      return completeRes;
+    }
+
+    it("source=external + completed → UploadJob created", async () => {
+      const { nzbFile } = await createTestNzbFile();
+
+      const createRes = await request(app)
+        .post("/downloads/jobs")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ nzbFileId: nzbFile.id });
+      const jobId = createRes.body.job.id;
+
+      const completeRes = await completeDownloadJob(jobId, nzbFile.hash, token);
+      expect(completeRes.status).toBe(200);
+
+      const uploadJob = await prisma.uploadJob.findFirst({
+        where: { nzbFileId: nzbFile.id },
+      });
+      expect(uploadJob).not.toBeNull();
+      expect(uploadJob!.status).toBe("running"); // provisionUploadVps mock succeeds → status updated to running
+    });
+
+    it("source=own + completed → no UploadJob", async () => {
+      const movie = await prisma.nzbMovie.create({
+        data: { titleDe: "Own Film", titleEn: "Own Movie", year: 2024 },
+      });
+      const nzbFile = await prisma.nzbFile.create({
+        data: {
+          movieId: movie.id,
+          hash: `ownhash-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          originalFilename: "Own.Movie.2024.nzb",
+          resolution: "1080p",
+          source: "own",
+        },
+      });
+
+      const createRes = await request(app)
+        .post("/downloads/jobs")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ nzbFileId: nzbFile.id });
+      const jobId = createRes.body.job.id;
+
+      await completeDownloadJob(jobId, nzbFile.hash, token);
+
+      const uploadJob = await prisma.uploadJob.findFirst({
+        where: { nzbFileId: nzbFile.id },
+      });
+      expect(uploadJob).toBeNull();
+    });
+
+    it("healthy own version exists → no UploadJob for external", async () => {
+      const movie = await prisma.nzbMovie.create({
+        data: { titleDe: "Dedup Film", titleEn: "Dedup Movie", year: 2024 },
+      });
+
+      // Healthy own version for this movie
+      await prisma.nzbFile.create({
+        data: {
+          movieId: movie.id,
+          hash: `own-healthy-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          originalFilename: "Dedup.Own.2024.nzb",
+          resolution: "1080p",
+          source: "own",
+          status: "ok",
+        },
+      });
+
+      // External NzbFile for the same movie
+      const extNzb = await prisma.nzbFile.create({
+        data: {
+          movieId: movie.id,
+          hash: `ext-dedup-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          originalFilename: "Dedup.Ext.2024.nzb",
+          resolution: "1080p",
+          source: "external",
+        },
+      });
+
+      const createRes = await request(app)
+        .post("/downloads/jobs")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ nzbFileId: extNzb.id });
+      const jobId = createRes.body.job.id;
+
+      await completeDownloadJob(jobId, extNzb.hash, token);
+
+      const uploadJob = await prisma.uploadJob.findFirst({
+        where: { nzbFileId: extNzb.id },
+      });
+      expect(uploadJob).toBeNull();
+    });
+
+    it("existing running UploadJob → no duplicate", async () => {
+      const { nzbFile } = await createTestNzbFile();
+
+      // Pre-create a queued upload job
+      await prisma.uploadJob.create({
+        data: {
+          nzbFileId: nzbFile.id,
+          movieId: nzbFile.movieId,
+          status: "queued",
+        },
+      });
+
+      const createRes = await request(app)
+        .post("/downloads/jobs")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ nzbFileId: nzbFile.id });
+      const jobId = createRes.body.job.id;
+
+      await completeDownloadJob(jobId, nzbFile.hash, token);
+
+      const uploadJobCount = await prisma.uploadJob.count({
+        where: { nzbFileId: nzbFile.id },
+      });
+      expect(uploadJobCount).toBe(1);
     });
   });
 });

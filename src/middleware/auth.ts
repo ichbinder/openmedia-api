@@ -3,6 +3,7 @@ import jwt from "jsonwebtoken";
 import { timingSafeEqual } from "node:crypto";
 import prisma from "../lib/prisma.js";
 import { isApiToken, hashToken } from "../lib/api-token.js";
+import { validateServiceToken } from "../lib/service-token.js";
 
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret-change-in-production";
 
@@ -11,8 +12,14 @@ export interface JwtPayload {
   email: string;
 }
 
+export interface ServiceTokenPayload {
+  jobId: string;
+  jobType: string;
+}
+
 export interface AuthRequest extends Request {
   user?: JwtPayload;
+  serviceToken?: ServiceTokenPayload;
 }
 
 export function signToken(payload: JwtPayload): string {
@@ -78,27 +85,76 @@ export function requireAdmin(req: AuthRequest, res: Response, next: NextFunction
 }
 
 /**
- * Service token middleware — validates the SERVICE_API_TOKEN for machine-to-machine auth.
- * Used by VPS instances to fetch config.
+ * Service token middleware — validates machine-to-machine auth.
+ * Fast path: static SERVICE_API_TOKEN (backward compat).
+ * Slow path: per-VPS token looked up in ServiceToken table.
  */
-export function requireServiceToken(req: Request, res: Response, next: NextFunction): void {
+export function requireServiceToken(req: AuthRequest, res: Response, next: NextFunction): void {
   const authHeader = req.headers.authorization;
-  const serviceToken = process.env.SERVICE_API_TOKEN;
-
-  if (!serviceToken) {
-    console.error("[auth] SERVICE_API_TOKEN not configured — rejecting service request");
-    res.status(401).json({ error: "Invalid service token." });
-    return;
-  }
-
   const provided = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : "";
-  if (!provided || provided.length !== serviceToken.length ||
-      !timingSafeEqual(Buffer.from(provided), Buffer.from(serviceToken))) {
-    res.status(401).json({ error: "Invalid service token." });
+
+  if (!provided) {
+    res.status(401).json({ error: "Missing service token." });
     return;
   }
 
-  next();
+  // Fast path: static ENV token (backward compat)
+  const staticToken = process.env.SERVICE_API_TOKEN;
+  if (staticToken && provided.length === staticToken.length &&
+      timingSafeEqual(Buffer.from(provided), Buffer.from(staticToken))) {
+    next();
+    return;
+  }
+
+  // Slow path: DB-stored per-VPS token
+  validateServiceToken(provided)
+    .then((tokenRecord) => {
+      if (!tokenRecord) {
+        console.log("[auth] Service token rejected: not found in static ENV or DB");
+        res.status(401).json({ error: "Invalid service token." });
+        return;
+      }
+      req.serviceToken = { jobId: tokenRecord.jobId, jobType: tokenRecord.jobType };
+      console.log(`[auth] Service token validated for job ${tokenRecord.jobId}`);
+      next();
+    })
+    .catch((err) => {
+      console.error("[auth] Service token DB lookup error:", err);
+      res.status(500).json({ error: "Service token validation failed." });
+    });
+}
+
+/**
+ * Combined middleware — tries user auth first (JWT / API token), falls back to service token.
+ * Sets either req.user or req.serviceToken on the request.
+ */
+export function requireServiceOrUserAuth(req: AuthRequest, res: Response, next: NextFunction): void {
+  const authHeader = req.headers.authorization;
+  const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : "";
+
+  if (!token) {
+    res.status(401).json({ error: "Nicht authentifiziert." });
+    return;
+  }
+
+  // Try user auth paths first (JWT or om_ API token)
+  if (isApiToken(token)) {
+    authenticateApiToken(token, req, res, next);
+    return;
+  }
+
+  // Try JWT
+  try {
+    const payload = verifyToken(token);
+    req.user = payload;
+    next();
+    return;
+  } catch {
+    // JWT failed — fall through to service token
+  }
+
+  // Fall back to service token
+  requireServiceToken(req, res, next);
 }
 
 async function authenticateApiToken(

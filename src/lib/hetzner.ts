@@ -311,11 +311,9 @@ export async function cleanupZombieServers(
 /**
  * Generate a Cloud-Init script for a download VPS.
  *
- * The script:
- * 1. Pulls and runs SABnzbd in Docker
- * 2. Configures SABnzbd with Usenet server credentials
- * 3. Sets up post-processing: hash files → upload to S3 → callback to API
- * 4. Triggers self-destruction after completion
+ * The VPS receives only 3 ENV vars: JOB_ID, API_BASE_URL, SERVICE_TOKEN.
+ * All other config (S3, Usenet, NZB URL) is fetched at boot via the
+ * /service/jobs/:id/bootstrap API endpoint using the SERVICE_TOKEN.
  */
 /** Usenet server configuration for SABnzbd */
 export interface UsenetServer {
@@ -331,97 +329,17 @@ export interface UsenetServer {
 
 export function generateCloudInit(params: {
   jobId: string;
-  nzbHash: string;
-  nzbUrl: string;
   apiBaseUrl: string;
-  apiToken: string;
-  s3AccessKey: string;
-  s3SecretKey: string;
-  s3Endpoint: string;
-  s3Bucket: string;
-  s3Region: string;
-  /** Preferred: array of Usenet servers with individual priorities */
-  usenetServers?: UsenetServer[];
-  /** Legacy: single primary server */
-  usenetHost?: string;
-  usenetPort?: number;
-  usenetUser?: string;
-  usenetPassword?: string;
-  usenetSsl?: boolean;
-  usenetConnections?: number;
-  /** Legacy: single backup server */
-  usenetBackupHost?: string;
-  usenetBackupPort?: number;
-  usenetBackupUser?: string;
-  usenetBackupPassword?: string;
-  usenetBackupSsl?: boolean;
-  usenetBackupConnections?: number;
+  serviceToken: string;
   dockerImage: string;
   serverName: string;
 }): string {
-  // Build Usenet server list — prefer usenetServers array, fall back to legacy ENV vars
-  let servers: UsenetServer[] = [];
-
-  if (params.usenetServers && params.usenetServers.length > 0) {
-    servers = params.usenetServers;
-  } else if (params.usenetHost && params.usenetUser) {
-    // Legacy: build from individual params
-    servers.push({
-      host: params.usenetHost,
-      port: params.usenetPort ?? 563,
-      username: params.usenetUser,
-      password: params.usenetPassword ?? "",
-      ssl: params.usenetSsl ?? true,
-      connections: params.usenetConnections ?? 10,
-      optional: 0,
-      priority: 0,
-    });
-
-    if (params.usenetBackupHost && params.usenetBackupUser) {
-      servers.push({
-        host: params.usenetBackupHost,
-        port: params.usenetBackupPort ?? 563,
-        username: params.usenetBackupUser,
-        password: params.usenetBackupPassword ?? "",
-        ssl: params.usenetBackupSsl !== false,
-        connections: params.usenetBackupConnections ?? 10,
-        optional: 1,
-        priority: 1,
-      });
-    }
-  }
-
-  // Build env file content
+  // Build env file content — only 3 config vars, rest fetched at boot
   const envLines = [
     `JOB_ID=${params.jobId}`,
-    `JOB_HASH=${params.nzbHash}`,
-    `NZB_URL=${params.nzbUrl}`,
     `API_BASE_URL=${params.apiBaseUrl}`,
-    `SERVICE_TOKEN=${params.apiToken}`,
-    `S3_ACCESS_KEY=${params.s3AccessKey}`,
-    `S3_SECRET_KEY=${params.s3SecretKey}`,
-    `S3_ENDPOINT=${params.s3Endpoint}`,
-    `S3_BUCKET=${params.s3Bucket}`,
-    `S3_REGION=${params.s3Region}`,
-    `PUID=0`,
-    `PGID=0`,
-    `DL_HOSTNAME=${params.serverName}`,
+    `SERVICE_TOKEN=${params.serviceToken}`,
   ];
-
-  // Pass servers as JSON array — the downloader parses this with jq
-  if (servers.length > 0) {
-    const serversJson = JSON.stringify(servers.map((s, i) => ({
-      host: s.host,
-      port: s.port ?? 563,
-      username: s.username,
-      password: s.password,
-      ssl: s.ssl !== false,
-      connections: s.connections ?? 10,
-      optional: s.optional ?? (i > 0 ? 1 : 0),
-      priority: s.priority ?? i,
-    })));
-    envLines.push(`USENET_SERVERS=${serversJson}`);
-  }
 
   const envContent = envLines.join("\n");
 
@@ -441,9 +359,14 @@ runcmd:
   - |
     set -e
 
+    # Source the env file for use in this script
+    set -a
+    source /opt/openmedia-env
+    set +a
+
     fail_job() {
       curl -sf -X PATCH "${params.apiBaseUrl}/downloads/jobs/${params.jobId}/status" \\
-        -H "Authorization: Bearer ${params.apiToken}" \\
+        -H "Authorization: Bearer ${params.serviceToken}" \\
         -H "Content-Type: application/json" \\
         -d "{\\"status\\":\\"failed\\",\\"error\\":\\"$1\\"}" || true
     }
@@ -489,12 +412,10 @@ runcmd:
     docker logs openmedia-downloader > /var/log/openmedia-downloader.log 2>&1
     rm -f /opt/openmedia-env
 
-    # Self-cleanup: ask the API to delete this VPS (no Hetzner token on the VM)
-    # apiBaseUrl and apiToken are baked in at template generation time — no env file needed.
-    # Always attempt cleanup regardless of metadata availability.
+    # Self-cleanup: ask the API to delete this VPS using the per-VPS service token
     echo "Requesting self-cleanup via API..."
     curl -sf --connect-timeout 5 --max-time 15 -X POST "${params.apiBaseUrl}/downloads/jobs/${params.jobId}/cleanup" \\
-      -H "Authorization: Bearer ${params.apiToken}" \\
+      -H "Authorization: Bearer ${params.serviceToken}" \\
       -H "Content-Type: application/json" || echo "Self-cleanup request failed (reconciler will handle)"
 `;
 }
@@ -503,28 +424,21 @@ runcmd:
 // Upload VPS provisioning
 // ---------------------------------------------------------------------------
 
-export interface ProvisionUploadVpsParams {
-  uploadJobId: string;
-  nzbFileHash: string;
-  s3Key: string;          // S3 key of the MKV file to upload
+export interface GenerateUploadCloudInitParams {
+  jobId: string;
   apiBaseUrl: string;
-  apiToken: string;
-  s3AccessKey: string;
-  s3SecretKey: string;
-  s3Endpoint: string;
-  s3Bucket: string;
-  nzbServiceUrl: string;  // NZB-Service base URL (e.g. https://nzb.nettoken.de)
-  nzbServiceToken: string; // NZB-Service JWT token
-  /** Usenet upload providers (3 providers) */
-  usenetProviders: Array<{
-    host: string;
-    port: number;
-    username: string;
-    password: string;
-    ssl: boolean;
-    connections: number;
-  }>;
+  serviceToken: string;
   dockerImage?: string;
+  serverName: string;
+}
+
+export interface ProvisionUploadVpsParams {
+  jobId: string;
+  nzbFileHash: string;
+  apiBaseUrl: string;
+  serviceToken: string;
+  dockerImage?: string;
+  serverName: string;
 }
 
 /**
@@ -535,35 +449,15 @@ export interface ProvisionUploadVpsParams {
  * self-delete — instead, the API deletes the VPS server-side after the upload
  * job completes or fails. This prevents token exposure from the VPS metadata endpoint.
  */
-export function generateUploadCloudInit(params: ProvisionUploadVpsParams): string {
+export function generateUploadCloudInit(params: GenerateUploadCloudInitParams): string {
   const dockerImage = params.dockerImage || "ghcr.io/ichbinder/openmedia-uploader:latest";
 
-  // Build ENV for the upload container (no Hetzner token — VPS doesn't self-delete)
+  // Only 3 ENV vars — all other config fetched at boot via bootstrap API
   const envLines = [
-    `JOB_ID=${params.uploadJobId}`,
-    `JOB_HASH=${params.nzbFileHash}`,
-    `S3_KEY=${params.s3Key}`,
+    `JOB_ID=${params.jobId}`,
     `API_BASE_URL=${params.apiBaseUrl}`,
-    `SERVICE_TOKEN=${params.apiToken}`,
-    `S3_ACCESS_KEY=${params.s3AccessKey}`,
-    `S3_SECRET_KEY=${params.s3SecretKey}`,
-    `S3_ENDPOINT=${params.s3Endpoint}`,
-    `S3_BUCKET=${params.s3Bucket}`,
-    `NZB_SERVICE_URL=${params.nzbServiceUrl}`,
-    `NZB_SERVICE_TOKEN=${params.nzbServiceToken}`,
+    `SERVICE_TOKEN=${params.serviceToken}`,
   ];
-
-  // Add 3 provider configs
-  for (let i = 0; i < Math.min(params.usenetProviders.length, 3); i++) {
-    const p = params.usenetProviders[i];
-    const n = i + 1;
-    envLines.push(`USENET_HOST_${n}=${p.host}`);
-    envLines.push(`USENET_PORT_${n}=${p.port}`);
-    envLines.push(`USENET_USER_${n}=${p.username}`);
-    envLines.push(`USENET_PASS_${n}=${p.password}`);
-    envLines.push(`USENET_SSL_${n}=${p.ssl ? "1" : "0"}`);
-    envLines.push(`USENET_CONNS_${n}=${p.connections}`);
-  }
 
   const envContent = envLines.join("\n");
   const envBase64 = Buffer.from(envContent).toString("base64");
@@ -583,8 +477,8 @@ runcmd:
     set -e
 
     fail_job() {
-      curl -sf -X PATCH "${params.apiBaseUrl}/uploads/${params.uploadJobId}" \\
-        -H "Authorization: Bearer ${params.apiToken}" \\
+      curl -sf -X PATCH "${params.apiBaseUrl}/uploads/${params.jobId}" \\
+        -H "Authorization: Bearer ${params.serviceToken}" \\
         -H "Content-Type: application/json" \\
         -d "{\\"status\\":\\"failed\\",\\"error\\":\\"$1\\"}" || true
     }
@@ -615,20 +509,25 @@ runcmd:
 export async function provisionUploadVps(
   params: ProvisionUploadVpsParams,
 ): Promise<HetznerCreateServerResult> {
-  const cloudInit = generateUploadCloudInit(params);
-  const serverName = `up-${params.nzbFileHash.substring(0, 8)}`;
+  const cloudInit = generateUploadCloudInit({
+    jobId: params.jobId,
+    apiBaseUrl: params.apiBaseUrl,
+    serviceToken: params.serviceToken,
+    dockerImage: params.dockerImage,
+    serverName: params.serverName,
+  });
 
-  console.log(`[hetzner] Provisioning upload VPS: ${serverName}`);
+  console.log(`[hetzner] Provisioning upload VPS: ${params.serverName}`);
 
   const result = await createServer({
-    name: serverName,
+    name: params.serverName,
     serverType: "cpx42",  // 8 vCPU x86, 16GB RAM — more power for PAR2 + Nyuu
     location: "hel1",     // Helsinki — close to Hetzner S3 and EU Usenet providers
     userData: cloudInit,
     ...(process.env.HETZNER_SSH_KEY ? { sshKeys: [process.env.HETZNER_SSH_KEY] } : {}),
     labels: {
       purpose: "openmedia-upload",
-      uploadJobId: params.uploadJobId,
+      uploadJobId: params.jobId,
       nzbHash: params.nzbFileHash.substring(0, 63),
     },
   });

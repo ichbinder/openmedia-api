@@ -3,6 +3,7 @@ import prisma from "../lib/prisma.js";
 import { requireAuth, type AuthRequest } from "../middleware/auth.js";
 import { isHetznerConfigured, provisionUploadVps, deleteServer } from "../lib/hetzner.js";
 import { getUploadVpsConfig } from "../lib/vps-config.js";
+import { generateServiceToken, storeServiceToken, deleteServiceTokens } from "../lib/service-token.js";
 import { resolveQualityTier } from "../lib/nzb-parser.js";
 
 const router = Router();
@@ -124,19 +125,20 @@ router.post("/", async (req: AuthRequest, res: Response) => {
       console.warn("[uploads] Upload config incomplete (neither DB nor ENV sufficient) — skipping VPS provisioning");
     } else {
       try {
+        // Generate per-VPS service token (same pattern as download provisioner)
+        const { plaintext: serviceToken, hash: tokenHash } = generateServiceToken();
+        await storeServiceToken(tokenHash, job.id, "upload");
+
+        const serverName = `up-${nzbFile.hash.substring(0, 8)}`;
         const result = await provisionUploadVps({
-          uploadJobId: job.id,
+          jobId: job.id,
           nzbFileHash: nzbFile.hash,
-          s3Key: nzbFile.s3Key!,
           apiBaseUrl: uploadConfig.apiBaseUrl,
-          apiToken: uploadConfig.apiToken,
-          s3AccessKey: uploadConfig.s3AccessKey,
-          s3SecretKey: uploadConfig.s3SecretKey,
-          s3Endpoint: uploadConfig.s3Endpoint,
-          s3Bucket: uploadConfig.s3Bucket,
-          nzbServiceUrl: uploadConfig.nzbServiceUrl,
-          nzbServiceToken: uploadConfig.nzbServiceToken,
-          usenetProviders: uploadConfig.usenetProviders,
+          serviceToken,
+          dockerImage: uploadConfig.source === "db"
+            ? undefined  // use default image
+            : process.env.UPLOADER_DOCKER_IMAGE,
+          serverName,
         });
 
         try {
@@ -169,6 +171,8 @@ router.post("/", async (req: AuthRequest, res: Response) => {
         });
         return;
       } catch (err) {
+        // Orphan token cleanup on Hetzner createServer failure
+        deleteServiceTokens(job.id).catch(() => {});
         console.error(`[uploads] VPS provisioning failed: ${(err as Error).message}`);
         // Job stays as 'queued' — user can retry manually or reconciler picks it up
       }
@@ -378,6 +382,13 @@ router.patch("/:id", async (req: AuthRequest, res: Response) => {
     } catch (deleteErr) {
       console.error(`[uploads] Failed to delete VPS ${job.hetznerServerId}:`, deleteErr);
       // Non-blocking — zombie cleanup will catch it later
+    }
+
+    // Delete service tokens for this job (non-fatal)
+    try {
+      await deleteServiceTokens(id);
+    } catch (tokenErr: any) {
+      console.error(`[uploads] Token cleanup failed (non-fatal): ${tokenErr.message}`);
     }
   }
 

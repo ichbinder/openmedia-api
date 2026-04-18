@@ -35,21 +35,8 @@ describe("Hetzner Service", () => {
   describe("generateCloudInit", () => {
     const defaultParams = {
       jobId: "test-job-123",
-      nzbHash: "abc123hash",
-      nzbUrl: "http://api.example.com/nzb/files/xyz/raw",
       apiBaseUrl: "http://api.example.com",
-      apiToken: "test-token",
-      s3AccessKey: "s3-key",
-      s3SecretKey: "s3-secret",
-      s3Endpoint: "https://hel1.your-objectstorage.com",
-      s3Bucket: "openmedia-files",
-      s3Region: "hel1",
-      usenetHost: "news.example.com",
-      usenetPort: 563,
-      usenetUser: "user",
-      usenetPassword: "pass",
-      usenetSsl: true,
-      usenetConnections: 10,
+      serviceToken: "test-service-token-hex",
       dockerImage: "ghcr.io/ichbinder/openmedia-downloader:latest",
       serverName: "dl-test1234",
     };
@@ -72,33 +59,26 @@ describe("Hetzner Service", () => {
       expect(cloudInit).toContain("openmedia-downloader");
       expect(cloudInit).toContain("fail_job");
       expect(cloudInit).toContain("--env-file");
-
-      // Env vars are base64-encoded in write_files
-      const envContent = decodeEnvFromCloudInit(cloudInit);
-      expect(envContent).toContain("openmedia-files");
     });
 
-    it("passes hash and NZB URL as env vars", () => {
+    it("env file contains only JOB_ID, API_BASE_URL, SERVICE_TOKEN", () => {
       const cloudInit = generateCloudInit(defaultParams);
       const envContent = decodeEnvFromCloudInit(cloudInit);
 
-      expect(envContent).toContain("JOB_HASH=");
-      expect(envContent).toContain("abc123hash");
-      expect(envContent).toContain("NZB_URL=");
+      expect(envContent).toContain("JOB_ID=test-job-123");
+      expect(envContent).toContain("API_BASE_URL=http://api.example.com");
+      expect(envContent).toContain("SERVICE_TOKEN=test-service-token-hex");
+
+      // Must NOT contain legacy vars — VPS fetches these at boot
+      expect(envContent).not.toContain("S3_ACCESS_KEY");
+      expect(envContent).not.toContain("USENET_SERVERS");
+      expect(envContent).not.toContain("NZB_URL");
+      expect(envContent).not.toContain("JOB_HASH");
     });
 
-    it("includes S3 and Usenet credentials", () => {
-      const cloudInit = generateCloudInit({
-        ...defaultParams,
-        s3Bucket: "my-bucket",
-      });
-      const envContent = decodeEnvFromCloudInit(cloudInit);
-
-      expect(envContent).toContain("S3_ACCESS_KEY=");
-      expect(envContent).toContain("S3_SECRET_KEY=");
-      expect(envContent).toContain("USENET_SERVERS=");
-      expect(envContent).toContain("news.example.com");
-      expect(envContent).toContain("my-bucket");
+    it("uses service token in fail_job and cleanup curl calls", () => {
+      const cloudInit = generateCloudInit(defaultParams);
+      expect(cloudInit).toContain("test-service-token-hex");
     });
   });
 });

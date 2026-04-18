@@ -36,6 +36,7 @@ import { searchTmdbMovie } from "./tmdb.js";
 import { parseNzbName } from "./nzb-parser.js";
 import { deleteNzbFromService } from "./nzb-service.js";
 import { provisionDownload } from "./provisioner.js";
+import { deleteServiceTokens } from "./service-token.js";
 
 // ── Configuration ───────────────────────────────────────────
 
@@ -612,6 +613,13 @@ export async function reconcileStaleJobs(): Promise<ReconcileResult> {
                 } catch {
                   // Best-effort — mapping may not exist
                 }
+
+                // Delete service tokens (non-fatal)
+                try {
+                  await deleteServiceTokens(jobId);
+                } catch {
+                  // Best-effort — tokens may already be gone
+                }
               }
             } catch (delErr: any) {
               console.warn(`[reconciler] Zombie delete failed: ${server.id} — ${delErr.message}`);
@@ -620,6 +628,44 @@ export async function reconcileStaleJobs(): Promise<ReconcileResult> {
         }
       } catch (err: any) {
         console.warn(`[reconciler] Zombie scan failed: ${err.message}`);
+      }
+
+      // ── Upload zombie VPS cleanup ──────────────────────────
+      try {
+        const uploadServers = await listServers("purpose=openmedia-upload");
+
+        for (const server of uploadServers) {
+          const jobId = server.labels["uploadJobId"];
+          if (!jobId) continue;
+
+          const job = await prisma.uploadJob.findUnique({
+            where: { id: jobId },
+            select: { status: true },
+          });
+
+          if (!job || job.status === "completed" || job.status === "failed") {
+            try {
+              const deleted = await deleteServer(server.id);
+              if (deleted) {
+                result.zombiesDeleted++;
+                const msg = `Zombie upload VPS deleted: ${server.name} (id: ${server.id}) — job ${jobId?.slice(0, 8) || "?"}`;
+                result.details.push(msg);
+                console.log(`[reconciler] ${msg}`);
+
+                // Delete service tokens (non-fatal)
+                try {
+                  await deleteServiceTokens(jobId);
+                } catch {
+                  // Best-effort
+                }
+              }
+            } catch (delErr: any) {
+              console.warn(`[reconciler] Upload zombie delete failed: ${server.id} — ${delErr.message}`);
+            }
+          }
+        }
+      } catch (err: any) {
+        console.warn(`[reconciler] Upload zombie scan failed: ${err.message}`);
       }
     }
   } catch (err) {
