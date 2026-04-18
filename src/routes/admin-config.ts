@@ -119,9 +119,16 @@ router.put("/entries", requireAuth, requireAdmin, async (req: AuthRequest, res: 
       return;
     }
 
-    if (encrypted && !isEncryptionConfigured()) {
-      res.status(503).json({ error: "Encryption not configured." });
-      return;
+    // Check encryption config upfront — covers both explicit encrypted:true
+    // and implicit preservation of existing encrypted entries
+    if (encrypted !== false && !isEncryptionConfigured()) {
+      // Only fail if the entry will actually need encryption:
+      // either explicit encrypted:true in request, or existing entry is encrypted
+      const existingEntry = await getEntry(categoryName, key);
+      if (encrypted || existingEntry?.encrypted) {
+        res.status(503).json({ error: "Encryption not configured." });
+        return;
+      }
     }
 
     const entry = await upsertEntry(
