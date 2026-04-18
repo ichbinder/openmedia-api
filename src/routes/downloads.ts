@@ -8,7 +8,7 @@ import { searchTmdbMovie, searchTmdbMovieById, type TmdbMovieResult } from "../l
 import { markJobFailed } from "../lib/job-failure.js";
 import { computeReviewExpiresAt, computeInitialTmdbRetryAfter } from "../lib/review-config.js";
 import { storeNzbInService } from "../lib/nzb-service.js";
-import { parseUploadProvidersFromEnv } from "../lib/usenet-config.js";
+import { getUploadVpsConfig } from "../lib/vps-config.js";
 
 const router = Router();
 
@@ -1024,23 +1024,23 @@ router.patch("/jobs/:id/status", async (req: AuthRequest, res: Response) => {
                 select: { hash: true, s3Key: true },
               });
               if (nzbForProvision?.s3Key) {
-                const usenetProviders = parseUploadProvidersFromEnv();
+                const uploadConfig = await getUploadVpsConfig();
 
-                if (usenetProviders.length >= 1) {
+                if (uploadConfig) {
                   try {
                     const result = await provisionUploadVps({
                       uploadJobId: uploadJob.id,
                       nzbFileHash: nzbForProvision.hash,
                       s3Key: nzbForProvision.s3Key,
-                      apiBaseUrl: process.env.API_BASE_URL || "http://localhost:4000",
-                      apiToken: process.env.SERVICE_API_TOKEN || "",
-                      s3AccessKey: process.env.S3_ACCESS_KEY || "",
-                      s3SecretKey: process.env.S3_SECRET_KEY || "",
-                      s3Endpoint: process.env.S3_ENDPOINT || "",
-                      s3Bucket: process.env.S3_BUCKET || "",
-                      nzbServiceUrl: process.env.NZB_SERVICE_URL || "https://nzb.nettoken.de",
-                      nzbServiceToken: process.env.NZB_SERVICE_TOKEN || "",
-                      usenetProviders,
+                      apiBaseUrl: uploadConfig.apiBaseUrl,
+                      apiToken: uploadConfig.apiToken,
+                      s3AccessKey: uploadConfig.s3AccessKey,
+                      s3SecretKey: uploadConfig.s3SecretKey,
+                      s3Endpoint: uploadConfig.s3Endpoint,
+                      s3Bucket: uploadConfig.s3Bucket,
+                      nzbServiceUrl: uploadConfig.nzbServiceUrl,
+                      nzbServiceToken: uploadConfig.nzbServiceToken,
+                      usenetProviders: uploadConfig.usenetProviders,
                     });
                     await prisma.uploadJob.update({
                       where: { id: uploadJob.id },
@@ -1057,7 +1057,7 @@ router.patch("/jobs/:id/status", async (req: AuthRequest, res: Response) => {
                     // UploadJob stays queued — reconciler can retry later
                   }
                 } else {
-                  console.warn(`[auto-upload] No usenet providers configured — UploadJob ${uploadJob.id} stays queued`);
+                  console.warn(`[auto-upload] Upload config incomplete — UploadJob ${uploadJob.id} stays queued`);
                 }
               } else {
                 console.warn(`[auto-upload] NzbFile has no s3Key after transaction`);

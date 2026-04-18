@@ -328,5 +328,6 @@ model ConfigHistory {
 
   @@index([entryId])
   @@index([createdAt])
+  @@index([categoryName, entryKey, createdAt])
   @@map("config_history")
 }

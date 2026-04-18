@@ -11,10 +11,10 @@
 
 import { exec } from "node:child_process";
 import prisma from "./prisma.js";
-import { isHetznerConfigured, createServer, generateCloudInit, type UsenetServer } from "./hetzner.js";
-import { parseUsenetServersFromEnv } from "./usenet-config.js";
+import { isHetznerConfigured, createServer, generateCloudInit } from "./hetzner.js";
 import { markJobFailed } from "./job-failure.js";
 import { addMapping } from "./caddy-mapping.js";
+import { getDownloadVpsConfig } from "./vps-config.js";
 
 type ProvisionMode = "hetzner" | "local" | "false";
 
@@ -90,38 +90,30 @@ async function provisionHetznerVPS(job: any): Promise<void> {
     return;
   }
 
-  // Validate required env vars
-  const required = ["S3_ACCESS_KEY", "S3_SECRET_KEY", "S3_ENDPOINT", "S3_BUCKET", "API_BASE_URL", "NZB_SERVICE_URL", "SERVICE_API_TOKEN"];
-  const missing = required.filter((v) => !process.env[v]);
-  // At least one Usenet source required
-  if (!process.env.USENET_SERVERS && !process.env.USENET_HOST) {
-    missing.push("USENET_SERVERS or USENET_HOST");
-  }
-  if (missing.length > 0) {
-    const error = `Missing config: ${missing.join(", ")}`;
+  // Resolve config from DB config store (preferred) or ENV (fallback)
+  const config = await getDownloadVpsConfig();
+  if (!config) {
+    const error = "Missing download VPS config (neither DB config store nor ENV vars are sufficient)";
     console.error(`[provision] ${error}`);
     await markJobFailed({ jobId: job.id, error, source: "provision", expectedStatus: "provisioning" });
     return;
   }
-
-  const nzbServiceUrl = process.env.NZB_SERVICE_URL!;
-  const dockerImage = process.env.DOWNLOADER_DOCKER_IMAGE || "ghcr.io/ichbinder/openmedia-downloader:latest";
 
   const serverName = `dl-${job.id.slice(0, 8)}`;
 
   const cloudInit = generateCloudInit({
     jobId: job.id,
     nzbHash: job.nzbFile.hash,
-    nzbUrl: `${nzbServiceUrl}/nzb/${job.nzbFile.hash}.nzb`,
-    apiBaseUrl: process.env.API_BASE_URL!,
-    apiToken: process.env.SERVICE_API_TOKEN!,
-    s3AccessKey: process.env.S3_ACCESS_KEY!,
-    s3SecretKey: process.env.S3_SECRET_KEY!,
-    s3Endpoint: process.env.S3_ENDPOINT!,
-    s3Bucket: process.env.S3_BUCKET!,
-    s3Region: process.env.S3_REGION || "hel1",
-    usenetServers: parseUsenetServersFromEnv(),
-    dockerImage,
+    nzbUrl: `${config.nzbServiceUrl}/nzb/${job.nzbFile.hash}.nzb`,
+    apiBaseUrl: config.apiBaseUrl,
+    apiToken: config.apiToken,
+    s3AccessKey: config.s3AccessKey,
+    s3SecretKey: config.s3SecretKey,
+    s3Endpoint: config.s3Endpoint,
+    s3Bucket: config.s3Bucket,
+    s3Region: config.s3Region,
+    usenetServers: config.usenetServers,
+    dockerImage: config.dockerImage,
     serverName,
   });
   const rawNetworkId = process.env.HETZNER_NETWORK_ID;
@@ -172,23 +164,30 @@ async function provisionLocalDocker(job: any): Promise<void> {
   const containerName = `dl-${job.id.slice(0, 8)}`;
   const hash = job.nzbFile.hash;
 
-  const servers = parseUsenetServersFromEnv();
+  const config = await getDownloadVpsConfig();
+  if (!config) {
+    const error = "Missing download config (neither DB config store nor ENV vars are sufficient)";
+    console.error(`[provision] ${error}`);
+    await markJobFailed({ jobId: job.id, error, source: "provision", expectedStatus: "provisioning" });
+    return;
+  }
+
   const envVars = [
     `JOB_ID=${job.id}`,
     `JOB_HASH=${hash}`,
-    `NZB_URL=${process.env.NZB_SERVICE_URL}/nzb/${hash}.nzb`,
-    `API_BASE_URL=${process.env.API_BASE_URL}`,
-    `SERVICE_TOKEN=${process.env.SERVICE_API_TOKEN || ""}`,
-    `USENET_SERVERS=${JSON.stringify(servers)}`,
-    `S3_ACCESS_KEY=${process.env.S3_ACCESS_KEY}`,
-    `S3_SECRET_KEY=${process.env.S3_SECRET_KEY}`,
-    `S3_ENDPOINT=${process.env.S3_ENDPOINT}`,
-    `S3_BUCKET=${process.env.S3_BUCKET}`,
-    `S3_REGION=${process.env.S3_REGION || "hel1"}`,
+    `NZB_URL=${config.nzbServiceUrl}/nzb/${hash}.nzb`,
+    `API_BASE_URL=${config.apiBaseUrl}`,
+    `SERVICE_TOKEN=${config.apiToken}`,
+    `USENET_SERVERS=${JSON.stringify(config.usenetServers)}`,
+    `S3_ACCESS_KEY=${config.s3AccessKey}`,
+    `S3_SECRET_KEY=${config.s3SecretKey}`,
+    `S3_ENDPOINT=${config.s3Endpoint}`,
+    `S3_BUCKET=${config.s3Bucket}`,
+    `S3_REGION=${config.s3Region}`,
   ];
 
   const envFlags = envVars.map((v) => `-e "${v}"`).join(" \\\n    ");
-  const image = process.env.DOWNLOADER_DOCKER_IMAGE || "openmedia-downloader:local";
+  const image = config.dockerImage;
 
   const dockerCmd = `docker run -d --name ${containerName} \
     --add-host=host.docker.internal:host-gateway \

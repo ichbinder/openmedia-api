@@ -98,17 +98,37 @@ router.put("/entries", requireAuth, requireAdmin, async (req: AuthRequest, res: 
   try {
     const { categoryName, key, value, encrypted, displayName, description } = req.body;
 
-    if (!categoryName || !key || value === undefined) {
+    if (!categoryName || typeof categoryName !== "string" ||
+        !key || typeof key !== "string" ||
+        value === undefined || value === null) {
       res.status(400).json({ error: "categoryName, key, and value are required." });
       return;
     }
 
-    // Serialize objects/arrays to JSON, reject non-serializable types
-    const serializedValue = typeof value === "string" ? value : JSON.stringify(value);
-
-    if (encrypted && !isEncryptionConfigured()) {
-      res.status(503).json({ error: "Encryption not configured." });
+    if (encrypted !== undefined && typeof encrypted !== "boolean") {
+      res.status(400).json({ error: "encrypted must be a boolean." });
       return;
+    }
+
+    // Serialize objects/arrays to JSON, reject non-serializable types
+    let serializedValue: string;
+    try {
+      serializedValue = typeof value === "string" ? value : JSON.stringify(value);
+    } catch {
+      res.status(400).json({ error: "Invalid request payload: non-serializable value." });
+      return;
+    }
+
+    // Check encryption config upfront — covers both explicit encrypted:true
+    // and implicit preservation of existing encrypted entries
+    if (encrypted !== false && !isEncryptionConfigured()) {
+      // Only fail if the entry will actually need encryption:
+      // either explicit encrypted:true in request, or existing entry is encrypted
+      const existingEntry = await getEntry(categoryName, key);
+      if (encrypted || existingEntry?.encrypted) {
+        res.status(503).json({ error: "Encryption not configured." });
+        return;
+      }
     }
 
     const entry = await upsertEntry(

@@ -140,25 +140,26 @@ export async function upsertEntry(
     throw new Error(`Category '${input.categoryName}' not found.`);
   }
 
-  const isEncrypted = input.encrypted ?? false;
-  let storedValue = input.value;
-  let iv: string | null = null;
-  let tag: string | null = null;
-
-  if (isEncrypted) {
-    if (!isEncryptionConfigured()) {
-      throw new Error("Encryption not configured (ENCRYPTION_MASTER_KEY missing).");
-    }
-    const enc = encrypt(input.value);
-    storedValue = enc.ciphertext;
-    iv = enc.iv;
-    tag = enc.tag;
-  }
-
   const entry = await prisma.$transaction(async (tx) => {
     const existing = await tx.configEntry.findUnique({
       where: { categoryId_key: { categoryId: category.id, key: input.key } },
     });
+
+    // Preserve existing encryption status when not explicitly provided
+    const isEncrypted = input.encrypted ?? (existing?.encrypted ?? false);
+    let storedValue = input.value;
+    let iv: string | null = null;
+    let tag: string | null = null;
+
+    if (isEncrypted) {
+      if (!isEncryptionConfigured()) {
+        throw new Error("Encryption not configured (ENCRYPTION_MASTER_KEY missing).");
+      }
+      const enc = encrypt(input.value);
+      storedValue = enc.ciphertext;
+      iv = enc.iv;
+      tag = enc.tag;
+    }
 
     const result = await tx.configEntry.upsert({
       where: { categoryId_key: { categoryId: category.id, key: input.key } },
@@ -195,18 +196,18 @@ export async function upsertEntry(
       },
     });
 
-    return result;
+    return { result, isEncrypted };
   });
 
   return {
-    id: entry.id,
-    categoryName: entry.category.name,
-    key: entry.key,
-    value: isEncrypted ? "••••••••" : input.value,
-    encrypted: isEncrypted,
-    displayName: entry.displayName,
-    description: entry.description,
-    updatedAt: entry.updatedAt,
+    id: entry.result.id,
+    categoryName: entry.result.category.name,
+    key: entry.result.key,
+    value: entry.isEncrypted ? "••••••••" : input.value,
+    encrypted: entry.isEncrypted,
+    displayName: entry.result.displayName,
+    description: entry.result.description,
+    updatedAt: entry.result.updatedAt,
   };
 }
 
@@ -301,18 +302,8 @@ export async function getEntryHistory(
   key: string,
   limit = 50,
 ): Promise<ConfigHistoryEntry[]> {
-  const category = await prisma.configCategory.findUnique({
-    where: { name: categoryName },
-  });
-  if (!category) return [];
-
-  const entry = await prisma.configEntry.findUnique({
-    where: { categoryId_key: { categoryId: category.id, key } },
-  });
-  if (!entry) return [];
-
   return prisma.configHistory.findMany({
-    where: { entryId: entry.id },
+    where: { categoryName, entryKey: key },
     orderBy: { createdAt: "desc" },
     take: limit,
     select: { id: true, action: true, changedBy: true, createdAt: true },
