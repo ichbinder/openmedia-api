@@ -47,7 +47,7 @@ router.post("/register", async (req: Request, res: Response) => {
 
     const adminEmails = (process.env.ADMIN_EMAILS || "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
     res.status(201).json({
-      user: { id: user.id, email: user.email, name: user.name, isAdmin: adminEmails.includes(user.email) },
+      user: { id: user.id, email: user.email, name: user.name, isAdmin: adminEmails.includes(user.email.toLowerCase()) },
       token,
     });
   } catch (err) {
@@ -87,7 +87,7 @@ router.post("/login", async (req: Request, res: Response) => {
 
     const loginAdminEmails = (process.env.ADMIN_EMAILS || "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
     res.json({
-      user: { id: user.id, email: user.email, name: user.name, isAdmin: loginAdminEmails.includes(user.email) },
+      user: { id: user.id, email: user.email, name: user.name, isAdmin: loginAdminEmails.includes(user.email.toLowerCase()) },
       token,
     });
   } catch (err) {

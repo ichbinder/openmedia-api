@@ -60,7 +60,12 @@ export async function getDownloadVpsConfig(): Promise<DownloadVpsConfig | null> 
       let usenetServers: UsenetServer[] = [];
       if (usenet.servers) {
         try {
-          usenetServers = JSON.parse(usenet.servers);
+          const parsed = JSON.parse(usenet.servers);
+          if (Array.isArray(parsed) && parsed.every((s: unknown) => typeof s === "object" && s !== null && "host" in s && "username" in s && "password" in s)) {
+            usenetServers = parsed as UsenetServer[];
+          } else {
+            console.warn("[vps-config] usenet.servers JSON is not a valid UsenetServer array");
+          }
         } catch {
           console.warn("[vps-config] Failed to parse usenet.servers JSON from DB config");
         }
@@ -140,13 +145,15 @@ export async function getUploadVpsConfig(): Promise<UploadVpsConfig | null> {
         const host = usenet[`provider_${i}_host`];
         const user = usenet[`provider_${i}_user`];
         if (!host || !user) continue;
+        const port = parseInt(usenet[`provider_${i}_port`] || "563", 10);
+        const connections = parseInt(usenet[`provider_${i}_conns`] || "20", 10);
         providers.push({
           host,
-          port: parseInt(usenet[`provider_${i}_port`] || "563", 10),
+          port: Number.isNaN(port) ? 563 : port,
           username: user,
           password: usenet[`provider_${i}_pass`] || "",
           ssl: usenet[`provider_${i}_ssl`] !== "0" && usenet[`provider_${i}_ssl`] !== "false",
-          connections: parseInt(usenet[`provider_${i}_conns`] || "20", 10),
+          connections: Number.isNaN(connections) ? 20 : connections,
         });
       }
 
@@ -189,7 +196,7 @@ export async function getUploadVpsConfig(): Promise<UploadVpsConfig | null> {
     s3SecretKey: process.env.S3_SECRET_KEY || "",
     s3Endpoint: process.env.S3_ENDPOINT || "",
     s3Bucket: process.env.S3_BUCKET || "",
-    nzbServiceUrl: process.env.NZB_SERVICE_URL || "https://nzb.nettoken.de",
+    nzbServiceUrl: process.env.NZB_SERVICE_URL!,
     nzbServiceToken: process.env.NZB_SERVICE_TOKEN || "",
     usenetProviders,
   };
