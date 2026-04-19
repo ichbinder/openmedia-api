@@ -1,6 +1,6 @@
 import { Router, type Response } from "express";
 import prisma from "../lib/prisma.js";
-import { requireAuth, type AuthRequest } from "../middleware/auth.js";
+import { requireAuth, requireServiceOrUserAuth, type AuthRequest } from "../middleware/auth.js";
 import { isHetznerConfigured, provisionUploadVps, deleteServer } from "../lib/hetzner.js";
 import { getUploadVpsConfig } from "../lib/vps-config.js";
 import { generateServiceToken, storeServiceToken, deleteServiceTokens } from "../lib/service-token.js";
@@ -8,7 +8,9 @@ import { resolveQualityTier } from "../lib/nzb-parser.js";
 
 const router = Router();
 
-router.use(requireAuth);
+// Allow both JWT (web UI) and service tokens (VPS callbacks) on all upload routes.
+// Upload VPS calls PATCH /:id with service tokens to report status.
+router.use(requireServiceOrUserAuth);
 
 /** Safely coerce a value to integer, returning null on invalid input. */
 function safeInt(v: unknown): number | null {

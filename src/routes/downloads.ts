@@ -1,7 +1,7 @@
 import { createHash } from "crypto";
 import { Router, type Response } from "express";
 import prisma from "../lib/prisma.js";
-import { requireAuth, type AuthRequest } from "../middleware/auth.js";
+import { requireAuth, requireServiceOrUserAuth, type AuthRequest } from "../middleware/auth.js";
 import { parseNzbName } from "../lib/nzb-parser.js";
 import { sendToSabnzbd, getSabnzbdStatus, getSabnzbdConfigSummary } from "../lib/sabnzbd.js";
 import { searchTmdbMovie, searchTmdbMovieById, type TmdbMovieResult } from "../lib/tmdb.js";
@@ -13,7 +13,9 @@ import { generateServiceToken, storeServiceToken, deleteServiceTokens } from "..
 
 const router = Router();
 
-router.use(requireAuth);
+// Allow both JWT (web UI) and service tokens (VPS callbacks) on all download routes.
+// VPS scripts call PATCH /jobs/:id/status and POST /jobs/:id/cleanup with service tokens.
+router.use(requireServiceOrUserAuth);
 
 /**
  * Resolve a movie via TMDB lookup, returning one of three outcomes.
