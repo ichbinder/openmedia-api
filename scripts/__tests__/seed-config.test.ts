@@ -11,8 +11,12 @@
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { execSync } from "child_process";
+import path from "path";
 import { PrismaClient } from "../../generated/client/index.js";
 import { PrismaPg } from "@prisma/adapter-pg";
+
+/** Project root directory, resolved relative to this test file. */
+const PROJECT_ROOT = path.resolve(__dirname, "..", "..");
 
 const DATABASE_URL =
   process.env.DATABASE_URL ||
@@ -26,7 +30,7 @@ const prisma = new PrismaClient({ adapter });
 
 function runSeed() {
   execSync("npx tsx scripts/seed-config.ts", {
-    cwd: "/Users/jakob/git/openmedia-api",
+    cwd: PROJECT_ROOT,
     env: { ...process.env, DATABASE_URL },
     stdio: "pipe",
   });
@@ -35,7 +39,7 @@ function runSeed() {
 beforeAll(async () => {
   // Push schema to test DB
   execSync("npx prisma db push --force-reset --accept-data-loss", {
-    cwd: "/Users/jakob/git/openmedia-api",
+    cwd: PROJECT_ROOT,
     env: {
       ...process.env,
       DATABASE_URL,
@@ -96,7 +100,7 @@ describe("seed-config integration", () => {
     ]);
   });
 
-  it("upload_vps has 4 category mappings", async () => {
+  it("upload_vps has 5 category mappings", async () => {
     const profile = await prisma.configProfile.findUnique({
       where: { name: "upload_vps" },
     });
@@ -108,6 +112,7 @@ describe("seed-config integration", () => {
     });
     const catNames = mappings.map((m) => m.category.name).sort();
     expect(catNames).toEqual([
+      "docker_images",
       "nzb_service",
       "runtime",
       "s3",
@@ -176,6 +181,10 @@ describe("seed-config integration", () => {
     expect(config!.nzb_service).toBeDefined();
     expect(config!.nzb_service).toHaveProperty("url");
     expect(config!.nzb_service).toHaveProperty("token");
+
+    // docker_images keys
+    expect(config!.docker_images).toBeDefined();
+    expect(config!.docker_images).toHaveProperty("uploader");
 
     // runtime keys
     expect(config!.runtime).toBeDefined();

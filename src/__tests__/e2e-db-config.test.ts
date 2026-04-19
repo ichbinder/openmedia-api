@@ -12,9 +12,13 @@
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
 import { execSync } from "child_process";
+import path from "path";
 import { PrismaClient } from "../../generated/client/index.js";
 import { PrismaPg } from "@prisma/adapter-pg";
 import request from "supertest";
+
+/** Project root directory, resolved relative to this test file. */
+const PROJECT_ROOT = path.resolve(__dirname, "..", "..");
 
 // Mock ONLY Hetzner — vps-config.js must NOT be mocked (that's the point of this test)
 vi.mock("../lib/hetzner.js", () => ({
@@ -79,7 +83,7 @@ const REALISTIC_OVERRIDES: Record<string, Record<string, string>> = {
 beforeAll(async () => {
   // Push schema to test DB
   execSync("npx prisma db push --force-reset --accept-data-loss", {
-    cwd: "/Users/jakob/git/openmedia-api",
+    cwd: PROJECT_ROOT,
     env: {
       ...process.env,
       DATABASE_URL,
@@ -90,7 +94,7 @@ beforeAll(async () => {
 
   // Run seed to create categories, profiles, mappings, and default entries
   execSync("npx tsx scripts/seed-config.ts", {
-    cwd: "/Users/jakob/git/openmedia-api",
+    cwd: PROJECT_ROOT,
     env: { ...process.env, DATABASE_URL },
     stdio: "pipe",
   });
@@ -156,6 +160,7 @@ describe("e2e-db-config: config readers without mock", () => {
     expect(config!.s3Bucket).toBe("cinescope-test-bucket");
     expect(config!.nzbServiceUrl).toBe("https://nzb.test.com/api");
     expect(config!.nzbServiceToken).toBe("nzb-test-token-abc123");
+    expect(config!.dockerImage).toBe("ghcr.io/ichbinder/openmedia-uploader:latest");
     expect(config!.usenetProviders).toHaveLength(1);
     expect(config!.usenetProviders[0].host).toBe("news-upload.test.com");
     expect(config!.usenetProviders[0].username).toBe("uploaduser");

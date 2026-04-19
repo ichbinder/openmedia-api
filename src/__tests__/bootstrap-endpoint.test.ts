@@ -32,6 +32,7 @@ vi.mock("../lib/vps-config.js", () => ({
     s3Bucket: "test-upload-bucket",
     nzbServiceUrl: "http://nzb.example.com",
     nzbServiceToken: "test-nzb-token",
+    dockerImage: "ghcr.io/test/uploader:latest",
     usenetProviders: [
       { host: "news1.example.com", port: 563, username: "upuser1", password: "uppass1", ssl: true, connections: 20 },
       { host: "news2.example.com", port: 119, username: "upuser2", password: "uppass2", ssl: false, connections: 10 },

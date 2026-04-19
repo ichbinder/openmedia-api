@@ -35,6 +35,7 @@ export interface UploadVpsConfig {
   s3Bucket: string;
   nzbServiceUrl: string;
   nzbServiceToken: string;
+  dockerImage: string;
   usenetProviders: UploadProvider[];
 }
 
@@ -108,6 +109,7 @@ export async function getUploadVpsConfig(): Promise<UploadVpsConfig | null> {
       const s3 = dbConfig.s3 || {};
       const usenet = dbConfig.usenet_upload || {};
       const nzb = dbConfig.nzb_service || {};
+      const docker = dbConfig.docker_images || {};
       const runtime = dbConfig.runtime || {};
 
       // Parse upload providers from DB config
@@ -143,6 +145,7 @@ export async function getUploadVpsConfig(): Promise<UploadVpsConfig | null> {
         s3Bucket: s3.bucket || "",
         nzbServiceUrl: nzb.url || "",
         nzbServiceToken: nzb.token || "",
+        dockerImage: docker.uploader || "ghcr.io/ichbinder/openmedia-uploader:latest",
         usenetProviders: providers,
       };
     }
@@ -169,8 +172,10 @@ function hasRequiredDownloadKeys(config: Record<string, Record<string, string>>)
 function hasRequiredUploadKeys(config: Record<string, Record<string, string>>): boolean {
   const s3 = config.s3;
   const nzb = config.nzb_service;
+  const docker = config.docker_images;
   const runtime = config.runtime;
   return !!(s3 && s3.access_key && s3.secret_key && s3.endpoint && s3.bucket &&
     nzb && nzb.url && nzb.token &&
+    docker && docker.uploader &&
     runtime && runtime.api_base_url && runtime.service_api_token);
 }

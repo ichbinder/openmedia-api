@@ -39,7 +39,7 @@ const PROFILES = [
 
 const PROFILE_CATEGORIES: Record<string, string[]> = {
   download_vps: ["s3", "usenet_download", "nzb_service", "docker_images", "runtime"],
-  upload_vps: ["s3", "usenet_upload", "nzb_service", "runtime"],
+  upload_vps: ["s3", "usenet_upload", "nzb_service", "docker_images", "runtime"],
 };
 
 interface EntryDef {
@@ -86,6 +86,7 @@ const ENTRIES_BY_CATEGORY: Record<string, EntryDef[]> = {
   ],
   docker_images: [
     { key: "downloader", displayName: "Downloader Image", defaultValue: "ghcr.io/ichbinder/openmedia-downloader:latest", sensitive: false },
+    { key: "uploader", displayName: "Uploader Image", defaultValue: "ghcr.io/ichbinder/openmedia-uploader:latest", sensitive: false },
   ],
   runtime: [
     { key: "api_base_url", displayName: "API Base URL", defaultValue: "", sensitive: false },
