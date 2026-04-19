@@ -25,7 +25,7 @@ async function seedCategories() {
   await prisma.configCategory.createMany({
     data: [
       { name: "s3", displayName: "S3 Storage" },
-      { name: "usenet_download", displayName: "Usenet Download" },
+      { name: "nzb_service", displayName: "NZB Service" },
     ],
     skipDuplicates: true,
   });
@@ -33,7 +33,7 @@ async function seedCategories() {
 
 async function seedProfile() {
   const s3 = await prisma.configCategory.findUnique({ where: { name: "s3" } });
-  const usenet = await prisma.configCategory.findUnique({ where: { name: "usenet_download" } });
+  const nzb = await prisma.configCategory.findUnique({ where: { name: "nzb_service" } });
 
   const profile = await prisma.configProfile.create({
     data: { name: "download_vps", displayName: "Download VPS" },
@@ -44,9 +44,9 @@ async function seedProfile() {
       data: { profileId: profile.id, categoryId: s3.id },
     });
   }
-  if (usenet) {
+  if (nzb) {
     await prisma.configProfileCategory.create({
-      data: { profileId: profile.id, categoryId: usenet.id },
+      data: { profileId: profile.id, categoryId: nzb.id },
     });
   }
 }
@@ -118,7 +118,7 @@ describe("Admin Config Routes", () => {
       expect(res.body.categories).toHaveLength(2);
       const names = res.body.categories.map((c: { name: string }) => c.name);
       expect(names).toContain("s3");
-      expect(names).toContain("usenet_download");
+      expect(names).toContain("nzb_service");
     });
 
     it("POST /admin/config/categories — creates a category", async () => {

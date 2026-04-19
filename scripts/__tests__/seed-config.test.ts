@@ -2,7 +2,7 @@
  * Integration test for seed-config.ts
  *
  * Verifies that after seeding:
- * - All 6 categories exist
+ * - All 4 categories exist (usenet_download/usenet_upload removed — providers live in UsenetProvider table)
  * - Both profiles exist
  * - Profile-category mappings are correct
  * - getProfileConfig() returns the expected structure
@@ -87,7 +87,7 @@ afterAll(async () => {
 });
 
 describe("seed-config integration", () => {
-  it("creates all 6 categories", async () => {
+  it("creates all 4 categories", async () => {
     const categories = await prisma.configCategory.findMany({
       orderBy: { name: "asc" },
     });
@@ -97,8 +97,6 @@ describe("seed-config integration", () => {
       "nzb_service",
       "runtime",
       "s3",
-      "usenet_download",
-      "usenet_upload",
     ]);
   });
 
@@ -110,7 +108,7 @@ describe("seed-config integration", () => {
     expect(names).toEqual(["download_vps", "upload_vps"]);
   });
 
-  it("download_vps has 5 category mappings", async () => {
+  it("download_vps has 4 category mappings", async () => {
     const profile = await prisma.configProfile.findUnique({
       where: { name: "download_vps" },
     });
@@ -126,11 +124,10 @@ describe("seed-config integration", () => {
       "nzb_service",
       "runtime",
       "s3",
-      "usenet_download",
     ]);
   });
 
-  it("upload_vps has 5 category mappings", async () => {
+  it("upload_vps has 4 category mappings", async () => {
     const profile = await prisma.configProfile.findUnique({
       where: { name: "upload_vps" },
     });
@@ -146,7 +143,6 @@ describe("seed-config integration", () => {
       "nzb_service",
       "runtime",
       "s3",
-      "usenet_upload",
     ]);
   });
 
@@ -166,9 +162,7 @@ describe("seed-config integration", () => {
     expect(config!.s3).toHaveProperty("bucket");
     expect(config!.s3).toHaveProperty("region");
 
-    // usenet_download keys
-    expect(config!.usenet_download).toBeDefined();
-    expect(config!.usenet_download).toHaveProperty("servers");
+    // usenet_download no longer in config — providers live in UsenetProvider table
 
     // nzb_service keys
     expect(config!.nzb_service).toBeDefined();
@@ -198,14 +192,7 @@ describe("seed-config integration", () => {
     expect(config!.s3).toHaveProperty("endpoint");
     expect(config!.s3).toHaveProperty("bucket");
 
-    // usenet_upload keys
-    expect(config!.usenet_upload).toBeDefined();
-    expect(config!.usenet_upload).toHaveProperty("provider_1_host");
-    expect(config!.usenet_upload).toHaveProperty("provider_1_port");
-    expect(config!.usenet_upload).toHaveProperty("provider_1_user");
-    expect(config!.usenet_upload).toHaveProperty("provider_1_pass");
-    expect(config!.usenet_upload).toHaveProperty("provider_1_conns");
-    expect(config!.usenet_upload).toHaveProperty("provider_1_ssl");
+    // usenet_upload no longer in config — providers live in UsenetProvider table
 
     // nzb_service keys
     expect(config!.nzb_service).toBeDefined();

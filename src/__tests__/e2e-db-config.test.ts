@@ -5,9 +5,7 @@
  * non-null results when realistic values are seeded into the DB —
  * WITHOUT mocking vps-config.js.
  *
- * The seed script sets sensitive fields to 'CHANGE_ME' and usenet_download.servers
- * to '[]', both of which cause null returns. This test overrides those entries
- * with realistic test values via Prisma upsert after seeding.
+ * Usenet servers come from the UsenetProvider table (not legacy config entries).
  */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
@@ -15,6 +13,7 @@ import { execSync } from "child_process";
 import path from "path";
 import { PrismaClient } from "../../generated/client/index.js";
 import { PrismaPg } from "@prisma/adapter-pg";
+import { randomBytes } from "node:crypto";
 import request from "supertest";
 
 /** Project root directory, resolved relative to this test file. */
@@ -67,6 +66,9 @@ assertTestDatabase(DATABASE_URL);
 // Set for subprocess and shared prisma module
 process.env.DATABASE_URL = DATABASE_URL;
 
+const TEST_MASTER_KEY = randomBytes(32).toString("hex");
+const ORIGINAL_ENCRYPTION_KEY = process.env.ENCRYPTION_MASTER_KEY;
+
 const adapter = new PrismaPg({ connectionString: DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
 
@@ -79,23 +81,6 @@ const REALISTIC_OVERRIDES: Record<string, Record<string, string>> = {
     endpoint: "https://s3.hel1.your-objectstorage.com",
     bucket: "cinescope-test-bucket",
   },
-  usenet_download: {
-    servers: JSON.stringify([
-      {
-        host: "news.test.com",
-        port: 563,
-        username: "testuser",
-        password: "testpass",
-        connections: 20,
-        ssl: true,
-      },
-    ]),
-  },
-  usenet_upload: {
-    provider_1_host: "news-upload.test.com",
-    provider_1_user: "uploaduser",
-    provider_1_pass: "uploadpass",
-  },
   nzb_service: {
     url: "https://nzb.test.com/api",
     token: "nzb-test-token-abc123",
@@ -107,6 +92,9 @@ const REALISTIC_OVERRIDES: Record<string, Record<string, string>> = {
 };
 
 beforeAll(async () => {
+  // Set encryption key for UsenetProvider password encryption
+  process.env.ENCRYPTION_MASTER_KEY = TEST_MASTER_KEY;
+
   // Push schema to test DB
   execSync("npx prisma db push --force-reset --accept-data-loss", {
     cwd: PROJECT_ROOT,
@@ -146,15 +134,46 @@ beforeAll(async () => {
       });
     }
   }
+
+  // Seed UsenetProvider entries for download and upload
+  const { createProvider } = await import("../lib/usenet-provider-service.js");
+  await createProvider({
+    name: "E2E Download Provider",
+    host: "news.test.com",
+    port: 563,
+    ssl: true,
+    username: "testuser",
+    password: "testpass",
+    connections: 20,
+    isDownload: true,
+    isUpload: false,
+  });
+  await createProvider({
+    name: "E2E Upload Provider",
+    host: "news-upload.test.com",
+    postHost: "news-upload.test.com",
+    port: 563,
+    ssl: true,
+    username: "uploaduser",
+    password: "uploadpass",
+    connections: 20,
+    isDownload: false,
+    isUpload: true,
+  });
 });
 
 afterAll(async () => {
   await prisma.$disconnect();
-  // Restore original DATABASE_URL to avoid leaking into other suites
+  // Restore original env vars to avoid leaking into other suites
   if (ORIGINAL_DATABASE_URL !== undefined) {
     process.env.DATABASE_URL = ORIGINAL_DATABASE_URL;
   } else {
     delete process.env.DATABASE_URL;
+  }
+  if (ORIGINAL_ENCRYPTION_KEY !== undefined) {
+    process.env.ENCRYPTION_MASTER_KEY = ORIGINAL_ENCRYPTION_KEY;
+  } else {
+    delete process.env.ENCRYPTION_MASTER_KEY;
   }
 });
 
@@ -206,8 +225,9 @@ describe("e2e-db-config: config readers without mock", () => {
 
 describe("e2e-db-config: config readers return null when DB config is missing", () => {
   it("getDownloadVpsConfig() returns null with empty config tables", async () => {
-    // Wipe config entries to simulate missing config
+    // Wipe config entries and providers to simulate missing config
     await prisma.configEntry.deleteMany();
+    await prisma.usenetProvider.deleteMany();
 
     // Dynamic import to get a fresh module evaluation
     const { getDownloadVpsConfig } = await import("../../src/lib/vps-config.js");
@@ -218,6 +238,7 @@ describe("e2e-db-config: config readers return null when DB config is missing", 
   it("getUploadVpsConfig() returns null with empty config tables", async () => {
     // Ensure tables are empty independent of test order
     await prisma.configEntry.deleteMany();
+    await prisma.usenetProvider.deleteMany();
 
     const { getUploadVpsConfig } = await import("../../src/lib/vps-config.js");
     const config = await getUploadVpsConfig();
@@ -232,7 +253,7 @@ describe("e2e-db-config: config readers return null when DB config is missing", 
       stdio: "pipe",
     });
 
-    // Re-apply realistic overrides
+    // Re-apply realistic config overrides
     for (const [categoryName, entries] of Object.entries(REALISTIC_OVERRIDES)) {
       const category = await prisma.configCategory.findUnique({
         where: { name: categoryName },
@@ -246,6 +267,32 @@ describe("e2e-db-config: config readers return null when DB config is missing", 
         });
       }
     }
+
+    // Re-seed UsenetProvider entries
+    const { createProvider } = await import("../lib/usenet-provider-service.js");
+    await createProvider({
+      name: "E2E Download Provider",
+      host: "news.test.com",
+      port: 563,
+      ssl: true,
+      username: "testuser",
+      password: "testpass",
+      connections: 20,
+      isDownload: true,
+      isUpload: false,
+    });
+    await createProvider({
+      name: "E2E Upload Provider",
+      host: "news-upload.test.com",
+      postHost: "news-upload.test.com",
+      port: 563,
+      ssl: true,
+      username: "uploaduser",
+      password: "uploadpass",
+      connections: 20,
+      isDownload: false,
+      isUpload: true,
+    });
   });
 });
 

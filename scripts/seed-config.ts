@@ -25,8 +25,6 @@ const prisma = new PrismaClient({ adapter });
 
 const CATEGORIES = [
   { name: "s3", displayName: "S3-Speicher" },
-  { name: "usenet_download", displayName: "Usenet Download" },
-  { name: "usenet_upload", displayName: "Usenet Upload" },
   { name: "nzb_service", displayName: "NZB-Service" },
   { name: "docker_images", displayName: "Docker Images" },
   { name: "runtime", displayName: "Runtime" },
@@ -38,8 +36,8 @@ const PROFILES = [
 ] as const;
 
 const PROFILE_CATEGORIES: Record<string, string[]> = {
-  download_vps: ["s3", "usenet_download", "nzb_service", "docker_images", "runtime"],
-  upload_vps: ["s3", "usenet_upload", "nzb_service", "docker_images", "runtime"],
+  download_vps: ["s3", "nzb_service", "docker_images", "runtime"],
+  upload_vps: ["s3", "nzb_service", "docker_images", "runtime"],
 };
 
 interface EntryDef {
@@ -56,29 +54,6 @@ const ENTRIES_BY_CATEGORY: Record<string, EntryDef[]> = {
     { key: "endpoint", displayName: "Endpoint", defaultValue: "", sensitive: false },
     { key: "bucket", displayName: "Bucket", defaultValue: "", sensitive: false },
     { key: "region", displayName: "Region", defaultValue: "hel1", sensitive: false },
-  ],
-  usenet_download: [
-    { key: "servers", displayName: "Usenet Servers (JSON)", defaultValue: "[]", sensitive: true },
-  ],
-  usenet_upload: [
-    { key: "provider_1_host", displayName: "Provider 1 Host", defaultValue: "", sensitive: false },
-    { key: "provider_1_port", displayName: "Provider 1 Port", defaultValue: "563", sensitive: false },
-    { key: "provider_1_user", displayName: "Provider 1 User", defaultValue: "CHANGE_ME", sensitive: true },
-    { key: "provider_1_pass", displayName: "Provider 1 Password", defaultValue: "CHANGE_ME", sensitive: true },
-    { key: "provider_1_conns", displayName: "Provider 1 Connections", defaultValue: "20", sensitive: false },
-    { key: "provider_1_ssl", displayName: "Provider 1 SSL", defaultValue: "true", sensitive: false },
-    { key: "provider_2_host", displayName: "Provider 2 Host", defaultValue: "", sensitive: false },
-    { key: "provider_2_port", displayName: "Provider 2 Port", defaultValue: "563", sensitive: false },
-    { key: "provider_2_user", displayName: "Provider 2 User", defaultValue: "CHANGE_ME", sensitive: true },
-    { key: "provider_2_pass", displayName: "Provider 2 Password", defaultValue: "CHANGE_ME", sensitive: true },
-    { key: "provider_2_conns", displayName: "Provider 2 Connections", defaultValue: "20", sensitive: false },
-    { key: "provider_2_ssl", displayName: "Provider 2 SSL", defaultValue: "true", sensitive: false },
-    { key: "provider_3_host", displayName: "Provider 3 Host", defaultValue: "", sensitive: false },
-    { key: "provider_3_port", displayName: "Provider 3 Port", defaultValue: "563", sensitive: false },
-    { key: "provider_3_user", displayName: "Provider 3 User", defaultValue: "CHANGE_ME", sensitive: true },
-    { key: "provider_3_pass", displayName: "Provider 3 Password", defaultValue: "CHANGE_ME", sensitive: true },
-    { key: "provider_3_conns", displayName: "Provider 3 Connections", defaultValue: "20", sensitive: false },
-    { key: "provider_3_ssl", displayName: "Provider 3 SSL", defaultValue: "true", sensitive: false },
   ],
   nzb_service: [
     { key: "url", displayName: "NZB Service URL", defaultValue: "", sensitive: false },
@@ -156,6 +131,19 @@ async function main() {
       entryCount++;
     }
     console.log(`  Entries: ${catName} (${entries.length} keys)`);
+  }
+
+  // 5. Clean up legacy usenet categories (providers now live in UsenetProvider table)
+  const LEGACY_CATEGORIES = ["usenet_download", "usenet_upload"];
+  for (const legacyName of LEGACY_CATEGORIES) {
+    const legacy = await prisma.configCategory.findUnique({ where: { name: legacyName } });
+    if (legacy) {
+      // Delete entries, profile mappings, then the category itself
+      await prisma.configEntry.deleteMany({ where: { categoryId: legacy.id } });
+      await prisma.configProfileCategory.deleteMany({ where: { categoryId: legacy.id } });
+      await prisma.configCategory.delete({ where: { id: legacy.id } });
+      console.log(`  Removed legacy category: ${legacyName}`);
+    }
   }
 
   console.log(`[seed-config] Done. ${CATEGORIES.length} categories, ${PROFILES.length} profiles, ${entryCount} entries seeded.`);
