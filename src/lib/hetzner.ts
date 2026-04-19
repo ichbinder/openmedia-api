@@ -524,7 +524,7 @@ export async function provisionUploadVps(
     serverType: "cpx42",  // 8 vCPU x86, 16GB RAM — more power for PAR2 + Nyuu
     location: "hel1",     // Helsinki — close to Hetzner S3 and EU Usenet providers
     userData: cloudInit,
-    ...(process.env.HETZNER_SSH_KEY ? { sshKeys: [process.env.HETZNER_SSH_KEY] } : {}),
+    ...(process.env.HETZNER_SSH_KEY_NAME ? { sshKeys: [process.env.HETZNER_SSH_KEY_NAME] } : {}),
     labels: {
       purpose: "openmedia-upload",
       uploadJobId: params.jobId,
