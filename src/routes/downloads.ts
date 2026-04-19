@@ -1041,6 +1041,7 @@ router.patch("/jobs/:id/status", requireServiceOrUserAuth, async (req: AuthReque
                       nzbFileHash: nzbForProvision.hash,
                       apiBaseUrl: uploadConfig.apiBaseUrl,
                       serviceToken,
+                      dockerImage: uploadConfig.dockerImage,
                       serverName,
                     });
                     await prisma.uploadJob.update({

@@ -27,7 +27,6 @@ vi.mock("../lib/hetzner.js", () => ({
 // Mock VPS configs — bootstrap returns these to VPS instances
 vi.mock("../lib/vps-config.js", () => ({
   getDownloadVpsConfig: vi.fn().mockResolvedValue({
-    source: "env",
     apiBaseUrl: "http://localhost:4000",
     apiToken: "test-api-token",
     s3AccessKey: "test-s3-key",
@@ -42,7 +41,6 @@ vi.mock("../lib/vps-config.js", () => ({
     ],
   }),
   getUploadVpsConfig: vi.fn().mockResolvedValue({
-    source: "env",
     apiBaseUrl: "http://localhost:4000",
     apiToken: "test-api-token",
     s3AccessKey: "test-upload-s3-key",
@@ -51,6 +49,7 @@ vi.mock("../lib/vps-config.js", () => ({
     s3Bucket: "test-upload-bucket",
     nzbServiceUrl: "http://nzb.example.com",
     nzbServiceToken: "test-nzb-token",
+    dockerImage: "ghcr.io/test/uploader:latest",
     usenetProviders: [
       {
         host: "news1.example.com",

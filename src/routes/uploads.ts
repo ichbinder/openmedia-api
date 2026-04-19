@@ -124,7 +124,7 @@ router.post("/", requireAuth, async (req: AuthRequest, res: Response) => {
     const uploadConfig = await getUploadVpsConfig();
 
     if (!uploadConfig) {
-      console.warn("[uploads] Upload config incomplete (neither DB nor ENV sufficient) — skipping VPS provisioning");
+      console.warn("[uploads] Upload config incomplete (DB config missing required keys) — skipping VPS provisioning");
     } else {
       try {
         // Generate per-VPS service token (same pattern as download provisioner)
@@ -137,9 +137,7 @@ router.post("/", requireAuth, async (req: AuthRequest, res: Response) => {
           nzbFileHash: nzbFile.hash,
           apiBaseUrl: uploadConfig.apiBaseUrl,
           serviceToken,
-          dockerImage: uploadConfig.source === "db"
-            ? undefined  // use default image
-            : process.env.UPLOADER_DOCKER_IMAGE,
+          dockerImage: uploadConfig.dockerImage,
           serverName,
         });
 

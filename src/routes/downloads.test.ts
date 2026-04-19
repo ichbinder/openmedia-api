@@ -22,6 +22,7 @@ vi.mock("../lib/vps-config.js", () => ({
     s3Bucket: "mock-bucket",
     nzbServiceUrl: "http://nzb.mock.com",
     nzbServiceToken: "mock-nzb-token",
+    dockerImage: "ghcr.io/mock/uploader:latest",
     usenetProviders: [],
   }),
 }));
