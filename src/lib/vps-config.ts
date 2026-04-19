@@ -51,12 +51,11 @@ export async function getDownloadVpsConfig(): Promise<DownloadVpsConfig | null> 
     const dbConfig = await getProfileConfig("download_vps");
     if (dbConfig && hasRequiredDownloadKeys(dbConfig)) {
       const s3 = dbConfig.s3 || {};
-      const usenet = dbConfig.usenet_download || {};
       const nzb = dbConfig.nzb_service || {};
       const docker = dbConfig.docker_images || {};
       const runtime = dbConfig.runtime || {};
 
-      // Resolve usenet servers: prefer UsenetProvider table, fall back to legacy JSON config
+      // Resolve usenet servers from UsenetProvider table
       let usenetServers: UsenetServer[] = [];
       try {
         const providers = await getDownloadProviders();
@@ -73,21 +72,6 @@ export async function getDownloadVpsConfig(): Promise<DownloadVpsConfig | null> 
         }
       } catch (err) {
         console.warn(`[vps-config] UsenetProvider lookup failed: ${(err as Error).message}`);
-      }
-
-      // Legacy fallback: JSON in usenet_download/servers config entry
-      if (usenetServers.length === 0 && usenet.servers) {
-        try {
-          const parsed = JSON.parse(usenet.servers);
-          if (Array.isArray(parsed) && parsed.every((s: unknown) => typeof s === "object" && s !== null && "host" in s && "username" in s && "password" in s)) {
-            usenetServers = parsed as UsenetServer[];
-            console.log(`[vps-config] Download servers from legacy JSON config (${usenetServers.length} servers)`);
-          } else {
-            console.warn("[vps-config] usenet.servers JSON is not a valid UsenetServer array");
-          }
-        } catch {
-          console.warn("[vps-config] Failed to parse usenet.servers JSON from DB config");
-        }
       }
 
       if (usenetServers.length === 0) {
@@ -127,12 +111,11 @@ export async function getUploadVpsConfig(): Promise<UploadVpsConfig | null> {
     const dbConfig = await getProfileConfig("upload_vps");
     if (dbConfig && hasRequiredUploadKeys(dbConfig)) {
       const s3 = dbConfig.s3 || {};
-      const usenet = dbConfig.usenet_upload || {};
       const nzb = dbConfig.nzb_service || {};
       const docker = dbConfig.docker_images || {};
       const runtime = dbConfig.runtime || {};
 
-      // Resolve upload providers: prefer UsenetProvider table, fall back to legacy flat keys
+      // Resolve upload providers from UsenetProvider table
       const providers: UploadProvider[] = [];
       try {
         const uploadProviders = await getUploadProviders();
@@ -151,28 +134,6 @@ export async function getUploadVpsConfig(): Promise<UploadVpsConfig | null> {
         }
       } catch (err) {
         console.warn(`[vps-config] UsenetProvider lookup failed: ${(err as Error).message}`);
-      }
-
-      // Legacy fallback: flat provider_N_* config entries
-      if (providers.length === 0) {
-        for (let i = 1; i <= 3; i++) {
-          const host = usenet[`provider_${i}_host`];
-          const user = usenet[`provider_${i}_user`];
-          if (!host || !user) continue;
-          const port = parseInt(usenet[`provider_${i}_port`] || "563", 10);
-          const connections = parseInt(usenet[`provider_${i}_conns`] || "20", 10);
-          providers.push({
-            host,
-            port: Number.isNaN(port) ? 563 : port,
-            username: user,
-            password: usenet[`provider_${i}_pass`] || "",
-            ssl: usenet[`provider_${i}_ssl`] !== "0" && usenet[`provider_${i}_ssl`] !== "false",
-            connections: Number.isNaN(connections) ? 20 : connections,
-          });
-        }
-        if (providers.length > 0) {
-          console.log(`[vps-config] Upload providers from legacy flat config (${providers.length} providers)`);
-        }
       }
 
       if (providers.length === 0) {
