@@ -133,6 +133,19 @@ async function main() {
     console.log(`  Entries: ${catName} (${entries.length} keys)`);
   }
 
+  // 5. Clean up legacy usenet categories (providers now live in UsenetProvider table)
+  const LEGACY_CATEGORIES = ["usenet_download", "usenet_upload"];
+  for (const legacyName of LEGACY_CATEGORIES) {
+    const legacy = await prisma.configCategory.findUnique({ where: { name: legacyName } });
+    if (legacy) {
+      // Delete entries, profile mappings, then the category itself
+      await prisma.configEntry.deleteMany({ where: { categoryId: legacy.id } });
+      await prisma.configProfileCategory.deleteMany({ where: { categoryId: legacy.id } });
+      await prisma.configCategory.delete({ where: { id: legacy.id } });
+      console.log(`  Removed legacy category: ${legacyName}`);
+    }
+  }
+
   console.log(`[seed-config] Done. ${CATEGORIES.length} categories, ${PROFILES.length} profiles, ${entryCount} entries seeded.`);
 }
 
