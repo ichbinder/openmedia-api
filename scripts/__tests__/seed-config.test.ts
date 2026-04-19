@@ -18,8 +18,10 @@ import { PrismaPg } from "@prisma/adapter-pg";
 /** Project root directory, resolved relative to this test file. */
 const PROJECT_ROOT = path.resolve(__dirname, "..", "..");
 
+const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
+
 const DATABASE_URL =
-  process.env.DATABASE_URL ||
+  ORIGINAL_DATABASE_URL ||
   "postgresql://cinescope_test:cinescope_test@localhost:5433/cinescope_test";
 
 // Set for subprocess and shared prisma module
@@ -54,6 +56,12 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await prisma.$disconnect();
+  // Restore original DATABASE_URL to avoid leaking into other suites
+  if (ORIGINAL_DATABASE_URL !== undefined) {
+    process.env.DATABASE_URL = ORIGINAL_DATABASE_URL;
+  } else {
+    delete process.env.DATABASE_URL;
+  }
 });
 
 describe("seed-config integration", () => {

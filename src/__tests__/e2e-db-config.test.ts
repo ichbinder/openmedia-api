@@ -31,11 +31,15 @@ vi.mock("../lib/hetzner.js", () => ({
   cleanupZombieServers: vi.fn().mockResolvedValue({ deleted: 0, failed: 0 }),
   generateCloudInit: vi.fn().mockReturnValue("#!/bin/bash\necho mock"),
   generateUploadCloudInit: vi.fn().mockReturnValue("#!/bin/bash\necho mock"),
-  provisionUploadVps: vi.fn().mockResolvedValue({ serverId: 1, serverIp: "1.2.3.4" }),
+  provisionUploadVps: vi.fn().mockResolvedValue({
+    server: { id: 1, name: "mock-upload-vps", publicIpv4: "1.2.3.4" },
+  }),
 }));
 
+const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
+
 const DATABASE_URL =
-  process.env.DATABASE_URL ||
+  ORIGINAL_DATABASE_URL ||
   "postgresql://cinescope_test:cinescope_test@localhost:5433/cinescope_test";
 
 // Set for subprocess and shared prisma module
@@ -124,6 +128,12 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await prisma.$disconnect();
+  // Restore original DATABASE_URL to avoid leaking into other suites
+  if (ORIGINAL_DATABASE_URL !== undefined) {
+    process.env.DATABASE_URL = ORIGINAL_DATABASE_URL;
+  } else {
+    delete process.env.DATABASE_URL;
+  }
 });
 
 describe("e2e-db-config: config readers without mock", () => {
