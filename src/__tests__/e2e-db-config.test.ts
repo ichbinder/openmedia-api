@@ -39,8 +39,27 @@ vi.mock("../lib/hetzner.js", () => ({
 const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
 
 const DATABASE_URL =
-  ORIGINAL_DATABASE_URL ||
+  process.env.TEST_DATABASE_URL ||
   "postgresql://cinescope_test:cinescope_test@localhost:5433/cinescope_test";
+
+/**
+ * Safety check: only allow force-reset against known test databases.
+ * Prevents accidental destruction of dev/prod DBs.
+ */
+function assertTestDatabase(url: string): void {
+  const parsed = new URL(url);
+  const isLocalhost = ["localhost", "127.0.0.1"].includes(parsed.hostname);
+  const isTestPort = parsed.port === "5433";
+  const isTestName = parsed.pathname.includes("test");
+  if (!(isLocalhost && isTestPort) && !isTestName) {
+    throw new Error(
+      `Refusing to run destructive tests against "${url}". ` +
+        "Set TEST_DATABASE_URL to a dedicated test database (localhost:5433 or DB name containing 'test')."
+    );
+  }
+}
+
+assertTestDatabase(DATABASE_URL);
 
 // Set for subprocess and shared prisma module
 process.env.DATABASE_URL = DATABASE_URL;
@@ -177,6 +196,50 @@ describe("e2e-db-config: config readers without mock", () => {
     expect(config!.usenetProviders[0].password).toBe("uploadpass");
     expect(config!.usenetProviders[0].ssl).toBe(true);
     expect(config!.usenetProviders[0].connections).toBe(20);
+  });
+});
+
+// ─── Negative test: missing config returns null ────
+
+describe("e2e-db-config: config readers return null when DB config is missing", () => {
+  it("getDownloadVpsConfig() returns null with empty config tables", async () => {
+    // Wipe config entries to simulate missing config
+    await prisma.configEntry.deleteMany();
+
+    // Dynamic import to get a fresh module evaluation
+    const { getDownloadVpsConfig } = await import("../../src/lib/vps-config.js");
+    const config = await getDownloadVpsConfig();
+    expect(config).toBeNull();
+  });
+
+  it("getUploadVpsConfig() returns null with empty config tables", async () => {
+    const { getUploadVpsConfig } = await import("../../src/lib/vps-config.js");
+    const config = await getUploadVpsConfig();
+    expect(config).toBeNull();
+  });
+
+  afterAll(async () => {
+    // Re-seed for subsequent test suites
+    execSync("npx tsx scripts/seed-config.ts", {
+      cwd: PROJECT_ROOT,
+      env: { ...process.env, DATABASE_URL },
+      stdio: "pipe",
+    });
+
+    // Re-apply realistic overrides
+    for (const [categoryName, entries] of Object.entries(REALISTIC_OVERRIDES)) {
+      const category = await prisma.configCategory.findUnique({
+        where: { name: categoryName },
+      });
+      if (!category) continue;
+      for (const [key, value] of Object.entries(entries)) {
+        await prisma.configEntry.upsert({
+          where: { categoryId_key: { categoryId: category.id, key } },
+          update: { value },
+          create: { categoryId: category.id, key, value, encrypted: false, displayName: key },
+        });
+      }
+    }
   });
 });
 

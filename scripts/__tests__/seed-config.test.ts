@@ -21,8 +21,27 @@ const PROJECT_ROOT = path.resolve(__dirname, "..", "..");
 const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
 
 const DATABASE_URL =
-  ORIGINAL_DATABASE_URL ||
+  process.env.TEST_DATABASE_URL ||
   "postgresql://cinescope_test:cinescope_test@localhost:5433/cinescope_test";
+
+/**
+ * Safety check: only allow force-reset against known test databases.
+ * Prevents accidental destruction of dev/prod DBs.
+ */
+function assertTestDatabase(url: string): void {
+  const parsed = new URL(url);
+  const isLocalhost = ["localhost", "127.0.0.1"].includes(parsed.hostname);
+  const isTestPort = parsed.port === "5433";
+  const isTestName = parsed.pathname.includes("test");
+  if (!(isLocalhost && isTestPort) && !isTestName) {
+    throw new Error(
+      `Refusing to run destructive tests against "${url}". ` +
+        "Set TEST_DATABASE_URL to a dedicated test database (localhost:5433 or DB name containing 'test')."
+    );
+  }
+}
+
+assertTestDatabase(DATABASE_URL);
 
 // Set for subprocess and shared prisma module
 process.env.DATABASE_URL = DATABASE_URL;
@@ -200,13 +219,21 @@ describe("seed-config integration", () => {
     expect(config!.runtime).toHaveProperty("service_api_token");
   });
 
-  it("seed is idempotent — second run does not change counts", async () => {
+  it("seed is idempotent — second run preserves counts and values", async () => {
     const countsBefore = {
       categories: await prisma.configCategory.count(),
       profiles: await prisma.configProfile.count(),
       mappings: await prisma.configProfileCategory.count(),
       entries: await prisma.configEntry.count(),
     };
+
+    // Snapshot a representative entry value
+    const s3Category = await prisma.configCategory.findUnique({
+      where: { name: "s3" },
+    });
+    const s3BucketBefore = await prisma.configEntry.findUnique({
+      where: { categoryId_key: { categoryId: s3Category!.id, key: "bucket" } },
+    });
 
     // Run seed again
     runSeed();
@@ -219,5 +246,11 @@ describe("seed-config integration", () => {
     };
 
     expect(countsAfter).toEqual(countsBefore);
+
+    // Verify values are preserved (upsert with empty update doesn't overwrite)
+    const s3BucketAfter = await prisma.configEntry.findUnique({
+      where: { categoryId_key: { categoryId: s3Category!.id, key: "bucket" } },
+    });
+    expect(s3BucketAfter!.value).toBe(s3BucketBefore!.value);
   });
 });
