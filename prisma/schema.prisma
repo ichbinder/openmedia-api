@@ -343,3 +343,27 @@ model ConfigHistory {
   @@index([categoryName, entryKey, createdAt])
   @@map("config_history")
 }
+
+// ─── Usenet Provider Store ──────────────────────────────────────────
+
+model UsenetProvider {
+  id          String   @id @default(uuid())
+  name        String   @unique                        // display name: "Eweka", "EasyUsenet"
+  host        String                                   // download hostname: "news.eweka.nl"
+  postHost    String?  @map("post_host")               // upload hostname: "post.eweka.nl" (null = same as host)
+  port        Int      @default(563)
+  ssl         Boolean  @default(true)
+  username    String                                   // plaintext or encrypted
+  password    String   @db.Text                        // AES-256-GCM encrypted
+  iv          String?                                  // hex-encoded IV (for password)
+  tag         String?                                  // hex-encoded auth tag (for password)
+  connections Int      @default(20)
+  priority    Int      @default(0)                     // lower = higher priority
+  enabled     Boolean  @default(true)
+  isDownload  Boolean  @default(false) @map("is_download") // use for download VPS
+  isUpload    Boolean  @default(false) @map("is_upload")   // use for upload VPS
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("usenet_providers")
+}

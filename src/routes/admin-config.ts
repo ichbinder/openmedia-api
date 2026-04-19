@@ -18,6 +18,13 @@ import {
   getEntryHistory,
   createCategory,
 } from "../lib/config-service.js";
+import {
+  createProvider,
+  listProviders,
+  getProviderById,
+  updateProvider,
+  deleteProvider,
+} from "../lib/usenet-provider-service.js";
 
 const router = Router();
 
@@ -221,6 +228,123 @@ router.get("/history/:categoryName/:key", requireAuth, requireAdmin, async (req:
   } catch (err) {
     console.error("[admin-config] History error:", err);
     res.status(500).json({ error: "Failed to get history." });
+  }
+});
+
+// ─── Usenet Providers ────────────────────────────────────────────────
+
+/** GET /admin/config/usenet-providers — list all providers */
+router.get("/usenet-providers", requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const reveal = req.query.reveal === "true";
+    if (reveal && !isEncryptionConfigured()) {
+      res.status(503).json({ error: "Encryption not configured." });
+      return;
+    }
+    const providers = await listProviders(reveal);
+    res.json({ providers });
+  } catch (err) {
+    console.error("[admin-config] List providers error:", err);
+    res.status(500).json({ error: "Failed to list providers." });
+  }
+});
+
+/** POST /admin/config/usenet-providers — create a provider */
+router.post("/usenet-providers", requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const { name, host, postHost, port, ssl, username, password, connections, priority, enabled, isDownload, isUpload } = req.body;
+
+    if (!name || !host || !username || !password) {
+      res.status(400).json({ error: "name, host, username, and password are required." });
+      return;
+    }
+
+    if (!isEncryptionConfigured()) {
+      res.status(503).json({ error: "Encryption not configured." });
+      return;
+    }
+
+    const provider = await createProvider({
+      name, host, postHost, port, ssl, username, password, connections, priority, enabled, isDownload, isUpload,
+    });
+
+    console.log(`[admin-config] Provider created: ${name} by ${req.user?.userId}`);
+    res.status(201).json({ provider });
+  } catch (err: any) {
+    if (err?.code === "P2002") {
+      res.status(409).json({ error: "Provider with this name already exists." });
+      return;
+    }
+    console.error("[admin-config] Create provider error:", err);
+    res.status(500).json({ error: "Failed to create provider." });
+  }
+});
+
+/** GET /admin/config/usenet-providers/:id — get a single provider */
+router.get("/usenet-providers/:id", requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const reveal = req.query.reveal === "true";
+    if (reveal && !isEncryptionConfigured()) {
+      res.status(503).json({ error: "Encryption not configured." });
+      return;
+    }
+    const provider = await getProviderById(String(req.params.id), reveal);
+    if (!provider) {
+      res.status(404).json({ error: "Provider not found." });
+      return;
+    }
+    res.json({ provider });
+  } catch (err) {
+    console.error("[admin-config] Get provider error:", err);
+    res.status(500).json({ error: "Failed to get provider." });
+  }
+});
+
+/** PUT /admin/config/usenet-providers/:id — update a provider */
+router.put("/usenet-providers/:id", requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const { name, host, postHost, port, ssl, username, password, connections, priority, enabled, isDownload, isUpload } = req.body;
+
+    if (password !== undefined && !isEncryptionConfigured()) {
+      res.status(503).json({ error: "Encryption not configured." });
+      return;
+    }
+
+    const provider = await updateProvider(String(req.params.id), {
+      name, host, postHost, port, ssl, username, password, connections, priority, enabled, isDownload, isUpload,
+    });
+
+    if (!provider) {
+      res.status(404).json({ error: "Provider not found." });
+      return;
+    }
+
+    console.log(`[admin-config] Provider updated: ${provider.name} by ${req.user?.userId}`);
+    res.json({ provider });
+  } catch (err: any) {
+    if (err?.code === "P2002") {
+      res.status(409).json({ error: "Provider with this name already exists." });
+      return;
+    }
+    console.error("[admin-config] Update provider error:", err);
+    res.status(500).json({ error: "Failed to update provider." });
+  }
+});
+
+/** DELETE /admin/config/usenet-providers/:id — delete a provider */
+router.delete("/usenet-providers/:id", requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const providerId = String(req.params.id);
+    const deleted = await deleteProvider(providerId);
+    if (!deleted) {
+      res.status(404).json({ error: "Provider not found." });
+      return;
+    }
+    console.log(`[admin-config] Provider deleted: ${providerId} by ${req.user?.userId}`);
+    res.json({ deleted: true });
+  } catch (err) {
+    console.error("[admin-config] Delete provider error:", err);
+    res.status(500).json({ error: "Failed to delete provider." });
   }
 });
 
