@@ -48,13 +48,16 @@ const DATABASE_URL =
  */
 function assertTestDatabase(url: string): void {
   const parsed = new URL(url);
+  const dbName = parsed.pathname.replace(/^\//, "");
   const isLocalhost = ["localhost", "127.0.0.1"].includes(parsed.hostname);
   const isTestPort = parsed.port === "5433";
-  const isTestName = parsed.pathname.includes("test");
-  if (!(isLocalhost && isTestPort) && !isTestName) {
+  const isAllowedDbName =
+    dbName === "cinescope_test" || dbName.endsWith("_test");
+
+  if (!(isLocalhost && isTestPort && isAllowedDbName)) {
     throw new Error(
       `Refusing to run destructive tests against "${url}". ` +
-        "Set TEST_DATABASE_URL to a dedicated test database (localhost:5433 or DB name containing 'test')."
+        "Set TEST_DATABASE_URL to the dedicated local test database (localhost:5433 with DB name ending in '_test')."
     );
   }
 }
@@ -213,6 +216,9 @@ describe("e2e-db-config: config readers return null when DB config is missing", 
   });
 
   it("getUploadVpsConfig() returns null with empty config tables", async () => {
+    // Ensure tables are empty independent of test order
+    await prisma.configEntry.deleteMany();
+
     const { getUploadVpsConfig } = await import("../../src/lib/vps-config.js");
     const config = await getUploadVpsConfig();
     expect(config).toBeNull();
