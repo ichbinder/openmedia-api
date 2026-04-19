@@ -86,12 +86,20 @@ describe("Crypto Module", () => {
       expect(() => decrypt(encrypted.ciphertext, encrypted.iv, encrypted.tag)).toThrow();
     });
 
-    it("fails to decrypt with tampered ciphertext", () => {
+    it("fails to decrypt with tampered auth tag", () => {
       process.env.ENCRYPTION_MASTER_KEY = TEST_MASTER_KEY;
       const encrypted = encrypt("secret");
 
-      const tampered = "ff" + encrypted.ciphertext.slice(2);
-      expect(() => decrypt(tampered, encrypted.iv, encrypted.tag)).toThrow();
+      // Flip every byte in the auth tag — GCM always rejects a wrong tag
+      const flippedTag = encrypted.tag
+        .match(/.{2}/g)!
+        .map((byte) =>
+          ((parseInt(byte, 16) ^ 0xff) & 0xff).toString(16).padStart(2, "0"),
+        )
+        .join("");
+      expect(() =>
+        decrypt(encrypted.ciphertext, encrypted.iv, flippedTag),
+      ).toThrow();
     });
 
     it("throws when key is not configured", () => {
