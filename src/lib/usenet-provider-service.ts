@@ -106,9 +106,6 @@ export async function getProviderById(id: string, reveal = false): Promise<Provi
 }
 
 export async function updateProvider(id: string, input: UpdateProviderInput): Promise<ProviderResult | null> {
-  const existing = await prisma.usenetProvider.findUnique({ where: { id } });
-  if (!existing) return null;
-
   const data: Record<string, unknown> = {};
 
   if (input.name !== undefined) data.name = input.name;
@@ -133,40 +130,46 @@ export async function updateProvider(id: string, input: UpdateProviderInput): Pr
     data.tag = enc.tag;
   }
 
-  const updated = await prisma.usenetProvider.update({
-    where: { id },
-    data,
-  });
-
-  return toResult(updated, false);
+  try {
+    const updated = await prisma.usenetProvider.update({
+      where: { id },
+      data,
+    });
+    return toResult(updated, false);
+  } catch (err: any) {
+    if (err?.code === "P2025") return null;
+    throw err;
+  }
 }
 
 export async function deleteProvider(id: string): Promise<boolean> {
-  const existing = await prisma.usenetProvider.findUnique({ where: { id } });
-  if (!existing) return false;
-
-  await prisma.usenetProvider.delete({ where: { id } });
-  return true;
+  try {
+    await prisma.usenetProvider.delete({ where: { id } });
+    return true;
+  } catch (err: any) {
+    if (err?.code === "P2025") return false;
+    throw err;
+  }
 }
 
-/** Get all enabled providers assigned to download. */
+/** Get all enabled providers assigned to download. Throws on decryption failure. */
 export async function getDownloadProviders(): Promise<ProviderResult[]> {
   const providers = await prisma.usenetProvider.findMany({
     where: { isDownload: true, enabled: true },
     orderBy: [{ priority: "asc" }, { name: "asc" }],
   });
 
-  return providers.map((p) => toResult(p, true));
+  return providers.map((p) => toResultStrict(p));
 }
 
-/** Get all enabled providers assigned to upload. */
+/** Get all enabled providers assigned to upload. Throws on decryption failure. */
 export async function getUploadProviders(): Promise<ProviderResult[]> {
   const providers = await prisma.usenetProvider.findMany({
     where: { isUpload: true, enabled: true },
     orderBy: [{ priority: "asc" }, { name: "asc" }],
   });
 
-  return providers.map((p) => toResult(p, true));
+  return providers.map((p) => toResultStrict(p));
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────
@@ -201,6 +204,19 @@ function toResult(row: ProviderRow, reveal: boolean): ProviderResult {
     }
   }
 
+  return mapRow(row, password);
+}
+
+/** Strict decryption — throws on failure instead of returning a placeholder. */
+function toResultStrict(row: ProviderRow): ProviderResult {
+  if (!row.iv || !row.tag) {
+    throw new Error(`Provider '${row.name}' has no encryption metadata (iv/tag missing).`);
+  }
+  const password = decrypt(row.password, row.iv, row.tag);
+  return mapRow(row, password);
+}
+
+function mapRow(row: ProviderRow, password: string): ProviderResult {
   return {
     id: row.id,
     name: row.name,

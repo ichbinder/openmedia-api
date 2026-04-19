@@ -231,6 +231,116 @@ router.get("/history/:categoryName/:key", requireAuth, requireAdmin, async (req:
   }
 });
 
+// ─── Usenet Provider Input Validation ─────────────────────────────────
+
+interface ProviderValidationResult {
+  error?: string;
+  data: {
+    name?: string;
+    host?: string;
+    postHost?: string | null;
+    port?: number;
+    ssl?: boolean;
+    username?: string;
+    password?: string;
+    connections?: number;
+    priority?: number;
+    enabled?: boolean;
+    isDownload?: boolean;
+    isUpload?: boolean;
+  };
+}
+
+function validateProviderInput(body: Record<string, unknown>, requireFields: boolean): ProviderValidationResult {
+  const data: ProviderValidationResult["data"] = {};
+  const { name, host, postHost, port, ssl, username, password, connections, priority, enabled, isDownload, isUpload } = body;
+
+  if (requireFields) {
+    if (typeof name !== "string" || !name.trim()) return { error: "name must be a non-empty string.", data };
+    if (typeof host !== "string" || !host.trim()) return { error: "host must be a non-empty string.", data };
+    if (typeof username !== "string" || !username.trim()) return { error: "username must be a non-empty string.", data };
+    if (typeof password !== "string" || !password) return { error: "password must be a non-empty string.", data };
+  }
+
+  if (name !== undefined) {
+    if (typeof name !== "string" || !name.trim()) return { error: "name must be a non-empty string.", data };
+    data.name = name.trim();
+  }
+  if (host !== undefined) {
+    if (typeof host !== "string" || !host.trim()) return { error: "host must be a non-empty string.", data };
+    data.host = host.trim();
+  }
+  if (postHost !== undefined) {
+    if (postHost === null || postHost === "") {
+      data.postHost = null;
+    } else if (typeof postHost === "string") {
+      data.postHost = postHost.trim() || null;
+    } else {
+      return { error: "postHost must be a string or null.", data };
+    }
+  }
+  if (username !== undefined) {
+    if (typeof username !== "string" || !username.trim()) return { error: "username must be a non-empty string.", data };
+    data.username = username.trim();
+  }
+  if (password !== undefined) {
+    if (typeof password !== "string" || !password) return { error: "password must be a non-empty string.", data };
+    data.password = password;
+  }
+
+  if (port !== undefined) {
+    const p = typeof port === "string" ? parseInt(port, 10) : port;
+    if (typeof p !== "number" || !Number.isInteger(p) || p < 1 || p > 65535) {
+      return { error: "port must be an integer between 1 and 65535.", data };
+    }
+    data.port = p;
+  }
+  if (connections !== undefined) {
+    const c = typeof connections === "string" ? parseInt(connections, 10) : connections;
+    if (typeof c !== "number" || !Number.isInteger(c) || c < 1 || c > 100) {
+      return { error: "connections must be an integer between 1 and 100.", data };
+    }
+    data.connections = c;
+  }
+  if (priority !== undefined) {
+    const pr = typeof priority === "string" ? parseInt(priority, 10) : priority;
+    if (typeof pr !== "number" || !Number.isInteger(pr) || pr < 0) {
+      return { error: "priority must be a non-negative integer.", data };
+    }
+    data.priority = pr;
+  }
+
+  const parseBool = (val: unknown, field: string): boolean | string => {
+    if (typeof val === "boolean") return val;
+    if (val === "true") return true;
+    if (val === "false") return false;
+    return `${field} must be a boolean.`;
+  };
+
+  if (ssl !== undefined) {
+    const v = parseBool(ssl, "ssl");
+    if (typeof v === "string") return { error: v, data };
+    data.ssl = v;
+  }
+  if (enabled !== undefined) {
+    const v = parseBool(enabled, "enabled");
+    if (typeof v === "string") return { error: v, data };
+    data.enabled = v;
+  }
+  if (isDownload !== undefined) {
+    const v = parseBool(isDownload, "isDownload");
+    if (typeof v === "string") return { error: v, data };
+    data.isDownload = v;
+  }
+  if (isUpload !== undefined) {
+    const v = parseBool(isUpload, "isUpload");
+    if (typeof v === "string") return { error: v, data };
+    data.isUpload = v;
+  }
+
+  return { data };
+}
+
 // ─── Usenet Providers ────────────────────────────────────────────────
 
 /** GET /admin/config/usenet-providers — list all providers */
@@ -252,10 +362,9 @@ router.get("/usenet-providers", requireAuth, requireAdmin, async (req: AuthReque
 /** POST /admin/config/usenet-providers — create a provider */
 router.post("/usenet-providers", requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
   try {
-    const { name, host, postHost, port, ssl, username, password, connections, priority, enabled, isDownload, isUpload } = req.body;
-
-    if (!name || !host || !username || !password) {
-      res.status(400).json({ error: "name, host, username, and password are required." });
+    const validation = validateProviderInput(req.body, true);
+    if (validation.error) {
+      res.status(400).json({ error: validation.error });
       return;
     }
 
@@ -264,11 +373,23 @@ router.post("/usenet-providers", requireAuth, requireAdmin, async (req: AuthRequ
       return;
     }
 
+    const d = validation.data;
     const provider = await createProvider({
-      name, host, postHost, port, ssl, username, password, connections, priority, enabled, isDownload, isUpload,
+      name: d.name!,
+      host: d.host!,
+      postHost: d.postHost,
+      port: d.port,
+      ssl: d.ssl,
+      username: d.username!,
+      password: d.password!,
+      connections: d.connections,
+      priority: d.priority,
+      enabled: d.enabled,
+      isDownload: d.isDownload,
+      isUpload: d.isUpload,
     });
 
-    console.log(`[admin-config] Provider created: ${name} by ${req.user?.userId}`);
+    console.log(`[admin-config] Provider created: ${d.name} by ${req.user?.userId}`);
     res.status(201).json({ provider });
   } catch (err: any) {
     if (err?.code === "P2002") {
@@ -303,16 +424,18 @@ router.get("/usenet-providers/:id", requireAuth, requireAdmin, async (req: AuthR
 /** PUT /admin/config/usenet-providers/:id — update a provider */
 router.put("/usenet-providers/:id", requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
   try {
-    const { name, host, postHost, port, ssl, username, password, connections, priority, enabled, isDownload, isUpload } = req.body;
+    const validation = validateProviderInput(req.body, false);
+    if (validation.error) {
+      res.status(400).json({ error: validation.error });
+      return;
+    }
 
-    if (password !== undefined && !isEncryptionConfigured()) {
+    if (validation.data.password !== undefined && !isEncryptionConfigured()) {
       res.status(503).json({ error: "Encryption not configured." });
       return;
     }
 
-    const provider = await updateProvider(String(req.params.id), {
-      name, host, postHost, port, ssl, username, password, connections, priority, enabled, isDownload, isUpload,
-    });
+    const provider = await updateProvider(String(req.params.id), validation.data);
 
     if (!provider) {
       res.status(404).json({ error: "Provider not found." });
