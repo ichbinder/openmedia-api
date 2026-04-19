@@ -121,6 +121,9 @@ export async function updateProvider(id: string, input: UpdateProviderInput): Pr
   if (input.isUpload !== undefined) data.isUpload = input.isUpload;
 
   if (input.password !== undefined) {
+    if (!input.password) {
+      throw new Error("password must not be empty.");
+    }
     if (!isEncryptionConfigured()) {
       throw new Error("Encryption not configured (ENCRYPTION_MASTER_KEY missing).");
     }
