@@ -13,9 +13,9 @@ import { generateServiceToken, storeServiceToken, deleteServiceTokens } from "..
 
 const router = Router();
 
-// Allow both JWT (web UI) and service tokens (VPS callbacks) on all download routes.
-// VPS scripts call PATCH /jobs/:id/status and POST /jobs/:id/cleanup with service tokens.
-router.use(requireServiceOrUserAuth);
+// No global auth — applied per-route:
+// - VPS callback routes use requireServiceOrUserAuth (JWT or service token)
+// - All other routes use requireAuth (JWT only)
 
 /**
  * Resolve a movie via TMDB lookup, returning one of three outcomes.
@@ -159,18 +159,18 @@ async function fetchNzbFromStorage(hash: string, token: string): Promise<string 
 // ---------------------------------------------------------------------------
 
 // GET /downloads/sabnzbd/status — check SABnzbd connection
-router.get("/sabnzbd/status", async (_req: AuthRequest, res: Response) => {
+router.get("/sabnzbd/status", requireAuth, async (_req: AuthRequest, res: Response) => {
   const status = await getSabnzbdStatus();
   res.json(status);
 });
 
 // GET /downloads/sabnzbd/config — check if SABnzbd is configured
-router.get("/sabnzbd/config", (_req: AuthRequest, res: Response) => {
+router.get("/sabnzbd/config", requireAuth, (_req: AuthRequest, res: Response) => {
   res.json(getSabnzbdConfigSummary());
 });
 
 // POST /downloads/start — start a download by sending NZB to SABnzbd (legacy)
-router.post("/start", async (req: AuthRequest, res: Response) => {
+router.post("/start", requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const { nzbFileId } = req.body;
 
@@ -244,7 +244,7 @@ function serializeJob(job: any) {
 }
 
 // POST /downloads/jobs — create a download job
-router.post("/jobs", async (req: AuthRequest, res: Response) => {
+router.post("/jobs", requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const { nzbFileId } = req.body;
 
@@ -355,7 +355,7 @@ router.post("/jobs", async (req: AuthRequest, res: Response) => {
  *
  * Body: { nzbContent: string, title: string, password?: string, filename?: string }
  */
-router.post("/request", async (req: AuthRequest, res: Response) => {
+router.post("/request", requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const { nzbContent, title, password, filename } = req.body;
 
@@ -745,7 +745,7 @@ router.post("/request", async (req: AuthRequest, res: Response) => {
 });
 
 // GET /downloads/jobs — list download jobs
-router.get("/jobs", async (req: AuthRequest, res: Response) => {
+router.get("/jobs", requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const statusFilter = typeof req.query.status === "string" ? req.query.status : undefined;
 
@@ -776,7 +776,7 @@ router.get("/jobs", async (req: AuthRequest, res: Response) => {
 });
 
 // GET /downloads/jobs/:id — get a single download job
-router.get("/jobs/:id", async (req: AuthRequest, res: Response) => {
+router.get("/jobs/:id", requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const job = await prisma.downloadJob.findUnique({
       where: { id: String(req.params.id) },
@@ -800,7 +800,8 @@ router.get("/jobs/:id", async (req: AuthRequest, res: Response) => {
 });
 
 // PATCH /downloads/jobs/:id/status — update job status (callback from VPS)
-router.patch("/jobs/:id/status", async (req: AuthRequest, res: Response) => {
+// Accepts both JWT and service tokens (VPS sends service tokens for callbacks).
+router.patch("/jobs/:id/status", requireServiceOrUserAuth, async (req: AuthRequest, res: Response) => {
   try {
     const { status, error: errorMsg, progress, s3Key, s3StreamKey, s3Bucket, fileExtension, hetznerServerId, hetznerServerIp } = req.body;
 
@@ -1175,7 +1176,7 @@ router.patch("/jobs/:id/status", async (req: AuthRequest, res: Response) => {
 });
 
 // DELETE /downloads/jobs/:id — delete a job (only if not active)
-router.delete("/jobs/:id", async (req: AuthRequest, res: Response) => {
+router.delete("/jobs/:id", requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const job = await prisma.downloadJob.findUnique({
       where: { id: String(req.params.id) },
@@ -1226,7 +1227,7 @@ import {
 import { addMapping, removeMapping } from "../lib/caddy-mapping.js";
 
 // GET /downloads/jobs/:id/link — generate presigned download URL for a completed job
-router.get("/jobs/:id/link", async (req: AuthRequest, res: Response) => {
+router.get("/jobs/:id/link", requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const job = await prisma.downloadJob.findUnique({
       where: { id: String(req.params.id) },
@@ -1348,7 +1349,7 @@ router.get("/jobs/:id/link", async (req: AuthRequest, res: Response) => {
 // Ownership: only the original uploader (job.userId === caller.userId) may assign.
 // Service tokens with null userId can only assign jobs that were themselves
 // created with null userId (so an admin token cannot hijack a user's job).
-router.post("/jobs/:id/assign-movie", async (req: AuthRequest, res: Response) => {
+router.post("/jobs/:id/assign-movie", requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const { tmdbId } = req.body ?? {};
 
@@ -1572,7 +1573,7 @@ router.post("/jobs/:id/assign-movie", async (req: AuthRequest, res: Response) =>
 });
 
 // POST /downloads/jobs/:id/provision — create a VPS for a download job
-router.post("/jobs/:id/provision", async (req: AuthRequest, res: Response) => {
+router.post("/jobs/:id/provision", requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     if (!isHetznerConfigured()) {
       res.status(503).json({ error: "Hetzner Cloud API ist nicht konfiguriert." });
@@ -1720,7 +1721,8 @@ router.post("/jobs/:id/provision", async (req: AuthRequest, res: Response) => {
 });
 
 // POST /downloads/jobs/:id/cleanup — delete VPS for a completed/failed job
-router.post("/jobs/:id/cleanup", async (req: AuthRequest, res: Response) => {
+// Accepts both JWT and service tokens (VPS sends service tokens for callbacks).
+router.post("/jobs/:id/cleanup", requireServiceOrUserAuth, async (req: AuthRequest, res: Response) => {
   try {
     if (!isHetznerConfigured()) {
       res.status(503).json({ error: "Hetzner Cloud API ist nicht konfiguriert." });
@@ -1774,7 +1776,7 @@ router.post("/jobs/:id/cleanup", async (req: AuthRequest, res: Response) => {
 });
 
 // GET /downloads/servers — list active download servers
-router.get("/servers", async (_req: AuthRequest, res: Response) => {
+router.get("/servers", requireAuth, async (_req: AuthRequest, res: Response) => {
   try {
     if (!isHetznerConfigured()) {
       res.status(503).json({ error: "Hetzner Cloud API ist nicht konfiguriert." });
@@ -1801,7 +1803,7 @@ router.get("/servers", async (_req: AuthRequest, res: Response) => {
 });
 
 // POST /downloads/cleanup-zombies — find and delete zombie servers
-router.post("/cleanup-zombies", async (req: AuthRequest, res: Response) => {
+router.post("/cleanup-zombies", requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     if (!isHetznerConfigured()) {
       res.status(503).json({ error: "Hetzner Cloud API ist nicht konfiguriert." });
@@ -1859,7 +1861,7 @@ router.post("/cleanup-zombies", async (req: AuthRequest, res: Response) => {
 import { reconcileStaleJobs } from "../lib/job-reconciler.js";
 
 // POST /downloads/reconcile — manually trigger stale job detection
-router.post("/reconcile", async (_req: AuthRequest, res: Response) => {
+router.post("/reconcile", requireAuth, async (_req: AuthRequest, res: Response) => {
   try {
     const result = await reconcileStaleJobs();
     res.json(result);
