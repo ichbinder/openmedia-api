@@ -1,6 +1,6 @@
 import { Router, type Response } from "express";
 import prisma from "../lib/prisma.js";
-import { requireAuth, type AuthRequest } from "../middleware/auth.js";
+import { requireAuth, requireServiceOrUserAuth, type AuthRequest } from "../middleware/auth.js";
 import { isHetznerConfigured, provisionUploadVps, deleteServer } from "../lib/hetzner.js";
 import { getUploadVpsConfig } from "../lib/vps-config.js";
 import { generateServiceToken, storeServiceToken, deleteServiceTokens } from "../lib/service-token.js";
@@ -8,7 +8,9 @@ import { resolveQualityTier } from "../lib/nzb-parser.js";
 
 const router = Router();
 
-router.use(requireAuth);
+// No global auth — applied per-route:
+// - VPS callback route (PATCH /:id) uses requireServiceOrUserAuth (JWT or service token)
+// - All other routes use requireAuth (JWT only)
 
 /** Safely coerce a value to integer, returning null on invalid input. */
 function safeInt(v: unknown): number | null {
@@ -57,7 +59,7 @@ const STATUS_TRANSITIONS: Record<string, UploadJobStatus[]> = {
 // ---------------------------------------------------------------------------
 // POST / — create an upload job for an NzbFile
 // ---------------------------------------------------------------------------
-router.post("/", async (req: AuthRequest, res: Response) => {
+router.post("/", requireAuth, async (req: AuthRequest, res: Response) => {
   const { nzbFileId } = req.body;
 
   if (!nzbFileId) {
@@ -190,7 +192,7 @@ router.post("/", async (req: AuthRequest, res: Response) => {
 // ---------------------------------------------------------------------------
 // GET / — list upload jobs
 // ---------------------------------------------------------------------------
-router.get("/", async (req: AuthRequest, res: Response) => {
+router.get("/", requireAuth, async (req: AuthRequest, res: Response) => {
   const status = Array.isArray(req.query.status) ? req.query.status[0] : req.query.status;
   const limit = Array.isArray(req.query.limit) ? req.query.limit[0] : (req.query.limit || "20");
 
@@ -216,7 +218,7 @@ router.get("/", async (req: AuthRequest, res: Response) => {
 // ---------------------------------------------------------------------------
 // GET /:id — get single upload job
 // ---------------------------------------------------------------------------
-router.get("/:id", async (req: AuthRequest, res: Response) => {
+router.get("/:id", requireAuth, async (req: AuthRequest, res: Response) => {
   const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const job = await prisma.uploadJob.findUnique({
     where: { id },
@@ -238,7 +240,8 @@ router.get("/:id", async (req: AuthRequest, res: Response) => {
 // ---------------------------------------------------------------------------
 // PATCH /:id — update upload job status (called by upload VPS)
 // ---------------------------------------------------------------------------
-router.patch("/:id", async (req: AuthRequest, res: Response) => {
+// Accepts both JWT and service tokens (VPS sends service tokens for callbacks).
+router.patch("/:id", requireServiceOrUserAuth, async (req: AuthRequest, res: Response) => {
   const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const { status, error, nzbHash, hetznerServerId, hetznerServerIp, metadata } = req.body;
 
