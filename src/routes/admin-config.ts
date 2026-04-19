@@ -18,6 +18,13 @@ import {
   getEntryHistory,
   createCategory,
 } from "../lib/config-service.js";
+import {
+  createProvider,
+  listProviders,
+  getProviderById,
+  updateProvider,
+  deleteProvider,
+} from "../lib/usenet-provider-service.js";
 
 const router = Router();
 
@@ -221,6 +228,246 @@ router.get("/history/:categoryName/:key", requireAuth, requireAdmin, async (req:
   } catch (err) {
     console.error("[admin-config] History error:", err);
     res.status(500).json({ error: "Failed to get history." });
+  }
+});
+
+// ─── Usenet Provider Input Validation ─────────────────────────────────
+
+interface ProviderValidationResult {
+  error?: string;
+  data: {
+    name?: string;
+    host?: string;
+    postHost?: string | null;
+    port?: number;
+    ssl?: boolean;
+    username?: string;
+    password?: string;
+    connections?: number;
+    priority?: number;
+    enabled?: boolean;
+    isDownload?: boolean;
+    isUpload?: boolean;
+  };
+}
+
+function validateProviderInput(body: Record<string, unknown>, requireFields: boolean): ProviderValidationResult {
+  const data: ProviderValidationResult["data"] = {};
+  const { name, host, postHost, port, ssl, username, password, connections, priority, enabled, isDownload, isUpload } = body;
+
+  if (requireFields) {
+    if (typeof name !== "string" || !name.trim()) return { error: "name must be a non-empty string.", data };
+    if (typeof host !== "string" || !host.trim()) return { error: "host must be a non-empty string.", data };
+    if (typeof username !== "string" || !username.trim()) return { error: "username must be a non-empty string.", data };
+    if (typeof password !== "string" || !password) return { error: "password must be a non-empty string.", data };
+  }
+
+  if (name !== undefined) {
+    if (typeof name !== "string" || !name.trim()) return { error: "name must be a non-empty string.", data };
+    data.name = name.trim();
+  }
+  if (host !== undefined) {
+    if (typeof host !== "string" || !host.trim()) return { error: "host must be a non-empty string.", data };
+    data.host = host.trim();
+  }
+  if (postHost !== undefined) {
+    if (postHost === null || postHost === "") {
+      data.postHost = null;
+    } else if (typeof postHost === "string") {
+      data.postHost = postHost.trim() || null;
+    } else {
+      return { error: "postHost must be a string or null.", data };
+    }
+  }
+  if (username !== undefined) {
+    if (typeof username !== "string" || !username.trim()) return { error: "username must be a non-empty string.", data };
+    data.username = username.trim();
+  }
+  if (password !== undefined) {
+    if (typeof password !== "string" || !password) return { error: "password must be a non-empty string.", data };
+    data.password = password;
+  }
+
+  if (port !== undefined) {
+    const p = typeof port === "string" ? parseInt(port, 10) : port;
+    if (typeof p !== "number" || !Number.isInteger(p) || p < 1 || p > 65535) {
+      return { error: "port must be an integer between 1 and 65535.", data };
+    }
+    data.port = p;
+  }
+  if (connections !== undefined) {
+    const c = typeof connections === "string" ? parseInt(connections, 10) : connections;
+    if (typeof c !== "number" || !Number.isInteger(c) || c < 1 || c > 100) {
+      return { error: "connections must be an integer between 1 and 100.", data };
+    }
+    data.connections = c;
+  }
+  if (priority !== undefined) {
+    const pr = typeof priority === "string" ? parseInt(priority, 10) : priority;
+    if (typeof pr !== "number" || !Number.isInteger(pr) || pr < 0) {
+      return { error: "priority must be a non-negative integer.", data };
+    }
+    data.priority = pr;
+  }
+
+  const parseBool = (val: unknown, field: string): boolean | string => {
+    if (typeof val === "boolean") return val;
+    if (val === "true") return true;
+    if (val === "false") return false;
+    return `${field} must be a boolean.`;
+  };
+
+  if (ssl !== undefined) {
+    const v = parseBool(ssl, "ssl");
+    if (typeof v === "string") return { error: v, data };
+    data.ssl = v;
+  }
+  if (enabled !== undefined) {
+    const v = parseBool(enabled, "enabled");
+    if (typeof v === "string") return { error: v, data };
+    data.enabled = v;
+  }
+  if (isDownload !== undefined) {
+    const v = parseBool(isDownload, "isDownload");
+    if (typeof v === "string") return { error: v, data };
+    data.isDownload = v;
+  }
+  if (isUpload !== undefined) {
+    const v = parseBool(isUpload, "isUpload");
+    if (typeof v === "string") return { error: v, data };
+    data.isUpload = v;
+  }
+
+  return { data };
+}
+
+// ─── Usenet Providers ────────────────────────────────────────────────
+
+/** GET /admin/config/usenet-providers — list all providers */
+router.get("/usenet-providers", requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const reveal = req.query.reveal === "true";
+    if (reveal && !isEncryptionConfigured()) {
+      res.status(503).json({ error: "Encryption not configured." });
+      return;
+    }
+    const providers = await listProviders(reveal);
+    res.json({ providers });
+  } catch (err) {
+    console.error("[admin-config] List providers error:", err);
+    res.status(500).json({ error: "Failed to list providers." });
+  }
+});
+
+/** POST /admin/config/usenet-providers — create a provider */
+router.post("/usenet-providers", requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const validation = validateProviderInput(req.body, true);
+    if (validation.error) {
+      res.status(400).json({ error: validation.error });
+      return;
+    }
+
+    if (!isEncryptionConfigured()) {
+      res.status(503).json({ error: "Encryption not configured." });
+      return;
+    }
+
+    const d = validation.data;
+    const provider = await createProvider({
+      name: d.name!,
+      host: d.host!,
+      postHost: d.postHost,
+      port: d.port,
+      ssl: d.ssl,
+      username: d.username!,
+      password: d.password!,
+      connections: d.connections,
+      priority: d.priority,
+      enabled: d.enabled,
+      isDownload: d.isDownload,
+      isUpload: d.isUpload,
+    });
+
+    console.log(`[admin-config] Provider created: ${d.name} by ${req.user?.userId}`);
+    res.status(201).json({ provider });
+  } catch (err: any) {
+    if (err?.code === "P2002") {
+      res.status(409).json({ error: "Provider with this name already exists." });
+      return;
+    }
+    console.error("[admin-config] Create provider error:", err);
+    res.status(500).json({ error: "Failed to create provider." });
+  }
+});
+
+/** GET /admin/config/usenet-providers/:id — get a single provider */
+router.get("/usenet-providers/:id", requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const reveal = req.query.reveal === "true";
+    if (reveal && !isEncryptionConfigured()) {
+      res.status(503).json({ error: "Encryption not configured." });
+      return;
+    }
+    const provider = await getProviderById(String(req.params.id), reveal);
+    if (!provider) {
+      res.status(404).json({ error: "Provider not found." });
+      return;
+    }
+    res.json({ provider });
+  } catch (err) {
+    console.error("[admin-config] Get provider error:", err);
+    res.status(500).json({ error: "Failed to get provider." });
+  }
+});
+
+/** PUT /admin/config/usenet-providers/:id — update a provider */
+router.put("/usenet-providers/:id", requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const validation = validateProviderInput(req.body, false);
+    if (validation.error) {
+      res.status(400).json({ error: validation.error });
+      return;
+    }
+
+    if (validation.data.password !== undefined && !isEncryptionConfigured()) {
+      res.status(503).json({ error: "Encryption not configured." });
+      return;
+    }
+
+    const provider = await updateProvider(String(req.params.id), validation.data);
+
+    if (!provider) {
+      res.status(404).json({ error: "Provider not found." });
+      return;
+    }
+
+    console.log(`[admin-config] Provider updated: ${provider.name} by ${req.user?.userId}`);
+    res.json({ provider });
+  } catch (err: any) {
+    if (err?.code === "P2002") {
+      res.status(409).json({ error: "Provider with this name already exists." });
+      return;
+    }
+    console.error("[admin-config] Update provider error:", err);
+    res.status(500).json({ error: "Failed to update provider." });
+  }
+});
+
+/** DELETE /admin/config/usenet-providers/:id — delete a provider */
+router.delete("/usenet-providers/:id", requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const providerId = String(req.params.id);
+    const deleted = await deleteProvider(providerId);
+    if (!deleted) {
+      res.status(404).json({ error: "Provider not found." });
+      return;
+    }
+    console.log(`[admin-config] Provider deleted: ${providerId} by ${req.user?.userId}`);
+    res.json({ deleted: true });
+  } catch (err) {
+    console.error("[admin-config] Delete provider error:", err);
+    res.status(500).json({ error: "Failed to delete provider." });
   }
 });
 
