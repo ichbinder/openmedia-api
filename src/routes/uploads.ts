@@ -137,9 +137,7 @@ router.post("/", requireAuth, async (req: AuthRequest, res: Response) => {
           nzbFileHash: nzbFile.hash,
           apiBaseUrl: uploadConfig.apiBaseUrl,
           serviceToken,
-          dockerImage: uploadConfig.source === "db"
-            ? undefined  // use default image
-            : process.env.UPLOADER_DOCKER_IMAGE,
+          dockerImage: undefined,  // always use default image from DB config
           serverName,
         });
 

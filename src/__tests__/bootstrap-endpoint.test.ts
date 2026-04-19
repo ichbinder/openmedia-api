@@ -12,7 +12,6 @@ const app = createApp();
 // Mock getDownloadVpsConfig and getUploadVpsConfig to return predictable configs
 vi.mock("../lib/vps-config.js", () => ({
   getDownloadVpsConfig: vi.fn().mockResolvedValue({
-    source: "env",
     apiBaseUrl: "http://localhost:4000",
     apiToken: "test-api-token",
     s3AccessKey: "test-s3-key",
@@ -25,7 +24,6 @@ vi.mock("../lib/vps-config.js", () => ({
     usenetServers: [{ host: "news.example.com", username: "user", password: "pass" }],
   }),
   getUploadVpsConfig: vi.fn().mockResolvedValue({
-    source: "env",
     apiBaseUrl: "http://localhost:4000",
     apiToken: "test-api-token",
     s3AccessKey: "test-upload-s3-key",
