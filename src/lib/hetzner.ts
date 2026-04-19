@@ -361,7 +361,7 @@ runcmd:
 
     # Source the env file for use in this script
     set -a
-    source /opt/openmedia-env
+    . /opt/openmedia-env
     set +a
 
     fail_job() {
