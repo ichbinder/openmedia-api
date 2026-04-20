@@ -87,7 +87,6 @@ const REALISTIC_OVERRIDES: Record<string, Record<string, string>> = {
   },
   runtime: {
     api_base_url: "https://api.test.cinescope.dev",
-    service_api_token: "svc-token-test-xyz789",
   },
 };
 
@@ -184,7 +183,6 @@ describe("e2e-db-config: config readers without mock", () => {
 
     expect(config).not.toBeNull();
     expect(config!.apiBaseUrl).toBe("https://api.test.cinescope.dev");
-    expect(config!.apiToken).toBe("svc-token-test-xyz789");
     expect(config!.s3AccessKey).toBe("AKIAIOSFODNN7EXAMPLE");
     expect(config!.s3SecretKey).toBe("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY");
     expect(config!.s3Endpoint).toBe("https://s3.hel1.your-objectstorage.com");
@@ -204,7 +202,6 @@ describe("e2e-db-config: config readers without mock", () => {
 
     expect(config).not.toBeNull();
     expect(config!.apiBaseUrl).toBe("https://api.test.cinescope.dev");
-    expect(config!.apiToken).toBe("svc-token-test-xyz789");
     expect(config!.s3AccessKey).toBe("AKIAIOSFODNN7EXAMPLE");
     expect(config!.s3SecretKey).toBe("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY");
     expect(config!.s3Endpoint).toBe("https://s3.hel1.your-objectstorage.com");

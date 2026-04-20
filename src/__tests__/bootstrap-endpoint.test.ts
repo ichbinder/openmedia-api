@@ -13,7 +13,6 @@ const app = createApp();
 vi.mock("../lib/vps-config.js", () => ({
   getDownloadVpsConfig: vi.fn().mockResolvedValue({
     apiBaseUrl: "http://localhost:4000",
-    apiToken: "test-api-token",
     s3AccessKey: "test-s3-key",
     s3SecretKey: "test-s3-secret",
     s3Endpoint: "https://hel1.s3.example.com",
@@ -25,7 +24,6 @@ vi.mock("../lib/vps-config.js", () => ({
   }),
   getUploadVpsConfig: vi.fn().mockResolvedValue({
     apiBaseUrl: "http://localhost:4000",
-    apiToken: "test-api-token",
     s3AccessKey: "test-upload-s3-key",
     s3SecretKey: "test-upload-s3-secret",
     s3Endpoint: "https://hel1.s3.example.com",

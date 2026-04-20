@@ -15,7 +15,6 @@ vi.mock("../lib/hetzner.js", () => ({
 vi.mock("../lib/vps-config.js", () => ({
   getUploadVpsConfig: vi.fn().mockResolvedValue({
     apiBaseUrl: "http://localhost:3000",
-    apiToken: "mock-token",
     s3AccessKey: "mock-access",
     s3SecretKey: "mock-secret",
     s3Endpoint: "https://s3.mock.com",

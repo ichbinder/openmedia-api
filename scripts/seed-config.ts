@@ -65,7 +65,6 @@ const ENTRIES_BY_CATEGORY: Record<string, EntryDef[]> = {
   ],
   runtime: [
     { key: "api_base_url", displayName: "API Base URL", defaultValue: "", sensitive: false },
-    { key: "service_api_token", displayName: "Service API Token", defaultValue: "CHANGE_ME", sensitive: true },
   ],
 };
 

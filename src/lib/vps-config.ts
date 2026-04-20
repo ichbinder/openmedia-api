@@ -16,7 +16,6 @@ import { getDownloadProviders, getUploadProviders } from "./usenet-provider-serv
 
 export interface DownloadVpsConfig {
   apiBaseUrl: string;
-  apiToken: string;
   s3AccessKey: string;
   s3SecretKey: string;
   s3Endpoint: string;
@@ -29,7 +28,6 @@ export interface DownloadVpsConfig {
 
 export interface UploadVpsConfig {
   apiBaseUrl: string;
-  apiToken: string;
   s3AccessKey: string;
   s3SecretKey: string;
   s3Endpoint: string;
@@ -82,7 +80,6 @@ export async function getDownloadVpsConfig(): Promise<DownloadVpsConfig | null> 
       console.log(`[vps-config] Download config loaded from DB (${Object.keys(dbConfig).length} categories)`);
       return {
         apiBaseUrl: runtime.api_base_url || "",
-        apiToken: runtime.service_api_token || "",
         s3AccessKey: s3.access_key || "",
         s3SecretKey: s3.secret_key || "",
         s3Endpoint: s3.endpoint || "",
@@ -142,7 +139,6 @@ export async function getUploadVpsConfig(): Promise<UploadVpsConfig | null> {
       }
       return {
         apiBaseUrl: runtime.api_base_url || "",
-        apiToken: runtime.service_api_token || "",
         s3AccessKey: s3.access_key || "",
         s3SecretKey: s3.secret_key || "",
         s3Endpoint: s3.endpoint || "",
@@ -169,7 +165,7 @@ function hasRequiredDownloadKeys(config: Record<string, Record<string, string>>)
   const runtime = config.runtime;
   return !!(s3 && s3.access_key && s3.secret_key && s3.endpoint && s3.bucket &&
     nzb && nzb.url &&
-    runtime && runtime.api_base_url && runtime.service_api_token);
+    runtime && runtime.api_base_url);
 }
 
 /** Check if DB config has the minimum keys needed for upload provisioning. */
@@ -181,5 +177,5 @@ function hasRequiredUploadKeys(config: Record<string, Record<string, string>>): 
   return !!(s3 && s3.access_key && s3.secret_key && s3.endpoint && s3.bucket &&
     nzb && nzb.url && nzb.token &&
     docker && docker.uploader &&
-    runtime && runtime.api_base_url && runtime.service_api_token);
+    runtime && runtime.api_base_url);
 }
