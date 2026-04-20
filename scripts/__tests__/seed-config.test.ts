@@ -175,7 +175,7 @@ describe("seed-config integration", () => {
     // runtime keys
     expect(config!.runtime).toBeDefined();
     expect(config!.runtime).toHaveProperty("api_base_url");
-    expect(config!.runtime).toHaveProperty("service_api_token");
+    // service_api_token removed — dynamic per-job tokens (M029)
   });
 
   it("getProfileConfig upload_vps returns expected structure", async () => {
@@ -206,7 +206,7 @@ describe("seed-config integration", () => {
     // runtime keys
     expect(config!.runtime).toBeDefined();
     expect(config!.runtime).toHaveProperty("api_base_url");
-    expect(config!.runtime).toHaveProperty("service_api_token");
+    // service_api_token removed — dynamic per-job tokens (M029)
   });
 
   it("seed is idempotent — second run preserves counts and values", async () => {
