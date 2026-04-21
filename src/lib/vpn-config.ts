@@ -7,7 +7,7 @@
  */
 
 import { excludeCidr } from "cidr-tools";
-import { resolve4 } from "node:dns/promises";
+import { resolve4, resolve6 } from "node:dns/promises";
 import { getVpnProviderById } from "./vpn-provider-service.js";
 
 // ─── Types ────────────────────────────────────────────────────────────
@@ -64,17 +64,29 @@ export async function resolveBypassList(
       continue;
     }
 
-    // Hostname — resolve via DNS
+    // Hostname — resolve via DNS (IPv4 first, IPv6 as fallback)
+    let resolved = false;
     try {
       const ips = await resolve4(val);
       for (const ip of ips) {
         cidrs.push(`${ip}/32`);
       }
-    } catch (err) {
+      resolved = true;
+    } catch {
+      // no IPv4 records — try IPv6 below
+    }
+    try {
+      const ips6 = await resolve6(val);
+      for (const ip of ips6) {
+        cidrs.push(`${ip}/128`);
+      }
+      resolved = true;
+    } catch {
+      // no IPv6 records either
+    }
+    if (!resolved) {
       console.warn(
-        `[vpn-config] DNS resolution failed for bypass host "${val}", skipping: ${
-          err instanceof Error ? err.message : String(err)
-        }`
+        `[vpn-config] DNS resolution failed for bypass host "${val}", skipping`
       );
     }
   }

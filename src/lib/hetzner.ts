@@ -533,9 +533,13 @@ function generateVpnRuncmd(vpnConfig: VpnConfigResolved | null, failJobRef: stri
     const remoteMatch = vpnConfig.configBlob.match(/^\s*remote\s+(\S+)/m);
     const remoteHost = remoteMatch ? remoteMatch[1] : "";
 
-    // Build bypass routes for excludedCIDRs
+    // Build bypass routes for excludedCIDRs (IPv4 and IPv6)
     const bypassRoutes = vpnConfig.excludedCIDRs
-      .map((cidr) => `    ip route add ${cidr} via $ORIG_GW dev eth0 2>/dev/null || true`)
+      .map((cidr) => {
+        const isIPv6 = cidr.includes(":");
+        const cmd = isIPv6 ? `ip -6 route add` : `ip route add`;
+        return `    if ! ${cmd} ${cidr} via $ORIG_GW dev eth0; then echo "[vpn] Warning: bypass route failed for ${cidr}"; fi`;
+      })
       .join("\n");
 
     return `
@@ -565,8 +569,9 @@ function generateVpnRuncmd(vpnConfig: VpnConfigResolved | null, failJobRef: stri
     # DROP everything else
     iptables -A OUTPUT -j DROP
 
-    # ip6tables kill-switch: block all IPv6 to prevent leaks
+    # ip6tables kill-switch: block all IPv6 to prevent leaks (allow VPN interface)
     ip6tables -A OUTPUT -o lo -j ACCEPT
+    ip6tables -A OUTPUT -o tun0 -j ACCEPT
     ip6tables -A OUTPUT -j DROP
 
     echo "[vpn] Kill-switch active (iptables + ip6tables)"
@@ -644,8 +649,9 @@ ${bypassRoutes}
     # DROP everything else
     iptables -A OUTPUT -j DROP
 
-    # ip6tables kill-switch: block all IPv6 to prevent leaks
+    # ip6tables kill-switch: block all IPv6 to prevent leaks (allow VPN interface)
     ip6tables -A OUTPUT -o lo -j ACCEPT
+    ip6tables -A OUTPUT -o wg0 -j ACCEPT
     ip6tables -A OUTPUT -j DROP
 
     echo "[vpn] Kill-switch active (iptables + ip6tables)"

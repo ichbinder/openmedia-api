@@ -627,7 +627,10 @@ router.put("/vpn-providers/:id", requireAuth, requireAdmin, async (req: AuthRequ
       return;
     }
 
-    if ((validation.data.configBlob !== undefined || validation.data.username !== undefined || validation.data.password !== undefined) && !isEncryptionConfigured()) {
+    const needsEncryption = validation.data.configBlob !== undefined ||
+      (validation.data.username !== undefined && validation.data.username !== null) ||
+      (validation.data.password !== undefined && validation.data.password !== null);
+    if (needsEncryption && !isEncryptionConfigured()) {
       res.status(503).json({ error: "Encryption not configured." });
       return;
     }
