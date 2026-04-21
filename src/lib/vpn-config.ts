@@ -54,9 +54,13 @@ export async function resolveBypassList(
     const val = entry.value.trim();
     if (!val) continue;
 
-    // Already a CIDR or plain IP
+    // Already a CIDR or plain IP (IPv4 or IPv6)
     if (/^[\d.]+\/\d+$/.test(val) || /^[\d.]+$/.test(val)) {
       cidrs.push(val.includes("/") ? val : `${val}/32`);
+      continue;
+    }
+    if (/^[0-9a-fA-F:]+\/\d+$/.test(val) || /^[0-9a-fA-F:]*:[0-9a-fA-F:]+$/.test(val)) {
+      cidrs.push(val.includes("/") ? val : `${val}/128`);
       continue;
     }
 
@@ -90,7 +94,11 @@ export function calculateAllowedIPs(excludedCIDRs: string[]): string[] {
     return ["0.0.0.0/0"];
   }
 
-  return excludeCidr(["0.0.0.0/0"], excludedCIDRs);
+  // Include ::/0 as base when IPv6 bypass CIDRs are present,
+  // so excludeCidr can compute correct IPv6 AllowedIPs too.
+  const hasIPv6 = excludedCIDRs.some((c) => c.includes(":"));
+  const base = hasIPv6 ? ["0.0.0.0/0", "::/0"] : ["0.0.0.0/0"];
+  return excludeCidr(base, excludedCIDRs);
 }
 
 // ─── WireGuard Config Parsing ─────────────────────────────────────────
@@ -105,10 +113,10 @@ export function parseWireGuardConfig(
 ): string {
   const allowedIPsValue = allowedIPs.join(", ");
 
-  // Replace AllowedIPs in [Peer] section
-  // Match: AllowedIPs = <anything until end of line>
+  // Replace AllowedIPs in [Peer] section(s)
+  // Match: AllowedIPs = <anything until end of line> (global: handles multiple peers)
   const replaced = configBlob.replace(
-    /^(\s*AllowedIPs\s*=\s*)(.*)$/m,
+    /^(\s*AllowedIPs\s*=\s*)(.*)$/gm,
     `$1${allowedIPsValue}`
   );
 

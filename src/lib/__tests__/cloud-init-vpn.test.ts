@@ -286,10 +286,11 @@ describe("generateCloudInit with OpenVPN", () => {
     expect(result).not.toContain("ip route add");
   });
 
-  it("includes DNS leak fix and auth.txt cleanup", () => {
+  it("includes DNS leak fix and does NOT prematurely remove auth.txt", () => {
     const result = generateCloudInit({ ...BASE_PARAMS, vpnConfig: SAMPLE_OPENVPN_CONFIG });
     expect(result).toContain("nameserver 1.1.1.1");
-    expect(result).toContain("rm -f /etc/openvpn/auth.txt");
+    // auth.txt must NOT be removed in runcmd — the watchdog needs it for reconnects
+    expect(result).not.toContain("rm -f /etc/openvpn/auth.txt");
   });
 
   it("includes connectivity check through tun0", () => {

@@ -1642,6 +1642,7 @@ router.post("/jobs/:id/provision", requireAuth, async (req: AuthRequest, res: Re
       serviceToken: serviceTokenPlaintext,
       dockerImage: dlConfig.dockerImage,
       serverName,
+      vpnConfig: dlConfig.vpnConfig,
     });
 
     const rawNetworkId = process.env.HETZNER_NETWORK_ID;

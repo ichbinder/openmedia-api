@@ -599,9 +599,6 @@ ${bypassRoutes}
     # DNS leak fix
     echo 'nameserver 1.1.1.1' > /etc/resolv.conf
 
-    # Cleanup auth credentials
-    rm -f /etc/openvpn/auth.txt
-
     # Verify VPN connectivity (check that traffic routes through tunnel)
     if ! timeout 10 curl -sf --interface tun0 https://ifconfig.me > /dev/null 2>&1; then
       ${failJobRef} "VPN setup failed: connectivity check through tun0 failed"
