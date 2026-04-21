@@ -367,3 +367,25 @@ model UsenetProvider {
 
   @@map("usenet_providers")
 }
+
+// ─── VPN Provider Store ──────────────────────────────────────────
+
+model VpnProvider {
+  id              String   @id @default(uuid())
+  name            String   @unique                        // display name: "Mullvad", "ProtonVPN"
+  protocol        String                                   // 'wireguard' | 'openvpn'
+  configBlob      String   @db.Text @map("config_blob")   // AES-256-GCM encrypted config file content
+  configBlobIv    String   @map("config_blob_iv")          // hex-encoded IV
+  configBlobTag   String   @map("config_blob_tag")         // hex-encoded auth tag
+  username        String?                                  // AES-256-GCM encrypted (optional, mainly OpenVPN)
+  usernameIv      String?  @map("username_iv")
+  usernameTag     String?  @map("username_tag")
+  password        String?  @db.Text                        // AES-256-GCM encrypted (optional)
+  passwordIv      String?  @map("password_iv")
+  passwordTag     String?  @map("password_tag")
+  enabled         Boolean  @default(true)
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@map("vpn_providers")
+}

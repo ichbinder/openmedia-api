@@ -7,10 +7,11 @@
  * Returns null if DB config is missing or incomplete.
  */
 
-import { getProfileConfig } from "./config-service.js";
+import { getProfileConfig, getEntry } from "./config-service.js";
 import type { UploadProvider } from "./usenet-config.js";
 import type { UsenetServer } from "./hetzner.js";
 import { getDownloadProviders, getUploadProviders } from "./usenet-provider-service.js";
+import { resolveVpnConfig, type VpnConfigResolved, type VpnBypassEntry } from "./vpn-config.js";
 
 // ─── Types ────────────────────────────────────────────────────────────
 
@@ -24,6 +25,7 @@ export interface DownloadVpsConfig {
   nzbServiceUrl: string;
   dockerImage: string;
   usenetServers: UsenetServer[];
+  vpnConfig: VpnConfigResolved | null;
 }
 
 export interface UploadVpsConfig {
@@ -36,6 +38,7 @@ export interface UploadVpsConfig {
   nzbServiceToken: string;
   dockerImage: string;
   usenetProviders: UploadProvider[];
+  vpnConfig: VpnConfigResolved | null;
 }
 
 // ─── Download VPS Config ──────────────────────────────────────────────
@@ -77,7 +80,10 @@ export async function getDownloadVpsConfig(): Promise<DownloadVpsConfig | null> 
         return null;
       }
 
-      console.log(`[vps-config] Download config loaded from DB (${Object.keys(dbConfig).length} categories)`);
+      // Resolve VPN config from vpn/downloadVpnProviderId config key
+      const vpnConfig = await resolveVpnForProfile("downloadVpnProviderId");
+
+      console.log(`[vps-config] Download config loaded from DB (${Object.keys(dbConfig).length} categories, vpn: ${vpnConfig ? "yes" : "no"})`);
       return {
         apiBaseUrl: runtime.api_base_url || "",
         s3AccessKey: s3.access_key || "",
@@ -88,6 +94,7 @@ export async function getDownloadVpsConfig(): Promise<DownloadVpsConfig | null> 
         nzbServiceUrl: nzb.url || "",
         dockerImage: docker.downloader || "ghcr.io/ichbinder/openmedia-downloader:latest",
         usenetServers,
+        vpnConfig,
       };
     }
   } catch (err) {
@@ -137,6 +144,10 @@ export async function getUploadVpsConfig(): Promise<UploadVpsConfig | null> {
         console.warn("[vps-config] No upload providers found — returning null");
         return null;
       }
+
+      // Resolve VPN config from vpn/uploadVpnProviderId config key
+      const vpnConfig = await resolveVpnForProfile("uploadVpnProviderId");
+
       return {
         apiBaseUrl: runtime.api_base_url || "",
         s3AccessKey: s3.access_key || "",
@@ -147,6 +158,7 @@ export async function getUploadVpsConfig(): Promise<UploadVpsConfig | null> {
         nzbServiceToken: nzb.token || "",
         dockerImage: docker.uploader || "ghcr.io/ichbinder/openmedia-uploader:latest",
         usenetProviders: providers,
+        vpnConfig,
       };
     }
   } catch (err) {
@@ -154,6 +166,49 @@ export async function getUploadVpsConfig(): Promise<UploadVpsConfig | null> {
   }
 
   return null;
+}
+
+// ─── VPN Resolution Helper ────────────────────────────────────────────
+
+/**
+ * Resolve VPN config from DB config keys.
+ * Reads vpn/<providerIdKey> and vpn/bypassList, calls resolveVpnConfig().
+ * Returns null if no provider is configured (R017).
+ */
+async function resolveVpnForProfile(providerIdKey: string): Promise<VpnConfigResolved | null> {
+  try {
+    const providerEntry = await getEntry("vpn", providerIdKey, false);
+    if (!providerEntry || !providerEntry.value || providerEntry.value === "••••••••") {
+      return null;
+    }
+
+    const providerId = providerEntry.value;
+
+    // Parse bypass list (JSON array of {value: string} entries)
+    let bypassEntries: VpnBypassEntry[] = [];
+    try {
+      const bypassEntry = await getEntry("vpn", "bypassList", false);
+      if (bypassEntry && bypassEntry.value) {
+        const parsed = JSON.parse(bypassEntry.value);
+        if (Array.isArray(parsed)) {
+          bypassEntries = parsed.map((item: string | VpnBypassEntry) =>
+            typeof item === "string" ? { value: item } : item
+          );
+        }
+      }
+    } catch (err) {
+      console.warn(`[vps-config] Failed to parse vpn/bypassList: ${(err as Error).message}`);
+    }
+
+    const vpnConfig = await resolveVpnConfig(providerId, bypassEntries);
+    if (vpnConfig) {
+      console.log(`[vps-config] VPN config resolved for provider ${vpnConfig.providerName} (${vpnConfig.protocol})`);
+    }
+    return vpnConfig;
+  } catch (err) {
+    console.warn(`[vps-config] VPN config resolution failed: ${(err as Error).message}`);
+    return null;
+  }
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────
