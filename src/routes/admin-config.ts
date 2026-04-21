@@ -491,9 +491,12 @@ interface VpnProviderValidationResult {
   };
 }
 
-function validateVpnProviderInput(body: Record<string, unknown>, requireFields: boolean): VpnProviderValidationResult {
+function validateVpnProviderInput(body: unknown, requireFields: boolean): VpnProviderValidationResult {
   const data: VpnProviderValidationResult["data"] = {};
-  const { name, configBlob, username, password, enabled } = body;
+  if (body === null || typeof body !== "object" || Array.isArray(body)) {
+    return { error: "Request body must be a JSON object.", data };
+  }
+  const { name, configBlob, username, password, enabled } = body as Record<string, unknown>;
 
   if (requireFields) {
     if (typeof name !== "string" || !name.trim()) return { error: "name must be a non-empty string.", data };

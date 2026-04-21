@@ -538,7 +538,8 @@ function generateVpnRuncmd(vpnConfig: VpnConfigResolved | null, failJobRef: stri
       .map((cidr) => {
         const isIPv6 = cidr.includes(":");
         const cmd = isIPv6 ? `ip -6 route add` : `ip route add`;
-        return `    if ! ${cmd} ${cidr} via $ORIG_GW dev eth0; then echo "[vpn] Warning: bypass route failed for ${cidr}"; fi`;
+        const gw = isIPv6 ? `$ORIG_GW6` : `$ORIG_GW`;
+        return `    if ! ${cmd} ${cidr} via ${gw} dev eth0; then echo "[vpn] Warning: bypass route failed for ${cidr}"; fi`;
       })
       .join("\n");
 
@@ -550,8 +551,9 @@ function generateVpnRuncmd(vpnConfig: VpnConfigResolved | null, failJobRef: stri
       exit 1
     fi
 
-    # Capture default gateway before tunnel overwrites it
+    # Capture default gateways before tunnel overwrites them
     ORIG_GW=$(ip route show default | awk '{print $3}')
+    ORIG_GW6=$(ip -6 route show default | awk '{print $3}')
 
     # iptables kill-switch: DROP all non-VPN traffic (R014)
     # Allow loopback
