@@ -2,7 +2,7 @@
  * Integration test for seed-config.ts
  *
  * Verifies that after seeding:
- * - All 4 categories exist (usenet_download/usenet_upload removed — providers live in UsenetProvider table)
+ * - All 5 categories exist (usenet_download/usenet_upload removed — providers live in UsenetProvider table)
  * - Both profiles exist
  * - Profile-category mappings are correct
  * - getProfileConfig() returns the expected structure
@@ -109,7 +109,7 @@ describe("seed-config integration", () => {
     expect(names).toEqual(["download_vps", "upload_vps"]);
   });
 
-  it("download_vps has 4 category mappings", async () => {
+  it("download_vps has 5 category mappings", async () => {
     const profile = await prisma.configProfile.findUnique({
       where: { name: "download_vps" },
     });
@@ -125,10 +125,11 @@ describe("seed-config integration", () => {
       "nzb_service",
       "runtime",
       "s3",
+      "vpn",
     ]);
   });
 
-  it("upload_vps has 4 category mappings", async () => {
+  it("upload_vps has 5 category mappings", async () => {
     const profile = await prisma.configProfile.findUnique({
       where: { name: "upload_vps" },
     });
@@ -144,6 +145,7 @@ describe("seed-config integration", () => {
       "nzb_service",
       "runtime",
       "s3",
+      "vpn",
     ]);
   });
 
@@ -176,7 +178,12 @@ describe("seed-config integration", () => {
     // runtime keys
     expect(config!.runtime).toBeDefined();
     expect(config!.runtime).toHaveProperty("api_base_url");
-    // service_api_token removed — dynamic per-job tokens (M029)
+
+    // vpn keys
+    expect(config!.vpn).toBeDefined();
+    expect(config!.vpn).toHaveProperty("downloadVpnProviderId");
+    expect(config!.vpn).toHaveProperty("uploadVpnProviderId");
+    expect(config!.vpn).toHaveProperty("bypassList");
   });
 
   it("getProfileConfig upload_vps returns expected structure", async () => {
@@ -207,7 +214,12 @@ describe("seed-config integration", () => {
     // runtime keys
     expect(config!.runtime).toBeDefined();
     expect(config!.runtime).toHaveProperty("api_base_url");
-    // service_api_token removed — dynamic per-job tokens (M029)
+
+    // vpn keys
+    expect(config!.vpn).toBeDefined();
+    expect(config!.vpn).toHaveProperty("downloadVpnProviderId");
+    expect(config!.vpn).toHaveProperty("uploadVpnProviderId");
+    expect(config!.vpn).toHaveProperty("bypassList");
   });
 
   it("seed is idempotent — second run preserves counts and values", async () => {
