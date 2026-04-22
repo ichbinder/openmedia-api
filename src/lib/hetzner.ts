@@ -463,6 +463,10 @@ function generateVpnWriteFiles(
       } else {
         configBlob = configBlob.trimEnd() + "\nauth-user-pass /etc/openvpn/auth.txt\n";
       }
+    } else {
+      // No credentials — remove any existing auth-user-pass directive
+      // to prevent OpenVPN from prompting for credentials interactively
+      configBlob = configBlob.replace(/^\s*auth-user-pass\b.*\n?/m, "");
     }
 
     const confBase64 = Buffer.from(configBlob).toString("base64");
@@ -539,6 +543,7 @@ function generateVpnRuncmd(vpnConfig: VpnConfigResolved | null, failJobRef: stri
     // Parse remote server IP from OpenVPN config: "remote <host> <port>"
     const remoteMatch = vpnConfig.configBlob.match(/^\s*remote\s+(\S+)/m);
     const remoteHost = remoteMatch ? remoteMatch[1] : "";
+    const remoteIsIPv6 = remoteHost.includes(":");
 
     // Build bypass routes for excludedCIDRs (IPv4 and IPv6)
     // Each CIDR also needs an iptables ACCEPT rule BEFORE the DROP rule so that
@@ -572,7 +577,7 @@ function generateVpnRuncmd(vpnConfig: VpnConfigResolved | null, failJobRef: stri
     # Allow loopback
     iptables -A OUTPUT -o lo -j ACCEPT
     # Allow traffic to OpenVPN remote server (needed to establish tunnel)
-    ${remoteHost ? `iptables -A OUTPUT -d ${remoteHost} -j ACCEPT` : "# No remote parsed — skip remote allow rule"}
+    ${remoteHost && !remoteIsIPv6 ? `iptables -A OUTPUT -d ${remoteHost} -j ACCEPT` : "# No IPv4 remote parsed — skip iptables remote allow rule"}
     # Allow traffic through VPN interface
     iptables -A OUTPUT -o tun0 -j ACCEPT
     # Allow established connections (for responses)
@@ -587,6 +592,8 @@ function generateVpnRuncmd(vpnConfig: VpnConfigResolved | null, failJobRef: stri
     # ip6tables kill-switch: block all IPv6 to prevent leaks (allow VPN interface)
     ip6tables -A OUTPUT -o lo -j ACCEPT
     ip6tables -A OUTPUT -o tun0 -j ACCEPT
+    # Allow traffic to OpenVPN remote if it is an IPv6 address
+    ${remoteHost && remoteIsIPv6 ? `ip6tables -A OUTPUT -d ${remoteHost} -j ACCEPT` : "# No IPv6 remote — skip ip6tables remote allow rule"}
     ip6tables -A OUTPUT -j DROP
 
     echo "[vpn] Kill-switch active (iptables + ip6tables)"
@@ -657,6 +664,17 @@ ${bypassRoutes}
     ? `ip6tables -A OUTPUT -d ${endpointHost} -j ACCEPT`
     : "# No IPv6 endpoint — skip ip6tables endpoint allow rule";
 
+  // Build ACCEPT rules for excludedCIDRs so the kill-switch does not block
+  // bypassed traffic (e.g. cloud metadata, private networks, custom bypasses).
+  // IPv4 CIDRs → iptables, IPv6 CIDRs → ip6tables.
+  const excludedCIDRAcceptRules = vpnConfig.excludedCIDRs
+    .map((cidr) => {
+      const isIPv6 = cidr.includes(":");
+      const cmd = isIPv6 ? "ip6tables" : "iptables";
+      return `    ${cmd} -I OUTPUT 1 -d ${cidr} -j ACCEPT`;
+    })
+    .join("\n");
+
   return `
     # ── VPN Setup (WireGuard + Kill-Switch) ──────────────────────────
     echo "[vpn] Installing wireguard-tools..."
@@ -687,6 +705,9 @@ ${bypassRoutes}
     # Allow traffic to WireGuard endpoint if it is an IPv6 address
     ${endpointAllowRuleIPv6}
     ip6tables -A OUTPUT -j DROP
+
+    # Bypass ACCEPT rules for excludedCIDRs (inserted at top of OUTPUT chain)
+${excludedCIDRAcceptRules}
 
     echo "[vpn] Kill-switch active (iptables + ip6tables)"
 
