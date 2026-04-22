@@ -34,7 +34,9 @@ jobs:
           cache: "npm"
 
       - name: Install dependencies
-        run: npm install
+        run: |
+          npm install
+          npm ls @rolldown/binding-linux-x64-gnu 2>/dev/null || npm install @rolldown/binding-linux-x64-gnu --no-save
 
       - name: Generate Prisma Client
         run: npx prisma generate

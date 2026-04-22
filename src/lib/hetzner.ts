@@ -391,11 +391,16 @@ health_check() {
 
 echo "[vpn-watchdog] Started — monitoring \$VPN_INTERFACE every \${CHECK_INTERVAL}s"
 
+SEEN_WORKLOAD=0
+
 while true; do
   sleep "\$CHECK_INTERVAL"
 
-  # Self-termination: exit if no docker containers are running
-  if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q .; then
+  # Self-termination: exit if no docker containers are running — but only after
+  # at least one container was seen, to avoid exiting before docker images start
+  if docker ps --format '{{.Names}}' 2>/dev/null | grep -q .; then
+    SEEN_WORKLOAD=1
+  elif [ "\$SEEN_WORKLOAD" = "1" ]; then
     echo "[vpn-watchdog] No running containers — exiting"
     exit 0
   fi
@@ -487,9 +492,10 @@ function generateVpnWriteFiles(
         watchdogParams.jobEndpointPath,
       );
       const watchdogBase64 = Buffer.from(watchdogScript).toString("base64");
+      // 0700: script embeds SERVICE_TOKEN — must not be world-readable
       files += `
   - path: /opt/vpn-watchdog.sh
-    permissions: "0755"
+    permissions: "0700"
     encoding: b64
     content: ${watchdogBase64}`;
     }
@@ -515,9 +521,10 @@ function generateVpnWriteFiles(
       watchdogParams.jobEndpointPath,
     );
     const watchdogBase64 = Buffer.from(watchdogScript).toString("base64");
+    // 0700: script embeds SERVICE_TOKEN — must not be world-readable
     wgFiles += `
   - path: /opt/vpn-watchdog.sh
-    permissions: "0755"
+    permissions: "0700"
     encoding: b64
     content: ${watchdogBase64}`;
   }
@@ -534,12 +541,18 @@ function generateVpnRuncmd(vpnConfig: VpnConfigResolved | null, failJobRef: stri
     const remoteHost = remoteMatch ? remoteMatch[1] : "";
 
     // Build bypass routes for excludedCIDRs (IPv4 and IPv6)
+    // Each CIDR also needs an iptables ACCEPT rule BEFORE the DROP rule so that
+    // the kill-switch does not block the bypassed traffic.
     const bypassRoutes = vpnConfig.excludedCIDRs
       .map((cidr) => {
         const isIPv6 = cidr.includes(":");
         const cmd = isIPv6 ? `ip -6 route add` : `ip route add`;
         const gw = isIPv6 ? `$ORIG_GW6` : `$ORIG_GW`;
-        return `    if ! ${cmd} ${cidr} via ${gw} dev eth0; then echo "[vpn] Warning: bypass route failed for ${cidr}"; fi`;
+        const iptCmd = isIPv6 ? `ip6tables` : `iptables`;
+        return [
+          `    ${iptCmd} -I OUTPUT 1 -d ${cidr} -j ACCEPT`,
+          `    if ! ${cmd} ${cidr} via ${gw} dev eth0; then echo "[vpn] Warning: bypass route failed for ${cidr}"; fi`,
+        ].join("\n");
       })
       .join("\n");
 
@@ -622,10 +635,27 @@ ${bypassRoutes}
   }
 
   // WireGuard (default)
-  // Parse WireGuard endpoint IP from config for iptables ALLOW rule
-  // Matches "Endpoint = <ip>:<port>" or "Endpoint = <host>:<port>"
-  const endpointMatch = vpnConfig.configBlob.match(/^\s*Endpoint\s*=\s*([^:\s]+)/m);
-  const endpointHost = endpointMatch ? endpointMatch[1] : "";
+  // Parse WireGuard endpoint IP from config for iptables ALLOW rule.
+  // IPv6 endpoints are bracketed: "[2001:db8::1]:51820" — strip brackets.
+  // IPv4/hostname endpoints: "1.2.3.4:51820"
+  const endpointLineMatch = vpnConfig.configBlob.match(/^\s*Endpoint\s*=\s*(.+)/m);
+  const endpointRaw = endpointLineMatch ? endpointLineMatch[1].trim() : "";
+  // Bracketed IPv6: [addr]:port → extract addr
+  const ipv6BracketMatch = endpointRaw.match(/^\[([^\]]+)\]/);
+  const endpointHost = ipv6BracketMatch
+    ? ipv6BracketMatch[1]
+    : endpointRaw.replace(/:(\d+)$/, ""); // strip :port from IPv4/hostname
+  const endpointIsIPv6 = endpointHost.includes(":");
+
+  // iptables ALLOW rule (IPv4 only; ip6tables handled separately below)
+  const endpointAllowRule = endpointHost && !endpointIsIPv6
+    ? `iptables -A OUTPUT -d ${endpointHost} -j ACCEPT`
+    : "# No IPv4 endpoint parsed — skip iptables endpoint allow rule";
+
+  // ip6tables ALLOW rule for IPv6 endpoint
+  const endpointAllowRuleIPv6 = endpointHost && endpointIsIPv6
+    ? `ip6tables -A OUTPUT -d ${endpointHost} -j ACCEPT`
+    : "# No IPv6 endpoint — skip ip6tables endpoint allow rule";
 
   return `
     # ── VPN Setup (WireGuard + Kill-Switch) ──────────────────────────
@@ -639,7 +669,7 @@ ${bypassRoutes}
     # Allow loopback
     iptables -A OUTPUT -o lo -j ACCEPT
     # Allow traffic to WireGuard endpoint (needed to establish tunnel)
-    ${endpointHost ? `iptables -A OUTPUT -d ${endpointHost} -j ACCEPT` : "# No endpoint parsed — skip endpoint allow rule"}
+    ${endpointAllowRule}
     # Allow traffic through VPN interface
     iptables -A OUTPUT -o wg0 -j ACCEPT
     # Allow established connections (for responses)
@@ -654,6 +684,8 @@ ${bypassRoutes}
     # ip6tables kill-switch: block all IPv6 to prevent leaks (allow VPN interface)
     ip6tables -A OUTPUT -o lo -j ACCEPT
     ip6tables -A OUTPUT -o wg0 -j ACCEPT
+    # Allow traffic to WireGuard endpoint if it is an IPv6 address
+    ${endpointAllowRuleIPv6}
     ip6tables -A OUTPUT -j DROP
 
     echo "[vpn] Kill-switch active (iptables + ip6tables)"
@@ -804,6 +836,7 @@ export interface ProvisionUploadVpsParams {
   serviceToken: string;
   dockerImage?: string;
   serverName: string;
+  vpnConfig?: VpnConfigResolved | null;
 }
 
 /**
@@ -889,6 +922,7 @@ export async function provisionUploadVps(
     serviceToken: params.serviceToken,
     dockerImage: params.dockerImage,
     serverName: params.serverName,
+    vpnConfig: params.vpnConfig,
   });
 
   console.log(`[hetzner] Provisioning upload VPS: ${params.serverName}`);
