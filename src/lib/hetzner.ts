@@ -629,8 +629,19 @@ ${bypassRoutes}
     echo 'nameserver 1.1.1.1' > /etc/resolv.conf
 
     # Verify VPN connectivity (check that traffic routes through tunnel)
-    if ! timeout 10 curl -sf --interface tun0 https://ifconfig.me > /dev/null 2>&1; then
-      ${failJobRef} "VPN setup failed: connectivity check through tun0 failed"
+    # Verify VPN connectivity — use IP-based check (DNS may not resolve yet through tunnel)
+    sleep 3
+    VPN_OK=0
+    for i in 1 2 3; do
+      if timeout 10 curl -sf --interface tun0 http://1.1.1.1/cdn-cgi/trace > /dev/null 2>&1; then
+        VPN_OK=1
+        break
+      fi
+      echo "[vpn] Connectivity check attempt $i failed, retrying..."
+      sleep 3
+    done
+    if [ "$VPN_OK" = "0" ]; then
+      ${failJobRef} "VPN setup failed: connectivity check through tun0 failed after 3 attempts"
       exit 1
     fi
 
@@ -723,9 +734,19 @@ ${excludedCIDRAcceptRules}
 
     echo "[vpn] WireGuard tunnel up"
 
-    # Verify VPN connectivity (check that traffic routes through tunnel)
-    if ! timeout 10 curl -sf --interface wg0 https://ifconfig.me > /dev/null 2>&1; then
-      ${failJobRef} "VPN setup failed: connectivity check through wg0 failed"
+    # Verify VPN connectivity — use IP-based check (DNS may not resolve yet through tunnel)
+    sleep 3
+    VPN_OK=0
+    for i in 1 2 3; do
+      if timeout 10 curl -sf --interface wg0 http://1.1.1.1/cdn-cgi/trace > /dev/null 2>&1; then
+        VPN_OK=1
+        break
+      fi
+      echo "[vpn] Connectivity check attempt $i failed, retrying..."
+      sleep 3
+    done
+    if [ "$VPN_OK" = "0" ]; then
+      ${failJobRef} "VPN setup failed: connectivity check through wg0 failed after 3 attempts"
       exit 1
     fi
 
