@@ -28,6 +28,7 @@ const CATEGORIES = [
   { name: "nzb_service", displayName: "NZB-Service" },
   { name: "docker_images", displayName: "Docker Images" },
   { name: "runtime", displayName: "Runtime" },
+  { name: "vpn", displayName: "VPN" },
 ] as const;
 
 const PROFILES = [
@@ -36,8 +37,8 @@ const PROFILES = [
 ] as const;
 
 const PROFILE_CATEGORIES: Record<string, string[]> = {
-  download_vps: ["s3", "nzb_service", "docker_images", "runtime"],
-  upload_vps: ["s3", "nzb_service", "docker_images", "runtime"],
+  download_vps: ["s3", "nzb_service", "docker_images", "runtime", "vpn"],
+  upload_vps: ["s3", "nzb_service", "docker_images", "runtime", "vpn"],
 };
 
 interface EntryDef {
@@ -65,6 +66,11 @@ const ENTRIES_BY_CATEGORY: Record<string, EntryDef[]> = {
   ],
   runtime: [
     { key: "api_base_url", displayName: "API Base URL", defaultValue: "", sensitive: false },
+  ],
+  vpn: [
+    { key: "downloadVpnProviderId", displayName: "Download VPN Provider", defaultValue: "none", sensitive: false },
+    { key: "uploadVpnProviderId", displayName: "Upload VPN Provider", defaultValue: "none", sensitive: false },
+    { key: "bypassList", displayName: "VPN Bypass-Liste", defaultValue: "hel1.your-objectstorage.com, api.mediatoken.de, 169.254.169.254", sensitive: false },
   ],
 };
 
