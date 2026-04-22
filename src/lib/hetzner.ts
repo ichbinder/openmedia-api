@@ -563,6 +563,8 @@ function generateVpnRuncmd(vpnConfig: VpnConfigResolved | null, failJobRef: stri
 
     return `
     # ── VPN Setup (OpenVPN + Kill-Switch) ─────────────────────────────
+    echo "[vpn] Updating package lists..."
+    apt-get update -qq > /dev/null 2>&1
     echo "[vpn] Installing openvpn..."
     if ! timeout 60 apt-get install -y openvpn > /dev/null 2>&1; then
       ${failJobRef} "VPN setup failed: apt install openvpn timed out or failed"
@@ -677,6 +679,8 @@ ${bypassRoutes}
 
   return `
     # ── VPN Setup (WireGuard + Kill-Switch) ──────────────────────────
+    echo "[vpn] Updating package lists..."
+    apt-get update -qq > /dev/null 2>&1
     echo "[vpn] Installing wireguard-tools..."
     if ! timeout 60 apt-get install -y wireguard-tools > /dev/null 2>&1; then
       ${failJobRef} "VPN setup failed: apt install wireguard-tools timed out or failed"

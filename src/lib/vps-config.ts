@@ -189,7 +189,13 @@ async function resolveVpnForProfile(providerIdKey: string): Promise<VpnConfigRes
     try {
       const bypassEntry = await getEntry("vpn", "bypassList", false);
       if (bypassEntry && bypassEntry.value) {
-        const parsed = JSON.parse(bypassEntry.value);
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(bypassEntry.value);
+        } catch {
+          // Legacy format: comma-separated string → convert to array
+          parsed = bypassEntry.value.split(",").map((s: string) => s.trim()).filter(Boolean);
+        }
         if (Array.isArray(parsed)) {
           bypassEntries = parsed.map((item: string | VpnBypassEntry) =>
             typeof item === "string" ? { value: item } : item
