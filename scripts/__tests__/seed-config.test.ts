@@ -87,7 +87,7 @@ afterAll(async () => {
 });
 
 describe("seed-config integration", () => {
-  it("creates all 4 categories", async () => {
+  it("creates all 5 categories", async () => {
     const categories = await prisma.configCategory.findMany({
       orderBy: { name: "asc" },
     });
@@ -97,6 +97,7 @@ describe("seed-config integration", () => {
       "nzb_service",
       "runtime",
       "s3",
+      "vpn",
     ]);
   });
 

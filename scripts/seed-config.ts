@@ -28,6 +28,7 @@ const CATEGORIES = [
   { name: "nzb_service", displayName: "NZB-Service" },
   { name: "docker_images", displayName: "Docker Images" },
   { name: "runtime", displayName: "Runtime" },
+  { name: "vpn", displayName: "VPN" },
 ] as const;
 
 const PROFILES = [
