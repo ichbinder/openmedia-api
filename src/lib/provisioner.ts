@@ -122,6 +122,7 @@ async function provisionHetznerVPS(job: any): Promise<void> {
     serviceToken: serviceTokenPlaintext,
     dockerImage: config.dockerImage,
     serverName,
+    vpnConfig: config.vpnConfig,
   });
 
   const rawNetworkId = process.env.HETZNER_NETWORK_ID;
