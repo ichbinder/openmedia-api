@@ -437,7 +437,7 @@ describe("Bootstrap with VPN config", () => {
     const mockedGet = vi.mocked(getDownloadVpsConfig);
     mockedGet.mockResolvedValueOnce({
       apiBaseUrl: "http://localhost:4000",
-      apiToken: "test-api-token",
+
       s3AccessKey: "test-s3-key",
       s3SecretKey: "test-s3-secret",
       s3Endpoint: "https://hel1.s3.example.com",
@@ -475,7 +475,6 @@ describe("Bootstrap with VPN config", () => {
     const mockedGet = vi.mocked(getUploadVpsConfig);
     mockedGet.mockResolvedValueOnce({
       apiBaseUrl: "http://localhost:4000",
-      apiToken: "test-api-token",
       s3AccessKey: "test-upload-s3-key",
       s3SecretKey: "test-upload-s3-secret",
       s3Endpoint: "https://hel1.s3.example.com",
@@ -512,7 +511,7 @@ describe("Bootstrap with VPN config", () => {
     const mockedGet = vi.mocked(getDownloadVpsConfig);
     mockedGet.mockResolvedValueOnce({
       apiBaseUrl: "http://localhost:4000",
-      apiToken: "test-api-token",
+
       s3AccessKey: "test-s3-key",
       s3SecretKey: "test-s3-secret",
       s3Endpoint: "https://hel1.s3.example.com",
