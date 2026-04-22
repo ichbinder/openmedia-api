@@ -25,6 +25,13 @@ import {
   updateProvider,
   deleteProvider,
 } from "../lib/usenet-provider-service.js";
+import {
+  createVpnProvider,
+  listVpnProviders,
+  getVpnProviderById,
+  updateVpnProvider,
+  deleteVpnProvider,
+} from "../lib/vpn-provider-service.js";
 
 const router = Router();
 
@@ -468,6 +475,206 @@ router.delete("/usenet-providers/:id", requireAuth, requireAdmin, async (req: Au
   } catch (err) {
     console.error("[admin-config] Delete provider error:", err);
     res.status(500).json({ error: "Failed to delete provider." });
+  }
+});
+
+// ─── VPN Provider Input Validation ────────────────────────────────────
+
+interface VpnProviderValidationResult {
+  error?: string;
+  data: {
+    name?: string;
+    configBlob?: string;
+    username?: string | null;
+    password?: string | null;
+    enabled?: boolean;
+  };
+}
+
+function validateVpnProviderInput(body: unknown, requireFields: boolean): VpnProviderValidationResult {
+  const data: VpnProviderValidationResult["data"] = {};
+  if (body === null || typeof body !== "object" || Array.isArray(body)) {
+    return { error: "Request body must be a JSON object.", data };
+  }
+  const { name, configBlob, username, password, enabled } = body as Record<string, unknown>;
+
+  if (requireFields) {
+    if (typeof name !== "string" || !name.trim()) return { error: "name must be a non-empty string.", data };
+    if (typeof configBlob !== "string" || !configBlob.trim()) return { error: "configBlob must be a non-empty string.", data };
+  }
+
+  if (name !== undefined) {
+    if (typeof name !== "string" || !name.trim()) return { error: "name must be a non-empty string.", data };
+    data.name = name.trim();
+  }
+  if (configBlob !== undefined) {
+    if (typeof configBlob !== "string" || !configBlob.trim()) return { error: "configBlob must be a non-empty string.", data };
+    data.configBlob = configBlob;
+  }
+  if (username !== undefined) {
+    if (username === null || username === "") {
+      data.username = null;
+    } else if (typeof username === "string") {
+      data.username = username.trim() || null;
+    } else {
+      return { error: "username must be a string or null.", data };
+    }
+  }
+  if (password !== undefined) {
+    if (password === null || password === "") {
+      data.password = null;
+    } else if (typeof password === "string") {
+      data.password = password;
+    } else {
+      return { error: "password must be a string or null.", data };
+    }
+  }
+  if (enabled !== undefined) {
+    if (typeof enabled === "boolean") {
+      data.enabled = enabled;
+    } else if (enabled === "true") {
+      data.enabled = true;
+    } else if (enabled === "false") {
+      data.enabled = false;
+    } else {
+      return { error: "enabled must be a boolean.", data };
+    }
+  }
+
+  return { data };
+}
+
+// ─── VPN Providers ───────────────────────────────────────────────────
+
+/** GET /admin/config/vpn-providers — list all VPN providers */
+router.get("/vpn-providers", requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const reveal = req.query.reveal === "true";
+    if (reveal && !isEncryptionConfigured()) {
+      res.status(503).json({ error: "Encryption not configured." });
+      return;
+    }
+    const providers = await listVpnProviders(reveal);
+    res.json({ providers });
+  } catch (err) {
+    console.error("[admin-config] List VPN providers error:", err);
+    res.status(500).json({ error: "Failed to list VPN providers." });
+  }
+});
+
+/** POST /admin/config/vpn-providers — create a VPN provider */
+router.post("/vpn-providers", requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const validation = validateVpnProviderInput(req.body, true);
+    if (validation.error) {
+      res.status(400).json({ error: validation.error });
+      return;
+    }
+
+    if (!isEncryptionConfigured()) {
+      res.status(503).json({ error: "Encryption not configured." });
+      return;
+    }
+
+    const d = validation.data;
+    const provider = await createVpnProvider({
+      name: d.name!,
+      configBlob: d.configBlob!,
+      username: d.username,
+      password: d.password,
+      enabled: d.enabled,
+    });
+
+    console.log(`[admin-config] VPN Provider created: ${d.name} by ${req.user?.userId}`);
+    res.status(201).json({ provider });
+  } catch (err: any) {
+    if (err?.code === "P2002") {
+      res.status(409).json({ error: "VPN provider with this name already exists." });
+      return;
+    }
+    if (err?.message?.includes("Unrecognized VPN config format")) {
+      res.status(400).json({ error: err.message });
+      return;
+    }
+    console.error("[admin-config] Create VPN provider error:", err);
+    res.status(500).json({ error: "Failed to create VPN provider." });
+  }
+});
+
+/** GET /admin/config/vpn-providers/:id — get a single VPN provider */
+router.get("/vpn-providers/:id", requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const reveal = req.query.reveal === "true";
+    if (reveal && !isEncryptionConfigured()) {
+      res.status(503).json({ error: "Encryption not configured." });
+      return;
+    }
+    const provider = await getVpnProviderById(String(req.params.id), reveal);
+    if (!provider) {
+      res.status(404).json({ error: "VPN provider not found." });
+      return;
+    }
+    res.json({ provider });
+  } catch (err) {
+    console.error("[admin-config] Get VPN provider error:", err);
+    res.status(500).json({ error: "Failed to get VPN provider." });
+  }
+});
+
+/** PUT /admin/config/vpn-providers/:id — update a VPN provider */
+router.put("/vpn-providers/:id", requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const validation = validateVpnProviderInput(req.body, false);
+    if (validation.error) {
+      res.status(400).json({ error: validation.error });
+      return;
+    }
+
+    const needsEncryption = validation.data.configBlob !== undefined ||
+      (validation.data.username !== undefined && validation.data.username !== null) ||
+      (validation.data.password !== undefined && validation.data.password !== null);
+    if (needsEncryption && !isEncryptionConfigured()) {
+      res.status(503).json({ error: "Encryption not configured." });
+      return;
+    }
+
+    const provider = await updateVpnProvider(String(req.params.id), validation.data);
+
+    if (!provider) {
+      res.status(404).json({ error: "VPN provider not found." });
+      return;
+    }
+
+    console.log(`[admin-config] VPN Provider updated: ${provider.name} by ${req.user?.userId}`);
+    res.json({ provider });
+  } catch (err: any) {
+    if (err?.code === "P2002") {
+      res.status(409).json({ error: "VPN provider with this name already exists." });
+      return;
+    }
+    if (err?.message?.includes("Unrecognized VPN config format")) {
+      res.status(400).json({ error: err.message });
+      return;
+    }
+    console.error("[admin-config] Update VPN provider error:", err);
+    res.status(500).json({ error: "Failed to update VPN provider." });
+  }
+});
+
+/** DELETE /admin/config/vpn-providers/:id — delete a VPN provider */
+router.delete("/vpn-providers/:id", requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const providerId = String(req.params.id);
+    const deleted = await deleteVpnProvider(providerId);
+    if (!deleted) {
+      res.status(404).json({ error: "VPN provider not found." });
+      return;
+    }
+    console.log(`[admin-config] VPN Provider deleted: ${providerId} by ${req.user?.userId}`);
+    res.json({ deleted: true });
+  } catch (err) {
+    console.error("[admin-config] Delete VPN provider error:", err);
+    res.status(500).json({ error: "Failed to delete VPN provider." });
   }
 });
 

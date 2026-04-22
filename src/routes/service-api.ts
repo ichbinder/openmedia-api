@@ -66,7 +66,7 @@ router.get("/jobs/:id/bootstrap", async (req: AuthRequest, res: Response) => {
         return;
       }
 
-      console.log(`[service-api] Bootstrap served for download job ${requestedJobId}`);
+      console.log(`[service-api] Bootstrap served for download job ${requestedJobId} (vpn: ${config.vpnConfig ? "yes" : "no"})`);
       res.json({
         job: {
           id: downloadJob.id,
@@ -85,6 +85,7 @@ router.get("/jobs/:id/bootstrap", async (req: AuthRequest, res: Response) => {
           nzbServiceUrl: config.nzbServiceUrl,
           usenetServers: config.usenetServers,
         },
+        vpnConfig: config.vpnConfig ?? undefined,
       });
       return;
     }
@@ -116,7 +117,7 @@ router.get("/jobs/:id/bootstrap", async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    console.log(`[service-api] Bootstrap served for upload job ${requestedJobId}`);
+    console.log(`[service-api] Bootstrap served for upload job ${requestedJobId} (vpn: ${uploadConfig.vpnConfig ? "yes" : "no"})`);
     res.json({
       job: {
         id: uploadJob.id,
@@ -135,6 +136,7 @@ router.get("/jobs/:id/bootstrap", async (req: AuthRequest, res: Response) => {
         nzbServiceToken: uploadConfig.nzbServiceToken,
         usenetProviders: uploadConfig.usenetProviders,
       },
+      vpnConfig: uploadConfig.vpnConfig ?? undefined,
     });
   } catch (err) {
     console.error("[service-api] Bootstrap error:", err);

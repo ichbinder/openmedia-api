@@ -10,6 +10,8 @@
  * All servers are created in HEL1 (Helsinki) to match the S3 bucket location.
  */
 
+import type { VpnConfigResolved } from "./vpn-config.js";
+
 const HETZNER_API_BASE = "https://api.hetzner.cloud/v1";
 const FETCH_TIMEOUT_MS = 30_000;
 
@@ -327,12 +329,418 @@ export interface UsenetServer {
   priority?: number;
 }
 
+/**
+ * Generate the VPN watchdog bash script that monitors connectivity and
+ * reconnects with exponential backoff (5s/15s/30s). After 3 failed
+ * reconnect cycles the watchdog PATCHes the job to "failed" and exits.
+ * Self-terminates when the main docker workload is no longer running.
+ */
+function generateVpnWatchdog(
+  vpnConfig: VpnConfigResolved,
+  apiBaseUrl: string,
+  serviceToken: string,
+  jobId: string,
+  jobEndpointPath: string,
+): string {
+  const vpnInterface = vpnConfig.protocol === "openvpn" ? "tun0" : "wg0";
+
+  const reconnectCmd =
+    vpnConfig.protocol === "openvpn"
+      ? `    killall -9 openvpn 2>/dev/null || true
+    sleep 1
+    openvpn --config /etc/openvpn/client.conf --daemon --log /var/log/openvpn.log
+    # Wait for tun0 to come back (up to 30s)
+    for j in $(seq 1 30); do
+      ip link show tun0 > /dev/null 2>&1 && break
+      sleep 1
+    done`
+      : `    wg-quick down wg0 2>/dev/null || true
+    wg-quick up wg0`;
+
+  return `#!/usr/bin/env bash
+set -euo pipefail
+
+# VPN Watchdog — reconnect with backoff (R018), fail after 3 attempts (R019)
+
+API_BASE_URL="${apiBaseUrl}"
+SERVICE_TOKEN="${serviceToken}"
+JOB_ID="${jobId}"
+JOB_ENDPOINT_PATH="${jobEndpointPath}"
+VPN_INTERFACE="${vpnInterface}"
+
+BACKOFF_DELAYS=(5 15 30)
+MAX_RETRIES=3
+CHECK_INTERVAL=10
+
+watchdog_fail_job() {
+  local msg="\$1"
+  echo "[vpn-watchdog] FATAL: \$msg"
+  curl -sf -X PATCH "\${API_BASE_URL}\${JOB_ENDPOINT_PATH}" \\
+    -H "Authorization: Bearer \${SERVICE_TOKEN}" \\
+    -H "Content-Type: application/json" \\
+    -d "{\\"status\\":\\"failed\\",\\"error\\":\\"\$msg\\"}" || true
+}
+
+reconnect_vpn() {
+${reconnectCmd}
+}
+
+health_check() {
+  curl -sf --interface "\$VPN_INTERFACE" --connect-timeout 5 "\${API_BASE_URL}/health" > /dev/null 2>&1
+}
+
+echo "[vpn-watchdog] Started — monitoring \$VPN_INTERFACE every \${CHECK_INTERVAL}s"
+
+SEEN_WORKLOAD=0
+
+while true; do
+  sleep "\$CHECK_INTERVAL"
+
+  # Self-termination: exit if no docker containers are running — but only after
+  # at least one container was seen, to avoid exiting before docker images start
+  if docker ps --format '{{.Names}}' 2>/dev/null | grep -q .; then
+    SEEN_WORKLOAD=1
+  elif [ "\$SEEN_WORKLOAD" = "1" ]; then
+    echo "[vpn-watchdog] No running containers — exiting"
+    exit 0
+  fi
+
+  # Health check
+  if health_check; then
+    continue
+  fi
+
+  echo "[vpn-watchdog] Health check failed — starting reconnect sequence"
+
+  RECONNECTED=0
+  for attempt in $(seq 0 $((MAX_RETRIES - 1))); do
+    delay=\${BACKOFF_DELAYS[\$attempt]}
+    echo "[vpn-watchdog] Reconnect attempt $((attempt + 1))/$MAX_RETRIES (backoff: \${delay}s)"
+    sleep "\$delay"
+
+    reconnect_vpn
+
+    # Verify reconnect
+    sleep 2
+    if health_check; then
+      echo "[vpn-watchdog] Reconnected successfully on attempt $((attempt + 1))"
+      RECONNECTED=1
+      break
+    fi
+  done
+
+  if [ "\$RECONNECTED" = "0" ]; then
+    watchdog_fail_job "VPN reconnect exhausted after $MAX_RETRIES attempts"
+    exit 1
+  fi
+done
+`;
+}
+
+/**
+ * Generate cloud-init write_files + runcmd blocks for WireGuard VPN setup.
+ * Includes iptables/ip6tables kill-switch and connectivity verification.
+ * Returns empty strings if vpnConfig is null (R017: no VPN → unchanged cloud-init).
+ */
+function generateVpnWriteFiles(
+  vpnConfig: VpnConfigResolved | null,
+  watchdogParams?: { apiBaseUrl: string; serviceToken: string; jobId: string; jobEndpointPath: string },
+): string {
+  if (!vpnConfig) return "";
+
+  if (vpnConfig.protocol === "openvpn") {
+    // Prepare config blob: inject auth-user-pass directive if credentials present
+    let configBlob = vpnConfig.configBlob;
+    const hasCredentials = vpnConfig.username && vpnConfig.password;
+
+    if (hasCredentials) {
+      // Replace existing auth-user-pass line or append if not present
+      if (/^\s*auth-user-pass\b/m.test(configBlob)) {
+        configBlob = configBlob.replace(
+          /^\s*auth-user-pass\b.*$/m,
+          "auth-user-pass /etc/openvpn/auth.txt"
+        );
+      } else {
+        configBlob = configBlob.trimEnd() + "\nauth-user-pass /etc/openvpn/auth.txt\n";
+      }
+    } else {
+      // No credentials — remove any existing auth-user-pass directive
+      // to prevent OpenVPN from prompting for credentials interactively
+      configBlob = configBlob.replace(/^\s*auth-user-pass\b.*\n?/m, "");
+    }
+
+    const confBase64 = Buffer.from(configBlob).toString("base64");
+
+    let files = `
+  - path: /etc/openvpn/client.conf
+    permissions: "0600"
+    encoding: b64
+    content: ${confBase64}`;
+
+    if (hasCredentials) {
+      const authContent = `${vpnConfig.username}\n${vpnConfig.password}`;
+      const authBase64 = Buffer.from(authContent).toString("base64");
+      files += `
+  - path: /etc/openvpn/auth.txt
+    permissions: "0600"
+    encoding: b64
+    content: ${authBase64}`;
+    }
+
+    if (watchdogParams) {
+      const watchdogScript = generateVpnWatchdog(
+        vpnConfig,
+        watchdogParams.apiBaseUrl,
+        watchdogParams.serviceToken,
+        watchdogParams.jobId,
+        watchdogParams.jobEndpointPath,
+      );
+      const watchdogBase64 = Buffer.from(watchdogScript).toString("base64");
+      // 0700: script embeds SERVICE_TOKEN — must not be world-readable
+      files += `
+  - path: /opt/vpn-watchdog.sh
+    permissions: "0700"
+    encoding: b64
+    content: ${watchdogBase64}`;
+    }
+
+    return files;
+  }
+
+  // WireGuard (default)
+  const confBase64 = Buffer.from(vpnConfig.configBlob).toString("base64");
+
+  let wgFiles = `
+  - path: /etc/wireguard/wg0.conf
+    permissions: "0600"
+    encoding: b64
+    content: ${confBase64}`;
+
+  if (watchdogParams) {
+    const watchdogScript = generateVpnWatchdog(
+      vpnConfig,
+      watchdogParams.apiBaseUrl,
+      watchdogParams.serviceToken,
+      watchdogParams.jobId,
+      watchdogParams.jobEndpointPath,
+    );
+    const watchdogBase64 = Buffer.from(watchdogScript).toString("base64");
+    // 0700: script embeds SERVICE_TOKEN — must not be world-readable
+    wgFiles += `
+  - path: /opt/vpn-watchdog.sh
+    permissions: "0700"
+    encoding: b64
+    content: ${watchdogBase64}`;
+  }
+
+  return wgFiles;
+}
+
+function generateVpnRuncmd(vpnConfig: VpnConfigResolved | null, failJobRef: string): string {
+  if (!vpnConfig) return "";
+
+  if (vpnConfig.protocol === "openvpn") {
+    // Parse remote server IP from OpenVPN config: "remote <host> <port>"
+    const remoteMatch = vpnConfig.configBlob.match(/^\s*remote\s+(\S+)/m);
+    const remoteHost = remoteMatch ? remoteMatch[1] : "";
+    const remoteIsIPv6 = remoteHost.includes(":");
+
+    // Build bypass routes for excludedCIDRs (IPv4 and IPv6)
+    // Each CIDR also needs an iptables ACCEPT rule BEFORE the DROP rule so that
+    // the kill-switch does not block the bypassed traffic.
+    const bypassRoutes = vpnConfig.excludedCIDRs
+      .map((cidr) => {
+        const isIPv6 = cidr.includes(":");
+        const cmd = isIPv6 ? `ip -6 route add` : `ip route add`;
+        const gw = isIPv6 ? `$ORIG_GW6` : `$ORIG_GW`;
+        const iptCmd = isIPv6 ? `ip6tables` : `iptables`;
+        return [
+          `    ${iptCmd} -I OUTPUT 1 -d ${cidr} -j ACCEPT`,
+          `    if ! ${cmd} ${cidr} via ${gw} dev eth0; then echo "[vpn] Warning: bypass route failed for ${cidr}"; fi`,
+        ].join("\n");
+      })
+      .join("\n");
+
+    return `
+    # ── VPN Setup (OpenVPN + Kill-Switch) ─────────────────────────────
+    echo "[vpn] Installing openvpn..."
+    if ! timeout 60 apt-get install -y openvpn > /dev/null 2>&1; then
+      ${failJobRef} "VPN setup failed: apt install openvpn timed out or failed"
+      exit 1
+    fi
+
+    # Capture default gateways before tunnel overwrites them
+    ORIG_GW=$(ip route show default | awk '{print $3}')
+    ORIG_GW6=$(ip -6 route show default | awk '{print $3}')
+
+    # iptables kill-switch: DROP all non-VPN traffic (R014)
+    # Allow loopback
+    iptables -A OUTPUT -o lo -j ACCEPT
+    # Allow traffic to OpenVPN remote server (needed to establish tunnel)
+    ${remoteHost && !remoteIsIPv6 ? `iptables -A OUTPUT -d ${remoteHost} -j ACCEPT` : "# No IPv4 remote parsed — skip iptables remote allow rule"}
+    # Allow traffic through VPN interface
+    iptables -A OUTPUT -o tun0 -j ACCEPT
+    # Allow established connections (for responses)
+    iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+    # Allow DHCP/cloud-init metadata
+    iptables -A OUTPUT -d 169.254.169.254/32 -j ACCEPT
+    # Allow private network (VPS management)
+    iptables -A OUTPUT -d 10.0.0.0/8 -j ACCEPT
+    # DROP everything else
+    iptables -A OUTPUT -j DROP
+
+    # ip6tables kill-switch: block all IPv6 to prevent leaks (allow VPN interface)
+    ip6tables -A OUTPUT -o lo -j ACCEPT
+    ip6tables -A OUTPUT -o tun0 -j ACCEPT
+    # Allow traffic to OpenVPN remote if it is an IPv6 address
+    ${remoteHost && remoteIsIPv6 ? `ip6tables -A OUTPUT -d ${remoteHost} -j ACCEPT` : "# No IPv6 remote — skip ip6tables remote allow rule"}
+    ip6tables -A OUTPUT -j DROP
+
+    echo "[vpn] Kill-switch active (iptables + ip6tables)"
+
+    # Start OpenVPN daemon
+    openvpn --config /etc/openvpn/client.conf --daemon --log /var/log/openvpn.log
+
+    # Wait for tun0 interface (up to 30s)
+    echo "[vpn] Waiting for tun0 interface..."
+    TUN_UP=0
+    for i in $(seq 1 30); do
+      if ip link show tun0 > /dev/null 2>&1; then
+        TUN_UP=1
+        break
+      fi
+      sleep 1
+    done
+    if [ "$TUN_UP" = "0" ]; then
+      echo "[vpn] OpenVPN log:"
+      cat /var/log/openvpn.log 2>/dev/null || true
+      ${failJobRef} "VPN setup failed: tun0 not up after 30s"
+      exit 1
+    fi
+
+    echo "[vpn] OpenVPN tunnel up (tun0)"
+
+    # Bypass routes: route excludedCIDRs via original gateway
+${bypassRoutes}
+
+    # DNS leak fix
+    echo 'nameserver 1.1.1.1' > /etc/resolv.conf
+
+    # Verify VPN connectivity (check that traffic routes through tunnel)
+    if ! timeout 10 curl -sf --interface tun0 https://ifconfig.me > /dev/null 2>&1; then
+      ${failJobRef} "VPN setup failed: connectivity check through tun0 failed"
+      exit 1
+    fi
+
+    echo "[vpn] Connectivity verified through tun0"
+
+    # Start VPN watchdog (reconnect with backoff, R018/R019)
+    chmod +x /opt/vpn-watchdog.sh
+    nohup /opt/vpn-watchdog.sh > /var/log/vpn-watchdog.log 2>&1 &
+    # ── End VPN Setup ─────────────────────────────────────────────────
+`;
+  }
+
+  // WireGuard (default)
+  // Parse WireGuard endpoint IP from config for iptables ALLOW rule.
+  // IPv6 endpoints are bracketed: "[2001:db8::1]:51820" — strip brackets.
+  // IPv4/hostname endpoints: "1.2.3.4:51820"
+  const endpointLineMatch = vpnConfig.configBlob.match(/^\s*Endpoint\s*=\s*(.+)/m);
+  const endpointRaw = endpointLineMatch ? endpointLineMatch[1].trim() : "";
+  // Bracketed IPv6: [addr]:port → extract addr
+  const ipv6BracketMatch = endpointRaw.match(/^\[([^\]]+)\]/);
+  const endpointHost = ipv6BracketMatch
+    ? ipv6BracketMatch[1]
+    : endpointRaw.replace(/:(\d+)$/, ""); // strip :port from IPv4/hostname
+  const endpointIsIPv6 = endpointHost.includes(":");
+
+  // iptables ALLOW rule (IPv4 only; ip6tables handled separately below)
+  const endpointAllowRule = endpointHost && !endpointIsIPv6
+    ? `iptables -A OUTPUT -d ${endpointHost} -j ACCEPT`
+    : "# No IPv4 endpoint parsed — skip iptables endpoint allow rule";
+
+  // ip6tables ALLOW rule for IPv6 endpoint
+  const endpointAllowRuleIPv6 = endpointHost && endpointIsIPv6
+    ? `ip6tables -A OUTPUT -d ${endpointHost} -j ACCEPT`
+    : "# No IPv6 endpoint — skip ip6tables endpoint allow rule";
+
+  // Build ACCEPT rules for excludedCIDRs so the kill-switch does not block
+  // bypassed traffic (e.g. cloud metadata, private networks, custom bypasses).
+  // IPv4 CIDRs → iptables, IPv6 CIDRs → ip6tables.
+  const excludedCIDRAcceptRules = vpnConfig.excludedCIDRs
+    .map((cidr) => {
+      const isIPv6 = cidr.includes(":");
+      const cmd = isIPv6 ? "ip6tables" : "iptables";
+      return `    ${cmd} -I OUTPUT 1 -d ${cidr} -j ACCEPT`;
+    })
+    .join("\n");
+
+  return `
+    # ── VPN Setup (WireGuard + Kill-Switch) ──────────────────────────
+    echo "[vpn] Installing wireguard-tools..."
+    if ! timeout 60 apt-get install -y wireguard-tools > /dev/null 2>&1; then
+      ${failJobRef} "VPN setup failed: apt install wireguard-tools timed out or failed"
+      exit 1
+    fi
+
+    # iptables kill-switch: DROP all non-VPN traffic (R014)
+    # Allow loopback
+    iptables -A OUTPUT -o lo -j ACCEPT
+    # Allow traffic to WireGuard endpoint (needed to establish tunnel)
+    ${endpointAllowRule}
+    # Allow traffic through VPN interface
+    iptables -A OUTPUT -o wg0 -j ACCEPT
+    # Allow established connections (for responses)
+    iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+    # Allow DHCP/cloud-init metadata
+    iptables -A OUTPUT -d 169.254.169.254/32 -j ACCEPT
+    # Allow private network (VPS management)
+    iptables -A OUTPUT -d 10.0.0.0/8 -j ACCEPT
+    # DROP everything else
+    iptables -A OUTPUT -j DROP
+
+    # ip6tables kill-switch: block all IPv6 to prevent leaks (allow VPN interface)
+    ip6tables -A OUTPUT -o lo -j ACCEPT
+    ip6tables -A OUTPUT -o wg0 -j ACCEPT
+    # Allow traffic to WireGuard endpoint if it is an IPv6 address
+    ${endpointAllowRuleIPv6}
+    ip6tables -A OUTPUT -j DROP
+
+    # Bypass ACCEPT rules for excludedCIDRs (inserted at top of OUTPUT chain)
+${excludedCIDRAcceptRules}
+
+    echo "[vpn] Kill-switch active (iptables + ip6tables)"
+
+    # Bring up WireGuard tunnel
+    if ! timeout 30 wg-quick up wg0; then
+      ${failJobRef} "VPN setup failed: wg-quick up wg0 failed"
+      exit 1
+    fi
+
+    echo "[vpn] WireGuard tunnel up"
+
+    # Verify VPN connectivity (check that traffic routes through tunnel)
+    if ! timeout 10 curl -sf --interface wg0 https://ifconfig.me > /dev/null 2>&1; then
+      ${failJobRef} "VPN setup failed: connectivity check through wg0 failed"
+      exit 1
+    fi
+
+    echo "[vpn] Connectivity verified through wg0"
+
+    # Start VPN watchdog (reconnect with backoff, R018/R019)
+    chmod +x /opt/vpn-watchdog.sh
+    nohup /opt/vpn-watchdog.sh > /var/log/vpn-watchdog.log 2>&1 &
+    # ── End VPN Setup ────────────────────────────────────────────────
+`;
+}
+
 export function generateCloudInit(params: {
   jobId: string;
   apiBaseUrl: string;
   serviceToken: string;
   dockerImage: string;
   serverName: string;
+  vpnConfig?: VpnConfigResolved | null;
 }): string {
   // Build env file content — only 3 config vars, rest fetched at boot
   const envLines = [
@@ -346,6 +754,15 @@ export function generateCloudInit(params: {
   // Base64-encode the env content to avoid YAML parsing issues
   const envBase64 = Buffer.from(envContent).toString("base64");
 
+  const vpnConfig = params.vpnConfig ?? null;
+  const vpnWriteFiles = generateVpnWriteFiles(vpnConfig, vpnConfig ? {
+    apiBaseUrl: params.apiBaseUrl,
+    serviceToken: params.serviceToken,
+    jobId: params.jobId,
+    jobEndpointPath: `/downloads/jobs/${params.jobId}/status`,
+  } : undefined);
+  const vpnRuncmd = generateVpnRuncmd(vpnConfig, "fail_job");
+
   return `#cloud-config
 package_update: false
 
@@ -353,7 +770,7 @@ write_files:
   - path: /opt/openmedia-env
     permissions: "0600"
     encoding: b64
-    content: ${envBase64}
+    content: ${envBase64}${vpnWriteFiles}
 
 runcmd:
   - |
@@ -370,7 +787,7 @@ runcmd:
         -H "Content-Type: application/json" \\
         -d "{\\"status\\":\\"failed\\",\\"error\\":\\"$1\\"}" || true
     }
-
+${vpnRuncmd}
     if ! docker pull "${params.dockerImage}"; then
       fail_job "Docker pull failed: ${params.dockerImage}"
       exit 1
@@ -430,6 +847,7 @@ export interface GenerateUploadCloudInitParams {
   serviceToken: string;
   dockerImage?: string;
   serverName: string;
+  vpnConfig?: VpnConfigResolved | null;
 }
 
 export interface ProvisionUploadVpsParams {
@@ -439,6 +857,7 @@ export interface ProvisionUploadVpsParams {
   serviceToken: string;
   dockerImage?: string;
   serverName: string;
+  vpnConfig?: VpnConfigResolved | null;
 }
 
 /**
@@ -462,6 +881,15 @@ export function generateUploadCloudInit(params: GenerateUploadCloudInitParams): 
   const envContent = envLines.join("\n");
   const envBase64 = Buffer.from(envContent).toString("base64");
 
+  const vpnConfig = params.vpnConfig ?? null;
+  const vpnWriteFiles = generateVpnWriteFiles(vpnConfig, vpnConfig ? {
+    apiBaseUrl: params.apiBaseUrl,
+    serviceToken: params.serviceToken,
+    jobId: params.jobId,
+    jobEndpointPath: `/uploads/${params.jobId}`,
+  } : undefined);
+  const vpnRuncmd = generateVpnRuncmd(vpnConfig, "fail_job");
+
   return `#cloud-config
 
 package_update: false
@@ -470,7 +898,7 @@ write_files:
   - path: /opt/openmedia-env
     permissions: "0600"
     encoding: b64
-    content: ${envBase64}
+    content: ${envBase64}${vpnWriteFiles}
 
 runcmd:
   - |
@@ -482,7 +910,7 @@ runcmd:
         -H "Content-Type: application/json" \\
         -d "{\\"status\\":\\"failed\\",\\"error\\":\\"$1\\"}" || true
     }
-
+${vpnRuncmd}
     if ! docker pull "${dockerImage}"; then
       fail_job "Docker pull failed: ${dockerImage}"
       exit 1
@@ -515,6 +943,7 @@ export async function provisionUploadVps(
     serviceToken: params.serviceToken,
     dockerImage: params.dockerImage,
     serverName: params.serverName,
+    vpnConfig: params.vpnConfig,
   });
 
   console.log(`[hetzner] Provisioning upload VPS: ${params.serverName}`);

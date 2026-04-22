@@ -6,6 +6,7 @@ import {
   generateServiceToken,
   storeServiceToken,
 } from "../lib/service-token.js";
+import type { VpnConfigResolved } from "../lib/vpn-config.js";
 
 const app = createApp();
 
@@ -84,6 +85,9 @@ describe("Bootstrap endpoint", () => {
     expect(res.body.config.s3AccessKey).toBeDefined();
     expect(res.body.config.usenetServers).toBeDefined();
     expect(res.body.config.nzbServiceUrl).toBeDefined();
+
+    // R017: vpnConfig must be undefined when no VPN provider is configured
+    expect(res.body.vpnConfig).toBeUndefined();
   });
 
   it("GET /service/jobs/:id/bootstrap with token for wrong jobId returns 401", async () => {
@@ -219,6 +223,9 @@ describe("Upload bootstrap endpoint", () => {
     expect(res.body.config.usenetProviders).toBeDefined();
     expect(res.body.config.nzbServiceUrl).toBeDefined();
     expect(res.body.config.nzbServiceToken).toBeDefined();
+
+    // R017: vpnConfig must be undefined when no VPN provider is configured
+    expect(res.body.vpnConfig).toBeUndefined();
   });
 
   it("GET /service/jobs/:id/bootstrap with token for wrong upload jobId returns 401", async () => {
@@ -365,6 +372,180 @@ describe("Cloud-init ENV reduction", () => {
     expect(envContent).not.toContain("NZB_URL");
     expect(envContent).not.toContain("JOB_HASH");
     expect(envContent).not.toContain("NZB_SERVICE_URL");
+  });
+});
+
+describe("Bootstrap with VPN config", () => {
+  const originalStaticToken = process.env.SERVICE_API_TOKEN;
+
+  // VPN mock matching VpnConfigResolved shape
+  const mockVpnConfig: VpnConfigResolved = {
+    providerId: "vpn-test-1",
+    providerName: "TestVPN",
+    protocol: "wireguard",
+    configBlob: "[Interface]\nPrivateKey=testkey\n[Peer]\nAllowedIPs=0.0.0.0/0",
+    allowedIPs: ["0.0.0.0/1", "128.0.0.0/1"],
+    excludedCIDRs: ["169.254.169.254/32", "10.0.0.0/8"],
+    username: null,
+    password: null,
+  };
+
+  afterEach(() => {
+    if (originalStaticToken !== undefined) {
+      process.env.SERVICE_API_TOKEN = originalStaticToken;
+    } else {
+      delete process.env.SERVICE_API_TOKEN;
+    }
+  });
+
+  async function createTestJob() {
+    const movie = await prisma.nzbMovie.create({
+      data: { titleDe: "VPN Test", titleEn: "VPN Test", year: 2026 },
+    });
+    const nzbFile = await prisma.nzbFile.create({
+      data: { movieId: movie.id, hash: `vpnhash-${Date.now()}`, originalFilename: "vpn-test.nzb" },
+    });
+    const job = await prisma.downloadJob.create({
+      data: { nzbFileId: nzbFile.id },
+    });
+    return { job, nzbFile, movie };
+  }
+
+  async function createTestUploadJob() {
+    const movie = await prisma.nzbMovie.create({
+      data: { titleDe: "VPN Upload Test", titleEn: "VPN Upload Test", year: 2026 },
+    });
+    const nzbFile = await prisma.nzbFile.create({
+      data: {
+        movieId: movie.id,
+        hash: `vpnuphash-${Date.now()}`,
+        originalFilename: "vpn-upload.nzb",
+        s3Key: `movies/${movie.id}/archive.7z`,
+      },
+    });
+    const job = await prisma.uploadJob.create({
+      data: { nzbFileId: nzbFile.id, movieId: movie.id },
+    });
+    return { job, nzbFile, movie };
+  }
+
+  it("download bootstrap with VPN returns vpnConfig as top-level field", async () => {
+    delete process.env.SERVICE_API_TOKEN;
+
+    // Override mock to include vpnConfig
+    const { getDownloadVpsConfig } = await import("../lib/vps-config.js");
+    const mockedGet = vi.mocked(getDownloadVpsConfig);
+    mockedGet.mockResolvedValueOnce({
+      apiBaseUrl: "http://localhost:4000",
+
+      s3AccessKey: "test-s3-key",
+      s3SecretKey: "test-s3-secret",
+      s3Endpoint: "https://hel1.s3.example.com",
+      s3Bucket: "test-bucket",
+      s3Region: "hel1",
+      nzbServiceUrl: "http://nzb.example.com",
+      dockerImage: "ghcr.io/test/downloader:latest",
+      usenetServers: [{ host: "news.example.com", username: "user", password: "pass" }],
+      vpnConfig: mockVpnConfig,
+    });
+
+    const { job } = await createTestJob();
+    const { plaintext, hash } = generateServiceToken();
+    await storeServiceToken(hash, job.id, "download");
+
+    const res = await request(app)
+      .get(`/service/jobs/${job.id}/bootstrap`)
+      .set("Authorization", `Bearer ${plaintext}`);
+
+    expect(res.status).toBe(200);
+    // vpnConfig is top-level, NOT inside config
+    expect(res.body.vpnConfig).toBeDefined();
+    expect(res.body.config.vpnConfig).toBeUndefined();
+    expect(res.body.vpnConfig.protocol).toBe("wireguard");
+    expect(res.body.vpnConfig.configBlob).toContain("[Interface]");
+    expect(res.body.vpnConfig.excludedCIDRs).toEqual(
+      expect.arrayContaining(["169.254.169.254/32", "10.0.0.0/8"]),
+    );
+  });
+
+  it("upload bootstrap with VPN returns vpnConfig as top-level field", async () => {
+    delete process.env.SERVICE_API_TOKEN;
+
+    const { getUploadVpsConfig } = await import("../lib/vps-config.js");
+    const mockedGet = vi.mocked(getUploadVpsConfig);
+    mockedGet.mockResolvedValueOnce({
+      apiBaseUrl: "http://localhost:4000",
+      s3AccessKey: "test-upload-s3-key",
+      s3SecretKey: "test-upload-s3-secret",
+      s3Endpoint: "https://hel1.s3.example.com",
+      s3Bucket: "test-upload-bucket",
+      nzbServiceUrl: "http://nzb.example.com",
+      nzbServiceToken: "test-nzb-token",
+      dockerImage: "ghcr.io/test/uploader:latest",
+      usenetProviders: [
+        { host: "news1.example.com", port: 563, username: "upuser1", password: "uppass1", ssl: true, connections: 20 },
+      ],
+      vpnConfig: mockVpnConfig,
+    });
+
+    const { job } = await createTestUploadJob();
+    const { plaintext, hash } = generateServiceToken();
+    await storeServiceToken(hash, job.id, "upload");
+
+    const res = await request(app)
+      .get(`/service/jobs/${job.id}/bootstrap`)
+      .set("Authorization", `Bearer ${plaintext}`);
+
+    expect(res.status).toBe(200);
+    // vpnConfig is top-level, NOT inside config
+    expect(res.body.vpnConfig).toBeDefined();
+    expect(res.body.config.vpnConfig).toBeUndefined();
+    expect(res.body.vpnConfig.protocol).toBe("wireguard");
+    expect(res.body.vpnConfig.excludedCIDRs).toBeInstanceOf(Array);
+  });
+
+  it("vpnConfig shape matches VpnConfigResolved", async () => {
+    delete process.env.SERVICE_API_TOKEN;
+
+    const { getDownloadVpsConfig } = await import("../lib/vps-config.js");
+    const mockedGet = vi.mocked(getDownloadVpsConfig);
+    mockedGet.mockResolvedValueOnce({
+      apiBaseUrl: "http://localhost:4000",
+
+      s3AccessKey: "test-s3-key",
+      s3SecretKey: "test-s3-secret",
+      s3Endpoint: "https://hel1.s3.example.com",
+      s3Bucket: "test-bucket",
+      s3Region: "hel1",
+      nzbServiceUrl: "http://nzb.example.com",
+      dockerImage: "ghcr.io/test/downloader:latest",
+      usenetServers: [{ host: "news.example.com", username: "user", password: "pass" }],
+      vpnConfig: mockVpnConfig,
+    });
+
+    const { job } = await createTestJob();
+    const { plaintext, hash } = generateServiceToken();
+    await storeServiceToken(hash, job.id, "download");
+
+    const res = await request(app)
+      .get(`/service/jobs/${job.id}/bootstrap`)
+      .set("Authorization", `Bearer ${plaintext}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.vpnConfig).toEqual(
+      expect.objectContaining({
+        providerId: expect.any(String),
+        providerName: expect.any(String),
+        protocol: expect.any(String),
+        configBlob: expect.any(String),
+        allowedIPs: expect.any(Array),
+        excludedCIDRs: expect.any(Array),
+      }),
+    );
+    // username/password should be present (even if null becomes absent in JSON)
+    expect(res.body.vpnConfig).toHaveProperty("protocol");
+    expect(res.body.vpnConfig).toHaveProperty("configBlob");
+    expect(res.body.vpnConfig).toHaveProperty("excludedCIDRs");
   });
 });
 

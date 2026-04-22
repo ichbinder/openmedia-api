@@ -8,7 +8,7 @@ import { searchTmdbMovie, searchTmdbMovieById, type TmdbMovieResult } from "../l
 import { markJobFailed } from "../lib/job-failure.js";
 import { computeReviewExpiresAt, computeInitialTmdbRetryAfter } from "../lib/review-config.js";
 import { storeNzbInService } from "../lib/nzb-service.js";
-import { getUploadVpsConfig } from "../lib/vps-config.js";
+import { getDownloadVpsConfig, getUploadVpsConfig } from "../lib/vps-config.js";
 import { generateServiceToken, storeServiceToken, deleteServiceTokens } from "../lib/service-token.js";
 
 const router = Router();
@@ -1576,21 +1576,6 @@ router.post("/jobs/:id/assign-movie", requireAuth, async (req: AuthRequest, res:
 // POST /downloads/jobs/:id/provision — create a VPS for a download job
 router.post("/jobs/:id/provision", requireAuth, async (req: AuthRequest, res: Response) => {
   try {
-    if (!isHetznerConfigured()) {
-      res.status(503).json({ error: "Hetzner Cloud API ist nicht konfiguriert." });
-      return;
-    }
-
-    // Validate required config before creating a VPS
-    const requiredEnvVars = ["S3_ACCESS_KEY", "S3_SECRET_KEY", "S3_ENDPOINT", "S3_BUCKET", "API_BASE_URL", "NZB_SERVICE_URL"];
-    const missingVars = requiredEnvVars.filter((v) => !process.env[v]);
-    if (missingVars.length > 0) {
-      res.status(503).json({
-        error: `Fehlende Konfiguration: ${missingVars.join(", ")}`,
-      });
-      return;
-    }
-
     const job = await prisma.downloadJob.findUnique({
       where: { id: String(req.params.id) },
       include: { nzbFile: { include: { movie: true } } },
@@ -1605,6 +1590,18 @@ router.post("/jobs/:id/provision", requireAuth, async (req: AuthRequest, res: Re
       res.status(422).json({
         error: `Job kann nur aus Status 'queued' provisioniert werden (aktuell: ${job.status}).`,
       });
+      return;
+    }
+
+    if (!isHetznerConfigured()) {
+      res.status(503).json({ error: "Hetzner Cloud API ist nicht konfiguriert." });
+      return;
+    }
+
+    // Resolve config from DB config store (K050: use centralized getDownloadVpsConfig)
+    const dlConfig = await getDownloadVpsConfig();
+    if (!dlConfig) {
+      res.status(503).json({ error: "Download-VPS-Konfiguration nicht verfügbar (DB config store)." });
       return;
     }
 
@@ -1631,14 +1628,6 @@ router.post("/jobs/:id/provision", requireAuth, async (req: AuthRequest, res: Re
       return;
     }
 
-    // Generate Cloud-Init script with service token (not user JWT)
-    // Build NZB URL pointing to the openmedia-nzb service (not this API)
-    const nzbServiceUrl = process.env.NZB_SERVICE_URL;
-    if (!nzbServiceUrl) {
-      res.status(503).json({ error: "NZB_SERVICE_URL ist nicht konfiguriert." });
-      return;
-    }
-
     const serverName = `dl-${job.id.slice(0, 8)}`;
 
     // Generate per-VPS service token
@@ -1649,10 +1638,11 @@ router.post("/jobs/:id/provision", requireAuth, async (req: AuthRequest, res: Re
 
     const cloudInit = generateCloudInit({
       jobId: job.id,
-      apiBaseUrl: process.env.API_BASE_URL!,
+      apiBaseUrl: dlConfig.apiBaseUrl,
       serviceToken: serviceTokenPlaintext,
-      dockerImage: process.env.DOWNLOADER_DOCKER_IMAGE || "ghcr.io/ichbinder/openmedia-downloader:latest",
+      dockerImage: dlConfig.dockerImage,
       serverName,
+      vpnConfig: dlConfig.vpnConfig,
     });
 
     const rawNetworkId = process.env.HETZNER_NETWORK_ID;
