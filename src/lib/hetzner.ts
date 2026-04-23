@@ -386,7 +386,11 @@ ${reconnectCmd}
 }
 
 health_check() {
-  curl -sf --interface "\$VPN_INTERFACE" --connect-timeout 5 "\${API_BASE_URL}/health" > /dev/null 2>&1
+  # Two-pronged check:
+  # 1. VPN tunnel is alive (external connectivity through VPN interface)
+  # 2. API is reachable (may go through private network, not through VPN)
+  curl -sf --interface "\$VPN_INTERFACE" --connect-timeout 5 "https://api.ipify.org" > /dev/null 2>&1 \\
+    && curl -sf --connect-timeout 5 "\${API_BASE_URL}/health" > /dev/null 2>&1
 }
 
 echo "[vpn-watchdog] Started — monitoring \$VPN_INTERFACE every \${CHECK_INTERVAL}s"
