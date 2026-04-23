@@ -210,7 +210,7 @@ describe("resolveVpnConfig", () => {
     expect(result).toBeNull();
   });
 
-  it("resolves WireGuard config with AllowedIPs replaced", async () => {
+  it("preserves original WireGuard config (AllowedIPs unchanged)", async () => {
     mockedGetVpnProviderById.mockResolvedValue({
       id: "wg-1",
       name: "WG Provider",
@@ -226,8 +226,11 @@ describe("resolveVpnConfig", () => {
     expect(result!.providerId).toBe("wg-1");
     expect(result!.providerName).toBe("WG Provider");
     expect(result!.protocol).toBe("wireguard");
-    // AllowedIPs should be replaced (not 0.0.0.0/0 since defaults are excluded)
-    expect(result!.configBlob).not.toContain("AllowedIPs = 0.0.0.0/0");
+    // AllowedIPs must stay as 0.0.0.0/0 — wg-quick needs it for policy routing.
+    // Bypass routes are handled via iptables kill-switch, not WireGuard AllowedIPs.
+    expect(result!.configBlob).toContain("AllowedIPs = 0.0.0.0/0");
+    expect(result!.configBlob).toBe(SAMPLE_WG_CONFIG);
+    // excludedCIDRs and allowedIPs are still computed for iptables rules
     expect(result!.allowedIPs.length).toBeGreaterThan(0);
     expect(result!.excludedCIDRs).toContain("169.254.169.254/32");
     expect(result!.excludedCIDRs).toContain("10.0.0.0/8");

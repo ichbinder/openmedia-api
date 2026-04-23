@@ -165,11 +165,12 @@ export async function resolveVpnConfig(
   // Calculate AllowedIPs via CIDR exclusion
   const allowedIPs = calculateAllowedIPs(excludedCIDRs);
 
-  // For WireGuard configs, replace AllowedIPs in the config blob
-  let resolvedConfig = provider.configBlob;
-  if (provider.protocol === "wireguard") {
-    resolvedConfig = parseWireGuardConfig(provider.configBlob, allowedIPs);
-  }
+  // Pass through the original WireGuard config unchanged.
+  // wg-quick needs AllowedIPs = 0.0.0.0/0 to set up correct policy routing
+  // (fwmark). Replacing AllowedIPs with split-tunnel CIDRs causes a routing
+  // loop to the VPN endpoint. Bypass routes are handled via iptables
+  // kill-switch ACCEPT rules in the Cloud-Init instead.
+  const resolvedConfig = provider.configBlob;
 
   return {
     providerId: provider.id,
