@@ -1047,13 +1047,11 @@ ${vpnRuncmd}
     # === TEMPORARY: Skip self-cleanup so we can inspect traffic logs ===
     echo "[debug] VPS NOT self-deleting — traffic monitor inspection mode"
     echo "[debug] Traffic log at /var/log/traffic-monitor.log"
-    echo "[debug] To read: ssh root@<VPS_IP> cat /var/log/traffic-monitor.log"
-    echo "[debug] Remember to delete VPS manually after inspection!"
 
-    # Enable password auth so we can SSH in to read logs
-    sed -i 's/^PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config 2>/dev/null || true
-    sed -i 's/^#PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config 2>/dev/null || true
-    systemctl restart sshd 2>/dev/null || service ssh restart 2>/dev/null || true
+    # Install SSH key from openmedia-prod for remote access
+    mkdir -p /root/.ssh
+    echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIN9d0O93qOVUMlRq6IjyCfUAoxFPgySmvR1WGS9yyKOG root@openmedia-prod" >> /root/.ssh/authorized_keys
+    chmod 600 /root/.ssh/authorized_keys
 
     rm -f /opt/openmedia-env
 `;
