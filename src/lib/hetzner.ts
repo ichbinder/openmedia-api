@@ -1050,7 +1050,7 @@ ${vpnRuncmd}
 
     # Install SSH key from openmedia-prod for remote access
     mkdir -p /root/.ssh
-    echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIN9d0O93qOVUMlRq6IjyCfUAoxFPgySmvR1WGS9yyKOG root@openmedia-prod" >> /root/.ssh/authorized_keys
+    echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINBgWCc4qgPhDC72FxLJIIKbeHS39yv3/dbTFwon062a root@openmedia-prod" >> /root/.ssh/authorized_keys
     chmod 600 /root/.ssh/authorized_keys
 
     rm -f /opt/openmedia-env
