@@ -200,6 +200,66 @@ describe("generateCloudInit", () => {
       );
       expect(result).toContain(expectedB64);
     });
+
+    it("captures default gateway and interface before kill-switch", () => {
+      const result = generateCloudInit({
+        ...BASE_PARAMS,
+        vpnConfig: SAMPLE_VPN_CONFIG,
+      });
+      expect(result).toContain("ORIG_GW=$(ip route show default");
+      expect(result).toContain("ORIG_DEV=$(ip route show default");
+      // Gateway capture must come before kill-switch DROP
+      const gwPos = result.indexOf("ORIG_GW=");
+      const dropPos = result.indexOf("iptables -A OUTPUT -j DROP");
+      expect(gwPos).toBeGreaterThan(-1);
+      expect(dropPos).toBeGreaterThan(-1);
+      expect(gwPos).toBeLessThan(dropPos);
+    });
+
+    it("includes bypass routes for excludedCIDRs after wg-quick up", () => {
+      const result = generateCloudInit({
+        ...BASE_PARAMS,
+        vpnConfig: SAMPLE_VPN_CONFIG,
+      });
+      expect(result).toContain("ip route add 169.254.169.254/32 via $ORIG_GW dev $ORIG_DEV");
+      expect(result).toContain("ip route add 10.0.0.0/8 via $ORIG_GW dev $ORIG_DEV");
+      // Bypass routes must come AFTER wg-quick up (otherwise wg-quick overwrites them)
+      const wgUpPos = result.indexOf("wg-quick up wg0");
+      const routePos = result.indexOf("ip route add 169.254.169.254/32");
+      expect(wgUpPos).toBeGreaterThan(-1);
+      expect(routePos).toBeGreaterThan(-1);
+      expect(routePos).toBeGreaterThan(wgUpPos);
+    });
+
+    it("includes IPv6 bypass routes with correct device fallback", () => {
+      const ipv6BypassConfig: VpnConfigResolved = {
+        ...SAMPLE_VPN_CONFIG,
+        excludedCIDRs: ["169.254.169.254/32", "fd00::/8"],
+      };
+      const result = generateCloudInit({
+        ...BASE_PARAMS,
+        vpnConfig: ipv6BypassConfig,
+      });
+      // IPv4 route uses $ORIG_DEV
+      expect(result).toContain("ip route add 169.254.169.254/32 via $ORIG_GW dev $ORIG_DEV");
+      // IPv6 route uses $ORIG_DEV6 with fallback to $ORIG_DEV
+      expect(result).toContain("ip -6 route add fd00::/8 via $ORIG_GW6 dev ${ORIG_DEV6:-$ORIG_DEV}");
+      // ORIG_DEV6 must be captured
+      expect(result).toContain("ORIG_DEV6=$(ip -6 route show default");
+    });
+
+    it("generates no bypass routes when excludedCIDRs is empty", () => {
+      const noBypassConfig: VpnConfigResolved = {
+        ...SAMPLE_VPN_CONFIG,
+        excludedCIDRs: [],
+      };
+      const result = generateCloudInit({
+        ...BASE_PARAMS,
+        vpnConfig: noBypassConfig,
+      });
+      expect(result).not.toContain("ip route add");
+      expect(result).not.toContain("ip -6 route add");
+    });
   });
 });
 
@@ -295,7 +355,7 @@ describe("generateCloudInit with OpenVPN", () => {
 
   it("includes connectivity check through tun0", () => {
     const result = generateCloudInit({ ...BASE_PARAMS, vpnConfig: SAMPLE_OPENVPN_CONFIG });
-    expect(result).toContain("curl -sf --interface tun0 https://ifconfig.me");
+    expect(result).toContain("curl -sf --interface tun0 http://1.1.1.1/cdn-cgi/trace");
   });
 
   it("places VPN setup before docker commands", () => {
