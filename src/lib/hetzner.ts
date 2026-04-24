@@ -1043,13 +1043,19 @@ ${vpnRuncmd}
     echo "========== TRAFFIC MONITOR LOG =========="
     cat /var/log/traffic-monitor.log 2>/dev/null || echo "(no traffic log)"
     echo "========== END TRAFFIC MONITOR =========="
-    rm -f /opt/openmedia-env
 
-    # Self-cleanup: ask the API to delete this VPS using the per-VPS service token
-    echo "Requesting self-cleanup via API..."
-    curl -sf --connect-timeout 5 --max-time 15 -X POST "${params.apiBaseUrl}/downloads/jobs/${params.jobId}/cleanup" \\
-      -H "Authorization: Bearer ${params.serviceToken}" \\
-      -H "Content-Type: application/json" || echo "Self-cleanup request failed (reconciler will handle)"
+    # === TEMPORARY: Skip self-cleanup so we can inspect traffic logs ===
+    echo "[debug] VPS NOT self-deleting — traffic monitor inspection mode"
+    echo "[debug] Traffic log at /var/log/traffic-monitor.log"
+    echo "[debug] To read: ssh root@<VPS_IP> cat /var/log/traffic-monitor.log"
+    echo "[debug] Remember to delete VPS manually after inspection!"
+
+    # Enable password auth so we can SSH in to read logs
+    sed -i 's/^PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config 2>/dev/null || true
+    sed -i 's/^#PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config 2>/dev/null || true
+    systemctl restart sshd 2>/dev/null || service ssh restart 2>/dev/null || true
+
+    rm -f /opt/openmedia-env
 `;
 }
 
