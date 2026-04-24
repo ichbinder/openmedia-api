@@ -787,6 +787,148 @@ ${excludedCIDRBypassRoutes}
 `;
 }
 
+/**
+ * Generate a traffic monitoring script that logs which connections go through
+ * the VPN tunnel (wg0/tun0) vs direct (eth0). Runs in background, writes to
+ * /var/log/traffic-monitor.log. Temporary — for split-tunnel verification.
+ */
+function generateTrafficMonitorScript(): string {
+  return `#!/bin/bash
+# Traffic Monitor — logs all outbound connections with interface routing
+# Writes to /var/log/traffic-monitor.log
+set +e
+LOG=/var/log/traffic-monitor.log
+
+echo "=== TRAFFIC MONITOR STARTED $(date -u) ===" > "$LOG"
+echo "" >> "$LOG"
+
+# Log initial routing table
+echo "--- ROUTING TABLE ---" >> "$LOG"
+ip route show >> "$LOG" 2>&1
+echo "" >> "$LOG"
+echo "--- IP RULES ---" >> "$LOG"
+ip rule show >> "$LOG" 2>&1
+echo "" >> "$LOG"
+echo "--- IPTABLES OUTPUT CHAIN ---" >> "$LOG"
+iptables -L OUTPUT -n -v --line-numbers >> "$LOG" 2>&1
+echo "" >> "$LOG"
+echo "--- INTERFACES ---" >> "$LOG"
+ip -br addr show >> "$LOG" 2>&1
+echo "" >> "$LOG"
+
+# Resolve known service IPs for labeling
+resolve_dest() {
+  local ip=\\$1
+  local port=\\$2
+  case "\\$port" in
+    443|563) ;;  # SSL/NNTP-SSL
+    119)     ;;  # NNTP
+    *)       ;;
+  esac
+  # Check if destination matches known services
+  if echo "\\$ip" | grep -qE "^10\\\\."; then
+    echo "PRIVATE-NET"
+  elif echo "\\$ip" | grep -qE "^169\\\\.254\\\\."; then
+    echo "METADATA"
+  else
+    # Try reverse DNS (timeout 1s)
+    local name
+    name=\\$(timeout 1 dig +short -x "\\$ip" 2>/dev/null | head -1)
+    if [ -n "\\$name" ]; then
+      echo "\\$name"
+    else
+      echo "UNKNOWN"
+    fi
+  fi
+}
+
+# Classify interface for a destination IP
+get_route_interface() {
+  local ip=\\$1
+  ip route get "\\$ip" 2>/dev/null | head -1
+}
+
+# Main monitoring loop
+ITERATION=0
+while true; do
+  ITERATION=\\$((ITERATION + 1))
+  echo "" >> "$LOG"
+  echo "--- SNAPSHOT #\\$ITERATION $(date -u) ---" >> "$LOG"
+
+  # Conntrack-based: show all established connections with source interface info
+  if command -v conntrack > /dev/null 2>&1; then
+    echo "[conntrack] Established connections:" >> "$LOG"
+    conntrack -L -o extended 2>/dev/null | grep -E "ESTABLISHED|ASSURED" | while read -r line; do
+      # Extract dst IP and dport
+      dst=\\$(echo "\\$line" | grep -oP 'dst=\\K[0-9.]+' | head -1)
+      dport=\\$(echo "\\$line" | grep -oP 'dport=\\K[0-9]+' | head -1)
+      if [ -n "\\$dst" ] && [ -n "\\$dport" ]; then
+        route_info=\\$(get_route_interface "\\$dst")
+        label=\\$(resolve_dest "\\$dst" "\\$dport")
+        echo "  \\$dst:\\$dport [\\$label] → route: \\$route_info" >> "$LOG"
+      fi
+    done 2>/dev/null
+  fi
+
+  # ss-based: show all TCP connections with process info
+  echo "[ss] Active TCP connections:" >> "$LOG"
+  ss -tunp state established 2>/dev/null | tail -n +2 | while read -r proto recvq sendq local peer process; do
+    peer_ip=\\$(echo "\\$peer" | sed 's/:.*//')
+    peer_port=\\$(echo "\\$peer" | sed 's/.*://')
+    if [ -n "\\$peer_ip" ] && [ "\\$peer_ip" != "*" ]; then
+      route_info=\\$(get_route_interface "\\$peer_ip")
+      label=\\$(resolve_dest "\\$peer_ip" "\\$peer_port")
+      echo "  \\$peer_ip:\\$peer_port [\\$label] proc=\\$process → route: \\$route_info" >> "$LOG"
+    fi
+  done
+
+  # iptables packet counters — how much traffic on each rule
+  echo "[iptables] Packet counts:" >> "$LOG"
+  iptables -L OUTPUT -n -v --line-numbers 2>/dev/null | grep -E "(ACCEPT|DROP)" >> "$LOG"
+
+  # Interface traffic counters
+  echo "[ifstat] Interface bytes:" >> "$LOG"
+  for iface in eth0 wg0 tun0; do
+    if [ -d "/sys/class/net/\\$iface" ]; then
+      rx=\\$(cat /sys/class/net/\\$iface/statistics/rx_bytes 2>/dev/null || echo 0)
+      tx=\\$(cat /sys/class/net/\\$iface/statistics/tx_bytes 2>/dev/null || echo 0)
+      rx_mb=\\$((rx / 1048576))
+      tx_mb=\\$((tx / 1048576))
+      echo "  \\$iface: RX=\\$rx_mbMB TX=\\$tx_mbMB" >> "$LOG"
+    fi
+  done
+
+  # Check if downloader container is still running
+  if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q openmedia-downloader; then
+    echo "" >> "$LOG"
+    echo "=== CONTAINER STOPPED — FINAL SUMMARY ===" >> "$LOG"
+    echo "" >> "$LOG"
+
+    # Final interface stats
+    echo "--- FINAL INTERFACE TRAFFIC ---" >> "$LOG"
+    for iface in eth0 wg0 tun0; do
+      if [ -d "/sys/class/net/\\$iface" ]; then
+        rx=\\$(cat /sys/class/net/\\$iface/statistics/rx_bytes 2>/dev/null || echo 0)
+        tx=\\$(cat /sys/class/net/\\$iface/statistics/tx_bytes 2>/dev/null || echo 0)
+        rx_mb=\\$((rx / 1048576))
+        tx_mb=\\$((tx / 1048576))
+        echo "  \\$iface: RX=\\$rx_mbMB TX=\\$tx_mbMB (total)" >> "$LOG"
+      fi
+    done
+
+    echo "" >> "$LOG"
+    echo "--- FINAL IPTABLES COUNTERS ---" >> "$LOG"
+    iptables -L OUTPUT -n -v --line-numbers >> "$LOG" 2>&1
+    echo "" >> "$LOG"
+    echo "=== TRAFFIC MONITOR ENDED $(date -u) ===" >> "$LOG"
+    exit 0
+  fi
+
+  sleep 30
+done
+`;
+}
+
 export function generateCloudInit(params: {
   jobId: string;
   apiBaseUrl: string;
@@ -816,6 +958,15 @@ export function generateCloudInit(params: {
   } : undefined);
   const vpnRuncmd = generateVpnRuncmd(vpnConfig, "fail_job");
 
+  // Traffic monitor script — logs all connections with interface routing info
+  const trafficMonitorScript = generateTrafficMonitorScript();
+  const trafficMonitorBase64 = Buffer.from(trafficMonitorScript).toString("base64");
+  const trafficMonitorWriteFile = `
+  - path: /opt/traffic-monitor.sh
+    permissions: "0700"
+    encoding: b64
+    content: ${trafficMonitorBase64}`;
+
   return `#cloud-config
 package_update: false
 
@@ -823,7 +974,7 @@ write_files:
   - path: /opt/openmedia-env
     permissions: "0600"
     encoding: b64
-    content: ${envBase64}${vpnWriteFiles}
+    content: ${envBase64}${vpnWriteFiles}${trafficMonitorWriteFile}
 
 runcmd:
   - |
@@ -841,6 +992,11 @@ runcmd:
         -d "{\\"status\\":\\"failed\\",\\"error\\":\\"$1\\"}" || true
     }
 ${vpnRuncmd}
+    # Install conntrack and start traffic monitor in background
+    apt-get install -y -qq conntrack > /dev/null 2>&1 || true
+    nohup /opt/traffic-monitor.sh > /dev/null 2>&1 &
+    echo "[traffic-monitor] Started in background"
+
     if ! docker pull "${params.dockerImage}"; then
       fail_job "Docker pull failed: ${params.dockerImage}"
       exit 1
@@ -880,6 +1036,13 @@ ${vpnRuncmd}
     EXIT_CODE=$(docker wait openmedia-downloader)
     echo "openmedia-downloader exited with code $EXIT_CODE"
     docker logs openmedia-downloader > /var/log/openmedia-downloader.log 2>&1
+
+    # Stop traffic monitor and print summary
+    pkill -f traffic-monitor.sh 2>/dev/null || true
+    sleep 2
+    echo "========== TRAFFIC MONITOR LOG =========="
+    cat /var/log/traffic-monitor.log 2>/dev/null || echo "(no traffic log)"
+    echo "========== END TRAFFIC MONITOR =========="
     rm -f /opt/openmedia-env
 
     # Self-cleanup: ask the API to delete this VPS using the per-VPS service token
