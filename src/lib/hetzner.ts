@@ -700,7 +700,8 @@ ${bypassRoutes}
       const isIPv6 = cidr.includes(":");
       const cmd = isIPv6 ? "ip -6 route add" : "ip route add";
       const gw = isIPv6 ? "$ORIG_GW6" : "$ORIG_GW";
-      return `    if ! ${cmd} ${cidr} via ${gw} dev $ORIG_DEV; then echo "[vpn] Warning: bypass route failed for ${cidr}"; fi`;
+      const dev = isIPv6 ? "${ORIG_DEV6:-$ORIG_DEV}" : "$ORIG_DEV";
+      return `    if ! ${cmd} ${cidr} via ${gw} dev ${dev}; then echo "[vpn] Warning: bypass route failed for ${cidr}"; fi`;
     })
     .join("\n");
 
@@ -718,6 +719,7 @@ ${bypassRoutes}
     ORIG_GW=$(ip route show default | awk '{print $3}')
     ORIG_DEV=$(ip route show default | awk '{print $5}')
     ORIG_GW6=$(ip -6 route show default 2>/dev/null | awk '{print $3}')
+    ORIG_DEV6=$(ip -6 route show default 2>/dev/null | awk '{print $5}')
     echo "[vpn] Default gateway: $ORIG_GW via $ORIG_DEV"
 
     # iptables kill-switch: DROP all non-VPN traffic (R014)

@@ -231,6 +231,23 @@ describe("generateCloudInit", () => {
       expect(routePos).toBeGreaterThan(wgUpPos);
     });
 
+    it("includes IPv6 bypass routes with correct device fallback", () => {
+      const ipv6BypassConfig: VpnConfigResolved = {
+        ...SAMPLE_VPN_CONFIG,
+        excludedCIDRs: ["169.254.169.254/32", "fd00::/8"],
+      };
+      const result = generateCloudInit({
+        ...BASE_PARAMS,
+        vpnConfig: ipv6BypassConfig,
+      });
+      // IPv4 route uses $ORIG_DEV
+      expect(result).toContain("ip route add 169.254.169.254/32 via $ORIG_GW dev $ORIG_DEV");
+      // IPv6 route uses $ORIG_DEV6 with fallback to $ORIG_DEV
+      expect(result).toContain("ip -6 route add fd00::/8 via $ORIG_GW6 dev ${ORIG_DEV6:-$ORIG_DEV}");
+      // ORIG_DEV6 must be captured
+      expect(result).toContain("ORIG_DEV6=$(ip -6 route show default");
+    });
+
     it("generates no bypass routes when excludedCIDRs is empty", () => {
       const noBypassConfig: VpnConfigResolved = {
         ...SAMPLE_VPN_CONFIG,
@@ -241,6 +258,7 @@ describe("generateCloudInit", () => {
         vpnConfig: noBypassConfig,
       });
       expect(result).not.toContain("ip route add");
+      expect(result).not.toContain("ip -6 route add");
     });
   });
 });
