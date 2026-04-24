@@ -583,7 +583,10 @@ export async function reconcileStaleJobs(): Promise<ReconcileResult> {
     }
 
     // ── Zombie VPS cleanup ──────────────────────────────────
-    if (isHetznerConfigured()) {
+    // TEMPORARY: skip zombie cleanup for traffic monitor debugging
+    if (process.env.SKIP_ZOMBIE_CLEANUP === "1") {
+      console.log("[reconciler] Zombie cleanup SKIPPED (SKIP_ZOMBIE_CLEANUP=1)");
+    } else if (isHetznerConfigured()) {
       try {
         const servers = await listServers("purpose=openmedia-download");
 
