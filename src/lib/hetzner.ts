@@ -692,6 +692,18 @@ ${bypassRoutes}
     })
     .join("\n");
 
+  // Build bypass routes for excludedCIDRs — route them via original gateway
+  // instead of through the WireGuard tunnel. Without these, wg-quick's fwmark
+  // policy routing (table 51820) sends ALL traffic through wg0.
+  const excludedCIDRBypassRoutes = vpnConfig.excludedCIDRs
+    .map((cidr) => {
+      const isIPv6 = cidr.includes(":");
+      const cmd = isIPv6 ? "ip -6 route add" : "ip route add";
+      const gw = isIPv6 ? "$ORIG_GW6" : "$ORIG_GW";
+      return `    if ! ${cmd} ${cidr} via ${gw} dev $ORIG_DEV; then echo "[vpn] Warning: bypass route failed for ${cidr}"; fi`;
+    })
+    .join("\n");
+
   return `
     # ── VPN Setup (WireGuard + Kill-Switch) ──────────────────────────
     echo "[vpn] Updating package lists..."
@@ -701,6 +713,12 @@ ${bypassRoutes}
       ${failJobRef} "VPN setup failed: apt install wireguard-tools timed out or failed"
       exit 1
     fi
+
+    # Capture default gateway and interface before wg-quick overwrites routing
+    ORIG_GW=$(ip route show default | awk '{print $3}')
+    ORIG_DEV=$(ip route show default | awk '{print $5}')
+    ORIG_GW6=$(ip -6 route show default 2>/dev/null | awk '{print $3}')
+    echo "[vpn] Default gateway: $ORIG_GW via $ORIG_DEV"
 
     # iptables kill-switch: DROP all non-VPN traffic (R014)
     # Allow loopback
@@ -737,6 +755,10 @@ ${excludedCIDRAcceptRules}
     fi
 
     echo "[vpn] WireGuard tunnel up"
+
+    # Bypass routes: route excludedCIDRs via original gateway (not through wg0)
+    # Without these, wg-quick's fwmark policy routing sends ALL traffic through the tunnel.
+${excludedCIDRBypassRoutes}
 
     # Verify VPN connectivity — use IP-based check (DNS may not resolve yet through tunnel)
     sleep 3

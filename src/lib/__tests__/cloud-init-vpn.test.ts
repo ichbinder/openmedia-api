@@ -200,6 +200,48 @@ describe("generateCloudInit", () => {
       );
       expect(result).toContain(expectedB64);
     });
+
+    it("captures default gateway and interface before kill-switch", () => {
+      const result = generateCloudInit({
+        ...BASE_PARAMS,
+        vpnConfig: SAMPLE_VPN_CONFIG,
+      });
+      expect(result).toContain("ORIG_GW=$(ip route show default");
+      expect(result).toContain("ORIG_DEV=$(ip route show default");
+      // Gateway capture must come before kill-switch DROP
+      const gwPos = result.indexOf("ORIG_GW=");
+      const dropPos = result.indexOf("iptables -A OUTPUT -j DROP");
+      expect(gwPos).toBeGreaterThan(-1);
+      expect(dropPos).toBeGreaterThan(-1);
+      expect(gwPos).toBeLessThan(dropPos);
+    });
+
+    it("includes bypass routes for excludedCIDRs after wg-quick up", () => {
+      const result = generateCloudInit({
+        ...BASE_PARAMS,
+        vpnConfig: SAMPLE_VPN_CONFIG,
+      });
+      expect(result).toContain("ip route add 169.254.169.254/32 via $ORIG_GW dev $ORIG_DEV");
+      expect(result).toContain("ip route add 10.0.0.0/8 via $ORIG_GW dev $ORIG_DEV");
+      // Bypass routes must come AFTER wg-quick up (otherwise wg-quick overwrites them)
+      const wgUpPos = result.indexOf("wg-quick up wg0");
+      const routePos = result.indexOf("ip route add 169.254.169.254/32");
+      expect(wgUpPos).toBeGreaterThan(-1);
+      expect(routePos).toBeGreaterThan(-1);
+      expect(routePos).toBeGreaterThan(wgUpPos);
+    });
+
+    it("generates no bypass routes when excludedCIDRs is empty", () => {
+      const noBypassConfig: VpnConfigResolved = {
+        ...SAMPLE_VPN_CONFIG,
+        excludedCIDRs: [],
+      };
+      const result = generateCloudInit({
+        ...BASE_PARAMS,
+        vpnConfig: noBypassConfig,
+      });
+      expect(result).not.toContain("ip route add");
+    });
   });
 });
 
@@ -295,7 +337,7 @@ describe("generateCloudInit with OpenVPN", () => {
 
   it("includes connectivity check through tun0", () => {
     const result = generateCloudInit({ ...BASE_PARAMS, vpnConfig: SAMPLE_OPENVPN_CONFIG });
-    expect(result).toContain("curl -sf --interface tun0 https://ifconfig.me");
+    expect(result).toContain("curl -sf --interface tun0 http://1.1.1.1/cdn-cgi/trace");
   });
 
   it("places VPN setup before docker commands", () => {
