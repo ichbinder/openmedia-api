@@ -86,6 +86,7 @@ router.get("/jobs/:id/bootstrap", async (req: AuthRequest, res: Response) => {
           usenetServers: config.usenetServers,
         },
         vpnConfig: config.vpnConfig ?? undefined,
+        routingPolicy: config.routingPolicy ?? undefined,
       });
       return;
     }
@@ -137,10 +138,177 @@ router.get("/jobs/:id/bootstrap", async (req: AuthRequest, res: Response) => {
         usenetProviders: uploadConfig.usenetProviders,
       },
       vpnConfig: uploadConfig.vpnConfig ?? undefined,
+      routingPolicy: uploadConfig.routingPolicy ?? undefined,
     });
   } catch (err) {
     console.error("[service-api] Bootstrap error:", err);
     res.status(500).json({ error: "Bootstrap failed." });
+  }
+});
+
+// ─── VPS Event Reporting ─────────────────────────────────────────────
+
+const VALID_EVENT_TYPES = ["routing_anomaly", "vpn_down", "vpn_reconnect", "watchdog", "bootstrap"] as const;
+const VALID_SEVERITIES = ["info", "warning", "critical"] as const;
+
+/**
+ * POST /service/jobs/:id/events
+ *
+ * Reports a VPS runtime event (routing anomaly, watchdog status, etc.).
+ * The VPS calls this to log events that are persisted in the VpsEvent table.
+ */
+router.post("/jobs/:id/events", async (req: AuthRequest, res: Response) => {
+  try {
+    const requestedJobId = String(req.params.id);
+
+    // Scoped access: legacy static tokens are never allowed for event reporting.
+    // A legacy token has no jobId and cannot be scoped to a specific job,
+    // so it would silently have write access to any job's events — reject it.
+    if (!req.serviceToken) {
+      console.log(`[vps-event] Legacy static token rejected for event POST on job ${requestedJobId} — per-job token required`);
+      res.status(401).json({ error: "Per-job service token required for event reporting." });
+      return;
+    }
+    if (req.serviceToken.jobId !== requestedJobId) {
+      console.log(
+        `[vps-event] Token scoped to job ${req.serviceToken.jobId} tried to post event for job ${requestedJobId}`,
+      );
+      res.status(401).json({ error: "Token not authorized for this job." });
+      return;
+    }
+
+    const { eventType, severity, details } = req.body;
+
+    // Validate details payload size (max 64 KB serialized)
+    if (details) {
+      const serialized = JSON.stringify(details);
+      if (serialized.length > 65_536) {
+        res.status(400).json({
+          error: "details payload too large (max 64 KB)",
+        });
+        return;
+      }
+    }
+
+    // Validate eventType
+    if (!eventType || !VALID_EVENT_TYPES.includes(eventType)) {
+      res.status(400).json({
+        error: `Invalid eventType. Must be one of: ${VALID_EVENT_TYPES.join(", ")}`,
+      });
+      return;
+    }
+
+    // Validate severity (optional, defaults to 'warning')
+    const sev = severity ?? "warning";
+    if (!VALID_SEVERITIES.includes(sev)) {
+      res.status(400).json({
+        error: `Invalid severity. Must be one of: ${VALID_SEVERITIES.join(", ")}`,
+      });
+      return;
+    }
+
+    // Determine job type by looking up both tables
+    let jobType: string | null = null;
+    const downloadJob = await prisma.downloadJob.findUnique({
+      where: { id: requestedJobId },
+      select: { id: true },
+    });
+    if (downloadJob) {
+      jobType = "download";
+    } else {
+      const uploadJob = await prisma.uploadJob.findUnique({
+        where: { id: requestedJobId },
+        select: { id: true },
+      });
+      if (uploadJob) {
+        jobType = "upload";
+      }
+    }
+
+    if (!jobType) {
+      res.status(404).json({ error: "Job not found." });
+      return;
+    }
+
+    const event = await prisma.vpsEvent.create({
+      data: {
+        ...(jobType === "download"
+          ? { downloadJobId: requestedJobId }
+          : { uploadJobId: requestedJobId }),
+        jobType,
+        eventType,
+        severity: sev,
+        details: details || {},
+      },
+    });
+
+    if (sev === "critical") {
+      console.error(`[vps-event] CRITICAL ${eventType} for ${jobType} job ${requestedJobId}`);
+    } else {
+      console.log(`[vps-event] ${sev} ${eventType} for ${jobType} job ${requestedJobId}`);
+    }
+
+    res.status(201).json({ id: event.id });
+  } catch (err) {
+    console.error("[vps-event] Error:", err);
+    res.status(500).json({ error: "Failed to record event." });
+  }
+});
+
+/**
+ * GET /service/jobs/:id/events
+ *
+ * Returns VPS events for a job. Supports ?limit=N (default 50) and ?eventType=... filter.
+ */
+router.get("/jobs/:id/events", async (req: AuthRequest, res: Response) => {
+  try {
+    const requestedJobId = String(req.params.id);
+
+    // Scoped access: legacy static tokens are never allowed for event reads.
+    // Without a jobId in the token there is no way to scope access to a single job.
+    if (!req.serviceToken) {
+      console.log(`[vps-event] Legacy static token rejected for event GET on job ${requestedJobId} — per-job token required`);
+      res.status(401).json({ error: "Per-job service token required for event access." });
+      return;
+    }
+    if (req.serviceToken.jobId !== requestedJobId) {
+      console.log(
+        `[vps-event] Token scoped to job ${req.serviceToken.jobId} tried to read events for job ${requestedJobId}`,
+      );
+      res.status(401).json({ error: "Token not authorized for this job." });
+      return;
+    }
+
+    const parsed = parseInt(String(req.query.limit || "50"), 10);
+    if (!Number.isNaN(parsed) && parsed <= 0) {
+      res.status(400).json({ error: "limit must be greater than 0." });
+      return;
+    }
+    const limit = Number.isNaN(parsed) ? 50 : Math.min(parsed, 200);
+    const eventTypeFilter = req.query.eventType ? String(req.query.eventType) : undefined;
+    if (eventTypeFilter && !(VALID_EVENT_TYPES as readonly string[]).includes(eventTypeFilter)) {
+      res.status(400).json({
+        error: `Invalid eventType filter. Must be one of: ${VALID_EVENT_TYPES.join(", ")}`,
+      });
+      return;
+    }
+
+    const events = await prisma.vpsEvent.findMany({
+      where: {
+        OR: [
+          { downloadJobId: requestedJobId },
+          { uploadJobId: requestedJobId },
+        ],
+        ...(eventTypeFilter ? { eventType: eventTypeFilter } : {}),
+      },
+      orderBy: { createdAt: "desc" },
+      take: limit,
+    });
+
+    res.json({ events });
+  } catch (err) {
+    console.error("[vps-event] Error:", err);
+    res.status(500).json({ error: "Failed to fetch events." });
   }
 });
 

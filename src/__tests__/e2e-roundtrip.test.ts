@@ -229,6 +229,7 @@ describe("E2E roundtrip: download → upload → cleanup", () => {
         { host: "news.example.com", username: "user", password: "pass" },
       ],
       vpnConfig: mockVpnConfig,
+      routingPolicy: null,
     });
     // Called twice: once during auto-upload provisioning (downloads.ts),
     // once during upload bootstrap (service-api.ts)
@@ -253,6 +254,7 @@ describe("E2E roundtrip: download → upload → cleanup", () => {
         },
       ],
       vpnConfig: mockVpnConfig,
+      routingPolicy: null,
     };
     vi.mocked(getUploadVpsConfig)
       .mockResolvedValueOnce(uploadConfigWithVpn)

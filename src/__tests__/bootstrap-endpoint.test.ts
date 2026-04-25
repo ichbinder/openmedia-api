@@ -447,6 +447,7 @@ describe("Bootstrap with VPN config", () => {
       dockerImage: "ghcr.io/test/downloader:latest",
       usenetServers: [{ host: "news.example.com", username: "user", password: "pass" }],
       vpnConfig: mockVpnConfig,
+      routingPolicy: null,
     });
 
     const { job } = await createTestJob();
@@ -486,6 +487,7 @@ describe("Bootstrap with VPN config", () => {
         { host: "news1.example.com", port: 563, username: "upuser1", password: "uppass1", ssl: true, connections: 20 },
       ],
       vpnConfig: mockVpnConfig,
+      routingPolicy: null,
     });
 
     const { job } = await createTestUploadJob();
@@ -521,6 +523,7 @@ describe("Bootstrap with VPN config", () => {
       dockerImage: "ghcr.io/test/downloader:latest",
       usenetServers: [{ host: "news.example.com", username: "user", password: "pass" }],
       vpnConfig: mockVpnConfig,
+      routingPolicy: null,
     });
 
     const { job } = await createTestJob();

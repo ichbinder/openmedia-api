@@ -179,6 +179,7 @@ model DownloadJob {
   // Relations
   nzbFile   NzbFile @relation(fields: [nzbFileId], references: [id], onDelete: Cascade)
   nzbFileId String  @map("nzb_file_id")
+  vpsEvents VpsEvent[]
 
   @@index([nzbFileId])
   @@index([status])
@@ -214,6 +215,7 @@ model UploadJob {
   // Relations
   nzbFile   NzbFile @relation(fields: [nzbFileId], references: [id], onDelete: Cascade)
   nzbFileId String  @map("nzb_file_id")
+  vpsEvents VpsEvent[]
 
   @@index([nzbFileId])
   @@index([status])
@@ -342,6 +344,29 @@ model ConfigHistory {
   @@index([createdAt])
   @@index([categoryName, entryKey, createdAt])
   @@map("config_history")
+}
+
+// ─── VPS Runtime Events ──────────────────────────────────────────────
+
+model VpsEvent {
+  id              String   @id @default(uuid())
+  downloadJobId   String?  @map("download_job_id")
+  uploadJobId     String?  @map("upload_job_id")
+  jobType         String   @map("job_type")             // 'download' | 'upload'
+  eventType       String   @map("event_type")            // 'routing_anomaly' | 'vpn_down' | 'vpn_reconnect' | 'watchdog' | 'bootstrap'
+  severity        String   @default("warning")           // 'info' | 'warning' | 'critical'
+  details         Json                                    // structured event payload (interface, expected, actual, etc.)
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  // FK relations — cascade delete when the parent job is removed
+  downloadJob     DownloadJob? @relation(fields: [downloadJobId], references: [id], onDelete: Cascade)
+  uploadJob       UploadJob?   @relation(fields: [uploadJobId], references: [id], onDelete: Cascade)
+
+  @@index([downloadJobId, createdAt])
+  @@index([uploadJobId, createdAt])
+  @@index([downloadJobId, eventType, createdAt])
+  @@index([uploadJobId, eventType, createdAt])
+  @@map("vps_events")
 }
 
 // ─── Usenet Provider Store ──────────────────────────────────────────
