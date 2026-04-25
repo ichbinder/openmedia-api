@@ -8,6 +8,7 @@ import { Router, type Response } from "express";
 import { requireAuth, requireAdmin, requireServiceToken, type AuthRequest } from "../middleware/auth.js";
 import { isEncryptionConfigured } from "../lib/crypto.js";
 import prisma from "../lib/prisma.js";
+import type { Prisma } from "../../generated/client/index.js";
 import {
   listCategories,
   getEntriesByCategory,
@@ -699,10 +700,11 @@ router.get("/vps-events", requireAuth, requireAdmin, async (req: AuthRequest, re
     // ── Validate offset ───────────────────────────────────────────────
     const rawOffset = req.query.offset;
     let offset = 0;
+    const MAX_OFFSET = 1_000_000;
     if (rawOffset !== undefined) {
       const parsed = Number(rawOffset);
-      if (!Number.isInteger(parsed) || parsed < 0) {
-        res.status(400).json({ error: "offset must be a non-negative integer." });
+      if (!Number.isInteger(parsed) || parsed < 0 || parsed > MAX_OFFSET) {
+        res.status(400).json({ error: `offset must be an integer between 0 and ${MAX_OFFSET}.` });
         return;
       }
       offset = parsed;
@@ -721,9 +723,22 @@ router.get("/vps-events", requireAuth, requireAdmin, async (req: AuthRequest, re
       return;
     }
 
-    const eventType = req.query.eventType as string | undefined;
+    const VALID_EVENT_TYPES = ["routing_anomaly", "vpn_down", "vpn_reconnect", "watchdog", "bootstrap"] as const;
+    const rawEventType = req.query.eventType;
+    let eventType: string | undefined;
+    if (rawEventType !== undefined) {
+      if (typeof rawEventType !== "string" || !rawEventType.trim()) {
+        res.status(400).json({ error: "eventType must be a non-empty string." });
+        return;
+      }
+      if (!(VALID_EVENT_TYPES as readonly string[]).includes(rawEventType)) {
+        res.status(400).json({ error: `eventType must be one of: ${VALID_EVENT_TYPES.join(", ")}.` });
+        return;
+      }
+      eventType = rawEventType;
+    }
 
-    const where: Record<string, unknown> = {};
+    const where: Prisma.VpsEventWhereInput = {};
     if (jobType) where.jobType = jobType;
     if (eventType) where.eventType = eventType;
     if (severity) where.severity = severity;

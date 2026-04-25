@@ -349,7 +349,12 @@ set -uo pipefail
 
 CHECK_INTERVAL=10
 POLICY_FILE="/opt/routing-policy.json"
+VPN_INTERFACE_FILE="/opt/vpn-interface"
 SEEN_WORKLOAD=0
+
+# VPN_INTERFACE may not be set when the guard starts (VPN setup runs after launch).
+# Fall back to empty string; the loop refreshes it from $VPN_INTERFACE_FILE.
+VPN_INTERFACE="\${VPN_INTERFACE:-}"
 
 report_event() {
   local event_type="\$1" severity="\$2" details="\$3"
@@ -440,6 +445,11 @@ PYEOF
 
 while true; do
   sleep "\$CHECK_INTERVAL"
+
+  # Refresh VPN_INTERFACE from file written by bootstrap after VPN setup
+  if [ -z "\$VPN_INTERFACE" ] && [ -f "\$VPN_INTERFACE_FILE" ]; then
+    VPN_INTERFACE=\$(cat "\$VPN_INTERFACE_FILE")
+  fi
 
   # Exit when workload containers stop (same logic as watchdog)
   if docker ps --format '{{.Names}}' 2>/dev/null | grep -q .; then
@@ -602,7 +612,7 @@ ${generateTrafficGuardScript()}
 TRAFFIC_GUARD_EOF
 
   chmod 700 /opt/traffic-guard.sh
-  export JOB_ID
+  export JOB_ID API_BASE_URL SERVICE_TOKEN
   nohup /opt/traffic-guard.sh > /var/log/traffic-guard.log 2>&1 &
   echo "[bootstrap] Traffic Guard started"
 else
@@ -680,6 +690,11 @@ else
 
   VPN_INTERFACE="wg0"
 fi
+
+# Write VPN_INTERFACE to file so Traffic Guard can pick it up (it may have
+# started before VPN setup completed and cannot inherit this variable yet)
+echo "\$VPN_INTERFACE" > /opt/vpn-interface
+chmod 600 /opt/vpn-interface
 
 # ── Capture default gateways before VPN overwrites routing ────────────
 ORIG_GW=$(ip route show default | awk '{print \$3}')
