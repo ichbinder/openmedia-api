@@ -344,6 +344,23 @@ model ConfigHistory {
   @@map("config_history")
 }
 
+// ─── VPS Runtime Events ──────────────────────────────────────────────
+
+model VpsEvent {
+  id        String   @id @default(uuid())
+  jobId     String   @map("job_id")
+  jobType   String   @map("job_type")             // 'download' | 'upload'
+  eventType String   @map("event_type")            // 'routing_anomaly' | 'vpn_down' | 'vpn_reconnect' | 'watchdog' | 'bootstrap'
+  severity  String   @default("warning")           // 'info' | 'warning' | 'critical'
+  details   Json                                    // structured event payload (interface, expected, actual, etc.)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([jobId])
+  @@index([jobType, createdAt])
+  @@index([eventType, createdAt])
+  @@map("vps_events")
+}
+
 // ─── Usenet Provider Store ──────────────────────────────────────────
 
 model UsenetProvider {

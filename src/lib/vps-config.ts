@@ -15,6 +15,20 @@ import { resolveVpnConfig, type VpnConfigResolved, type VpnBypassEntry } from ".
 
 // ─── Types ────────────────────────────────────────────────────────────
 
+/** A host+port pair that MUST be routed through the VPN tunnel */
+export interface MustVpnTarget {
+  host: string;
+  port: number;
+}
+
+/** Traffic routing policy for the VPS traffic guard */
+export interface RoutingPolicy {
+  /** Connections that MUST go through VPN (wg0/tun0) — usenet hosts */
+  mustVpn: MustVpnTarget[];
+  /** CIDRs that MUST go directly (eth0) — S3, API, metadata, private net */
+  mustDirect: string[];
+}
+
 export interface DownloadVpsConfig {
   apiBaseUrl: string;
   s3AccessKey: string;
@@ -26,6 +40,7 @@ export interface DownloadVpsConfig {
   dockerImage: string;
   usenetServers: UsenetServer[];
   vpnConfig: VpnConfigResolved | null;
+  routingPolicy: RoutingPolicy | null;
 }
 
 export interface UploadVpsConfig {
@@ -39,6 +54,7 @@ export interface UploadVpsConfig {
   dockerImage: string;
   usenetProviders: UploadProvider[];
   vpnConfig: VpnConfigResolved | null;
+  routingPolicy: RoutingPolicy | null;
 }
 
 // ─── Download VPS Config ──────────────────────────────────────────────
@@ -83,6 +99,12 @@ export async function getDownloadVpsConfig(): Promise<DownloadVpsConfig | null> 
       // Resolve VPN config from vpn/downloadVpnProviderId config key
       const vpnConfig = await resolveVpnForProfile("downloadVpnProviderId");
 
+      // Build routing policy for traffic guard
+      const routingPolicy = buildRoutingPolicy(
+        usenetServers.map((s) => ({ host: s.host, port: s.port ?? 563 })),
+        vpnConfig?.excludedCIDRs ?? null,
+      );
+
       console.log(`[vps-config] Download config loaded from DB (${Object.keys(dbConfig).length} categories, vpn: ${vpnConfig ? "yes" : "no"})`);
       return {
         apiBaseUrl: runtime.api_base_url || "",
@@ -95,6 +117,7 @@ export async function getDownloadVpsConfig(): Promise<DownloadVpsConfig | null> 
         dockerImage: docker.downloader || "ghcr.io/ichbinder/openmedia-downloader:latest",
         usenetServers,
         vpnConfig,
+        routingPolicy,
       };
     }
   } catch (err) {
@@ -148,6 +171,12 @@ export async function getUploadVpsConfig(): Promise<UploadVpsConfig | null> {
       // Resolve VPN config from vpn/uploadVpnProviderId config key
       const vpnConfig = await resolveVpnForProfile("uploadVpnProviderId");
 
+      // Build routing policy for traffic guard
+      const routingPolicy = buildRoutingPolicy(
+        providers.map((p) => ({ host: p.host, port: p.port })),
+        vpnConfig?.excludedCIDRs ?? null,
+      );
+
       return {
         apiBaseUrl: runtime.api_base_url || "",
         s3AccessKey: s3.access_key || "",
@@ -159,6 +188,7 @@ export async function getUploadVpsConfig(): Promise<UploadVpsConfig | null> {
         dockerImage: docker.uploader || "ghcr.io/ichbinder/openmedia-uploader:latest",
         usenetProviders: providers,
         vpnConfig,
+        routingPolicy,
       };
     }
   } catch (err) {
@@ -239,4 +269,20 @@ function hasRequiredUploadKeys(config: Record<string, Record<string, string>>): 
     nzb && nzb.url && nzb.token &&
     docker && docker.uploader &&
     runtime && runtime.api_base_url);
+}
+
+/**
+ * Build a routing policy from usenet targets and VPN bypass CIDRs.
+ * Returns null if no VPN config is present (no split-tunnel to enforce).
+ */
+function buildRoutingPolicy(
+  usenetTargets: MustVpnTarget[],
+  excludedCIDRs: string[] | null,
+): RoutingPolicy | null {
+  if (!excludedCIDRs) return null;
+
+  return {
+    mustVpn: usenetTargets,
+    mustDirect: excludedCIDRs,
+  };
 }
