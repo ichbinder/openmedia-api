@@ -725,13 +725,14 @@ router.get("/vps-events", requireAuth, requireAdmin, async (req: AuthRequest, re
       return;
     }
 
+    const VALID_SEVERITIES = ["info", "warning", "error", "critical"] as const;
     const severity = req.query.severity as string | undefined;
-    if (severity !== undefined && !["info", "warning", "critical"].includes(severity)) {
-      res.status(400).json({ error: 'severity must be "info", "warning", or "critical".' });
+    if (severity !== undefined && !(VALID_SEVERITIES as readonly string[]).includes(severity)) {
+      res.status(400).json({ error: `severity must be one of: ${VALID_SEVERITIES.join(", ")}.` });
       return;
     }
 
-    const VALID_EVENT_TYPES = ["routing_anomaly", "vpn_down", "vpn_reconnect", "watchdog", "bootstrap"] as const;
+    const VALID_EVENT_TYPES = ["routing_anomaly", "routing_verified", "vpn_down", "vpn_reconnect", "vpn_reconnect_failed", "watchdog", "bootstrap", "bootstrap_complete"] as const;
     const rawEventType = req.query.eventType;
     let eventType: string | undefined;
     if (rawEventType !== undefined) {
