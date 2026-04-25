@@ -352,10 +352,13 @@ describe("generateCloudInit (dynamic bootstrap)", () => {
     expect(decoded).toContain("/service/jobs/${JOB_ID}/bootstrap");
   });
 
-  it("runcmd runs bootstrap.sh (jq installed inside bootstrap)", () => {
+  it("runcmd installs jq before bootstrap.sh", () => {
     const result = generateCloudInit({ ...BASE_PARAMS });
-    expect(result).not.toContain("apt-get install -y jq");
+    expect(result).toContain("apt-get install -y jq");
     expect(result).toContain("/opt/bootstrap.sh || exit 1");
+    const jqPos = result.indexOf("apt-get install -y jq");
+    const bootstrapPos = result.indexOf("/opt/bootstrap.sh || exit 1");
+    expect(jqPos).toBeLessThan(bootstrapPos);
   });
 
   it("does NOT contain static VPN configs in write_files", () => {
@@ -433,10 +436,13 @@ describe("generateUploadCloudInit (dynamic bootstrap)", () => {
     expect(result).not.toContain("/etc/openvpn/client.conf");
   });
 
-  it("runcmd runs bootstrap.sh (jq installed inside bootstrap)", () => {
+  it("runcmd installs jq before bootstrap.sh", () => {
     const result = generateUploadCloudInit({ ...UPLOAD_PARAMS });
-    expect(result).not.toContain("apt-get install -y jq");
+    expect(result).toContain("apt-get install -y jq");
     expect(result).toContain("/opt/bootstrap.sh || exit 1");
+    const jqPos = result.indexOf("apt-get install -y jq");
+    const bootstrapPos = result.indexOf("/opt/bootstrap.sh || exit 1");
+    expect(jqPos).toBeLessThan(bootstrapPos);
   });
 
   it("places bootstrap before docker commands", () => {

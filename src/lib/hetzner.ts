@@ -959,6 +959,7 @@ write_files:
     content: ${bootstrapBase64}
 
 runcmd:
+  - apt-get update -qq && apt-get install -y jq > /dev/null 2>&1
   - |
     set -e
 
@@ -1095,6 +1096,7 @@ write_files:
     content: ${bootstrapBase64}
 
 runcmd:
+  - apt-get update -qq && apt-get install -y jq > /dev/null 2>&1
   - |
     set -e
 
