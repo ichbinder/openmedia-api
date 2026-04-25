@@ -216,7 +216,9 @@ router.post("/jobs/:id/events", async (req: AuthRequest, res: Response) => {
 
     const event = await prisma.vpsEvent.create({
       data: {
-        jobId: requestedJobId,
+        ...(jobType === "download"
+          ? { downloadJobId: requestedJobId }
+          : { uploadJobId: requestedJobId }),
         jobType,
         eventType,
         severity: sev,
@@ -225,7 +227,7 @@ router.post("/jobs/:id/events", async (req: AuthRequest, res: Response) => {
     });
 
     if (sev === "critical") {
-      console.error(`[vps-event] CRITICAL ${eventType} for ${jobType} job ${requestedJobId}:`, details);
+      console.error(`[vps-event] CRITICAL ${eventType} for ${jobType} job ${requestedJobId}`);
     } else {
       console.log(`[vps-event] ${sev} ${eventType} for ${jobType} job ${requestedJobId}`);
     }
@@ -258,12 +260,19 @@ router.get("/jobs/:id/events", async (req: AuthRequest, res: Response) => {
     }
 
     const parsed = parseInt(String(req.query.limit || "50"), 10);
+    if (!Number.isNaN(parsed) && parsed <= 0) {
+      res.status(400).json({ error: "limit must be greater than 0." });
+      return;
+    }
     const limit = Number.isNaN(parsed) ? 50 : Math.min(parsed, 200);
     const eventTypeFilter = req.query.eventType ? String(req.query.eventType) : undefined;
 
     const events = await prisma.vpsEvent.findMany({
       where: {
-        jobId: requestedJobId,
+        OR: [
+          { downloadJobId: requestedJobId },
+          { uploadJobId: requestedJobId },
+        ],
         ...(eventTypeFilter ? { eventType: eventTypeFilter } : {}),
       },
       orderBy: { createdAt: "desc" },

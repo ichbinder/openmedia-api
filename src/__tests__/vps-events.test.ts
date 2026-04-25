@@ -142,7 +142,7 @@ describe("VPS Events + Routing Policy", () => {
     // Verify in DB
     const event = await prisma.vpsEvent.findUnique({ where: { id: res.body.id } });
     expect(event).not.toBeNull();
-    expect(event!.jobId).toBe(job.id);
+    expect(event!.downloadJobId).toBe(job.id);
     expect(event!.jobType).toBe("download");
     expect(event!.eventType).toBe("routing_anomaly");
     expect(event!.severity).toBe("critical");
@@ -257,9 +257,9 @@ describe("VPS Events + Routing Policy", () => {
     // Create some events
     await prisma.vpsEvent.createMany({
       data: [
-        { jobId: job.id, jobType: "download", eventType: "bootstrap", severity: "info", details: { phase: "started" } },
-        { jobId: job.id, jobType: "download", eventType: "watchdog", severity: "info", details: { vpn: "up" } },
-        { jobId: job.id, jobType: "download", eventType: "routing_anomaly", severity: "critical", details: { leak: true } },
+        { downloadJobId: job.id, jobType: "download", eventType: "bootstrap", severity: "info", details: { phase: "started" } },
+        { downloadJobId: job.id, jobType: "download", eventType: "watchdog", severity: "info", details: { vpn: "up" } },
+        { downloadJobId: job.id, jobType: "download", eventType: "routing_anomaly", severity: "critical", details: { leak: true } },
       ],
     });
 
@@ -276,6 +276,20 @@ describe("VPS Events + Routing Policy", () => {
     expect(types).toContain("routing_anomaly");
   });
 
+  it("rejects negative limit", async () => {
+    delete process.env.SERVICE_API_TOKEN;
+    const { job } = await createTestDownloadJob();
+    const { plaintext, hash } = generateServiceToken();
+    await storeServiceToken(hash, job.id, "download");
+
+    const res = await request(app)
+      .get(`/service/jobs/${job.id}/events?limit=-1`)
+      .set("Authorization", `Bearer ${plaintext}`);
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain("limit must be greater than 0");
+  });
+
   it("filters events by eventType", async () => {
     delete process.env.SERVICE_API_TOKEN;
     const { job } = await createTestDownloadJob();
@@ -284,9 +298,9 @@ describe("VPS Events + Routing Policy", () => {
 
     await prisma.vpsEvent.createMany({
       data: [
-        { jobId: job.id, jobType: "download", eventType: "bootstrap", severity: "info", details: {} },
-        { jobId: job.id, jobType: "download", eventType: "routing_anomaly", severity: "warning", details: {} },
-        { jobId: job.id, jobType: "download", eventType: "routing_anomaly", severity: "critical", details: {} },
+        { downloadJobId: job.id, jobType: "download", eventType: "bootstrap", severity: "info", details: {} },
+        { downloadJobId: job.id, jobType: "download", eventType: "routing_anomaly", severity: "warning", details: {} },
+        { downloadJobId: job.id, jobType: "download", eventType: "routing_anomaly", severity: "critical", details: {} },
       ],
     });
 
