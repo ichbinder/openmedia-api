@@ -610,12 +610,12 @@ describe("bootstrap + traffic guard integration", () => {
     expect(script).toContain("routing_anomaly");
   });
 
-  it("traffic guard runs after watchdog", () => {
+  it("traffic guard runs before watchdog (available even without VPN)", () => {
     const watchdogPos = script.indexOf("nohup /opt/vpn-watchdog.sh");
     const guardPos = script.indexOf("nohup /opt/traffic-guard.sh");
     expect(watchdogPos).toBeGreaterThan(-1);
     expect(guardPos).toBeGreaterThan(-1);
-    expect(guardPos).toBeGreaterThan(watchdogPos);
+    expect(guardPos).toBeLessThan(watchdogPos);
   });
 
   it("upload bootstrap also includes traffic guard", () => {
@@ -625,5 +625,35 @@ describe("bootstrap + traffic guard integration", () => {
     });
     expect(uploadScript).toContain("traffic-guard.sh");
     expect(uploadScript).toContain("routing-policy.json");
+  });
+});
+
+// ─── Regression: routing policy without vpnConfig ────────────────────
+
+describe("bootstrap with routingPolicy but no vpnConfig", () => {
+  const script = generateBootstrapScript({
+    ...BASE_PARAMS,
+    jobType: "download",
+  });
+
+  it("saves routing policy even when vpnConfig is absent", () => {
+    // The script should contain the jq routingPolicy handling
+    // regardless of whether vpnConfig is present
+    expect(script).toContain("jq '.routingPolicy // empty'");
+    expect(script).toContain("/opt/routing-policy.json");
+  });
+
+  it("writes and starts traffic guard before the vpnConfig check", () => {
+    const routingPolicyPos = script.indexOf("jq '.routingPolicy // empty'");
+    const vpnCheckPos = script.indexOf("vpnConfig.protocol // empty");
+    expect(routingPolicyPos).toBeGreaterThan(-1);
+    expect(vpnCheckPos).toBeGreaterThan(-1);
+    // Routing policy handling must come before the VPN early-exit
+    expect(routingPolicyPos).toBeLessThan(vpnCheckPos);
+  });
+
+  it("contains traffic guard setup in the routing policy block", () => {
+    expect(script).toContain("traffic-guard.sh");
+    expect(script).toContain("nohup /opt/traffic-guard.sh");
   });
 });

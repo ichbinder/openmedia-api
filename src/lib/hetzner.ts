@@ -522,11 +522,19 @@ while true; do
     fi
   done < <(ss -tupnH state established 2>/dev/null)
 
-  # Report anomalies as a single batched event
+  # Report anomalies as a single batched event (throttled by signature)
   if [ "\$ANOMALY_COUNT" -gt 0 ]; then
     details="{\\"anomalyCount\\":\$ANOMALY_COUNT,\\"connections\\":[\$ANOMALIES]}"
-    report_event "routing_anomaly" "warning" "\$details"
-    echo "[traffic-guard] Reported \$ANOMALY_COUNT anomalies"
+    CURRENT_SIG=\$(echo "\$details" | md5sum | awk '{print \$1}')
+    LAST_SIG=""
+    [ -f /tmp/last-anomaly-sig ] && LAST_SIG=\$(cat /tmp/last-anomaly-sig)
+    if [ "\$CURRENT_SIG" != "\$LAST_SIG" ]; then
+      report_event "routing_anomaly" "warning" "\$details"
+      echo "\$CURRENT_SIG" > /tmp/last-anomaly-sig
+      echo "[traffic-guard] Reported \$ANOMALY_COUNT anomalies"
+    else
+      echo "[traffic-guard] \$ANOMALY_COUNT anomalies (unchanged, throttled)"
+    fi
   fi
 done`;
 }
@@ -580,6 +588,26 @@ BOOTSTRAP_JSON=$(curl -sf --connect-timeout 10 --max-time 30 \\
   fail_job "Bootstrap API call failed"
   exit 1
 }
+
+# ── Save routing policy for Traffic Guard ─────────────────────────────
+ROUTING_POLICY=$(echo "\$BOOTSTRAP_JSON" | jq '.routingPolicy // empty')
+if [ -n "\$ROUTING_POLICY" ] && [ "\$ROUTING_POLICY" != "null" ]; then
+  echo "\$ROUTING_POLICY" > /opt/routing-policy.json
+  chmod 600 /opt/routing-policy.json
+  echo "[bootstrap] Routing policy saved to /opt/routing-policy.json"
+
+  # ── Traffic Routing Guard ─────────────────────────────────────────
+  cat > /opt/traffic-guard.sh << 'TRAFFIC_GUARD_EOF'
+${generateTrafficGuardScript()}
+TRAFFIC_GUARD_EOF
+
+  chmod 700 /opt/traffic-guard.sh
+  export JOB_ID
+  nohup /opt/traffic-guard.sh > /var/log/traffic-guard.log 2>&1 &
+  echo "[bootstrap] Traffic Guard started"
+else
+  echo "[bootstrap] No routing policy — Traffic Guard skipped"
+fi
 
 # Check if VPN config is present in the response
 VPN_PROTOCOL=$(echo "\$BOOTSTRAP_JSON" | jq -r '.vpnConfig.protocol // empty')
@@ -869,26 +897,6 @@ WATCHDOG_EOF
 chmod 700 /opt/vpn-watchdog.sh
 export VPN_PROTOCOL VPN_INTERFACE API_BASE_URL SERVICE_TOKEN FAIL_ENDPOINT
 nohup /opt/vpn-watchdog.sh > /var/log/vpn-watchdog.log 2>&1 &
-
-# ── Save routing policy for Traffic Guard ─────────────────────────────
-ROUTING_POLICY=$(echo "\$BOOTSTRAP_JSON" | jq '.routingPolicy // empty')
-if [ -n "\$ROUTING_POLICY" ] && [ "\$ROUTING_POLICY" != "null" ]; then
-  echo "\$ROUTING_POLICY" > /opt/routing-policy.json
-  chmod 600 /opt/routing-policy.json
-  echo "[bootstrap] Routing policy saved to /opt/routing-policy.json"
-
-  # ── Traffic Routing Guard ─────────────────────────────────────────
-  cat > /opt/traffic-guard.sh << 'TRAFFIC_GUARD_EOF'
-${generateTrafficGuardScript()}
-TRAFFIC_GUARD_EOF
-
-  chmod 700 /opt/traffic-guard.sh
-  export JOB_ID
-  nohup /opt/traffic-guard.sh > /var/log/traffic-guard.log 2>&1 &
-  echo "[bootstrap] Traffic Guard started"
-else
-  echo "[bootstrap] No routing policy — Traffic Guard skipped"
-fi
 
 echo "[bootstrap] VPN setup complete"
 `;

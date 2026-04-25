@@ -684,16 +684,49 @@ router.delete("/vpn-providers/:id", requireAuth, requireAdmin, async (req: AuthR
 /** GET /admin/config/vps-events — list VPS events with optional filters */
 router.get("/vps-events", requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
   try {
-    const limit = Math.min(Number(req.query.limit) || 50, 200);
-    const offset = Math.max(Number(req.query.offset) || 0, 0);
+    // ── Validate limit ────────────────────────────────────────────────
+    const rawLimit = req.query.limit;
+    let limit = 50;
+    if (rawLimit !== undefined) {
+      const parsed = Number(rawLimit);
+      if (!Number.isInteger(parsed) || parsed < 1 || parsed > 200) {
+        res.status(400).json({ error: "limit must be an integer between 1 and 200." });
+        return;
+      }
+      limit = parsed;
+    }
+
+    // ── Validate offset ───────────────────────────────────────────────
+    const rawOffset = req.query.offset;
+    let offset = 0;
+    if (rawOffset !== undefined) {
+      const parsed = Number(rawOffset);
+      if (!Number.isInteger(parsed) || parsed < 0) {
+        res.status(400).json({ error: "offset must be a non-negative integer." });
+        return;
+      }
+      offset = parsed;
+    }
+
+    // ── Validate enum filters ─────────────────────────────────────────
     const jobType = req.query.jobType as string | undefined;
-    const eventType = req.query.eventType as string | undefined;
+    if (jobType !== undefined && !["download", "upload"].includes(jobType)) {
+      res.status(400).json({ error: 'jobType must be "download" or "upload".' });
+      return;
+    }
+
     const severity = req.query.severity as string | undefined;
+    if (severity !== undefined && !["info", "warning", "critical"].includes(severity)) {
+      res.status(400).json({ error: 'severity must be "info", "warning", or "critical".' });
+      return;
+    }
+
+    const eventType = req.query.eventType as string | undefined;
 
     const where: Record<string, unknown> = {};
-    if (jobType && ["download", "upload"].includes(jobType)) where.jobType = jobType;
+    if (jobType) where.jobType = jobType;
     if (eventType) where.eventType = eventType;
-    if (severity && ["info", "warning", "critical"].includes(severity)) where.severity = severity;
+    if (severity) where.severity = severity;
 
     const [events, total] = await Promise.all([
       prisma.vpsEvent.findMany({
