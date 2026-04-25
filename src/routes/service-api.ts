@@ -199,7 +199,7 @@ router.post("/jobs/:id/events", async (req: AuthRequest, res: Response) => {
     }
 
     // Validate severity (optional, defaults to 'warning')
-    const sev = severity || "warning";
+    const sev = severity ?? "warning";
     if (!VALID_SEVERITIES.includes(sev)) {
       res.status(400).json({
         error: `Invalid severity. Must be one of: ${VALID_SEVERITIES.join(", ")}`,
@@ -286,6 +286,12 @@ router.get("/jobs/:id/events", async (req: AuthRequest, res: Response) => {
     }
     const limit = Number.isNaN(parsed) ? 50 : Math.min(parsed, 200);
     const eventTypeFilter = req.query.eventType ? String(req.query.eventType) : undefined;
+    if (eventTypeFilter && !VALID_EVENT_TYPES.includes(eventTypeFilter)) {
+      res.status(400).json({
+        error: `Invalid eventType filter. Must be one of: ${VALID_EVENT_TYPES.join(", ")}`,
+      });
+      return;
+    }
 
     const events = await prisma.vpsEvent.findMany({
       where: {
