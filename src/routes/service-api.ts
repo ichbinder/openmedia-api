@@ -179,6 +179,17 @@ router.post("/jobs/:id/events", async (req: AuthRequest, res: Response) => {
 
     const { eventType, severity, details } = req.body;
 
+    // Validate details payload size (max 64 KB serialized)
+    if (details) {
+      const serialized = JSON.stringify(details);
+      if (serialized.length > 65_536) {
+        res.status(400).json({
+          error: "details payload too large (max 64 KB)",
+        });
+        return;
+      }
+    }
+
     // Validate eventType
     if (!eventType || !VALID_EVENT_TYPES.includes(eventType)) {
       res.status(400).json({
