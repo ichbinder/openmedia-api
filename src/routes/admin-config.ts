@@ -7,6 +7,8 @@
 import { Router, type Response } from "express";
 import { requireAuth, requireAdmin, requireServiceToken, type AuthRequest } from "../middleware/auth.js";
 import { isEncryptionConfigured } from "../lib/crypto.js";
+import prisma from "../lib/prisma.js";
+import type { Prisma } from "../../generated/client/index.js";
 import {
   listCategories,
   getEntriesByCategory,
@@ -675,6 +677,98 @@ router.delete("/vpn-providers/:id", requireAuth, requireAdmin, async (req: AuthR
   } catch (err) {
     console.error("[admin-config] Delete VPN provider error:", err);
     res.status(500).json({ error: "Failed to delete VPN provider." });
+  }
+});
+
+// ─── VPS Events ───────────────────────────────────────────────────────
+
+/** GET /admin/config/vps-events — list VPS events with optional filters */
+router.get("/vps-events", requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    // ── Validate limit ────────────────────────────────────────────────
+    const rawLimit = req.query.limit;
+    let limit = 50;
+    if (rawLimit !== undefined) {
+      if (Array.isArray(rawLimit) || typeof rawLimit !== "string") {
+        res.status(400).json({ error: "limit must be a single string value." });
+        return;
+      }
+      const parsed = Number(rawLimit);
+      if (!Number.isInteger(parsed) || parsed < 1 || parsed > 200) {
+        res.status(400).json({ error: "limit must be an integer between 1 and 200." });
+        return;
+      }
+      limit = parsed;
+    }
+
+    // ── Validate offset ───────────────────────────────────────────────
+    const rawOffset = req.query.offset;
+    let offset = 0;
+    const MAX_OFFSET = 1_000_000;
+    if (rawOffset !== undefined) {
+      if (Array.isArray(rawOffset) || typeof rawOffset !== "string") {
+        res.status(400).json({ error: "offset must be a single string value." });
+        return;
+      }
+      const parsed = Number(rawOffset);
+      if (!Number.isInteger(parsed) || parsed < 0 || parsed > MAX_OFFSET) {
+        res.status(400).json({ error: `offset must be an integer between 0 and ${MAX_OFFSET}.` });
+        return;
+      }
+      offset = parsed;
+    }
+
+    // ── Validate enum filters ─────────────────────────────────────────
+    const jobType = req.query.jobType as string | undefined;
+    if (jobType !== undefined && !["download", "upload"].includes(jobType)) {
+      res.status(400).json({ error: 'jobType must be "download" or "upload".' });
+      return;
+    }
+
+    const severity = req.query.severity as string | undefined;
+    if (severity !== undefined && !["info", "warning", "critical"].includes(severity)) {
+      res.status(400).json({ error: 'severity must be "info", "warning", or "critical".' });
+      return;
+    }
+
+    const VALID_EVENT_TYPES = ["routing_anomaly", "vpn_down", "vpn_reconnect", "watchdog", "bootstrap"] as const;
+    const rawEventType = req.query.eventType;
+    let eventType: string | undefined;
+    if (rawEventType !== undefined) {
+      if (typeof rawEventType !== "string" || !rawEventType.trim()) {
+        res.status(400).json({ error: "eventType must be a non-empty string." });
+        return;
+      }
+      if (!(VALID_EVENT_TYPES as readonly string[]).includes(rawEventType)) {
+        res.status(400).json({ error: `eventType must be one of: ${VALID_EVENT_TYPES.join(", ")}.` });
+        return;
+      }
+      eventType = rawEventType;
+    }
+
+    const where: Prisma.VpsEventWhereInput = {};
+    if (jobType) where.jobType = jobType;
+    if (eventType) where.eventType = eventType;
+    if (severity) where.severity = severity;
+
+    const [events, total] = await Promise.all([
+      prisma.vpsEvent.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        take: limit,
+        skip: offset,
+        include: {
+          downloadJob: { select: { id: true, status: true, hetznerServerId: true } },
+          uploadJob: { select: { id: true, status: true, hetznerServerId: true } },
+        },
+      }),
+      prisma.vpsEvent.count({ where }),
+    ]);
+
+    res.json({ events, total, limit, offset });
+  } catch (err) {
+    console.error("[admin-config] List VPS events error:", err);
+    res.status(500).json({ error: "Failed to list VPS events." });
   }
 });
 
