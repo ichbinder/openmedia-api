@@ -148,8 +148,8 @@ router.get("/jobs/:id/bootstrap", async (req: AuthRequest, res: Response) => {
 
 // ─── VPS Event Reporting ─────────────────────────────────────────────
 
-const VALID_EVENT_TYPES = ["routing_anomaly", "vpn_down", "vpn_reconnect", "watchdog", "bootstrap"] as const;
-const VALID_SEVERITIES = ["info", "warning", "critical"] as const;
+const VALID_EVENT_TYPES = ["routing_anomaly", "routing_verified", "vpn_down", "vpn_reconnect", "vpn_reconnect_failed", "watchdog", "bootstrap", "bootstrap_complete"] as const;
+const VALID_SEVERITIES = ["info", "warning", "error", "critical"] as const;
 
 /**
  * POST /service/jobs/:id/events
