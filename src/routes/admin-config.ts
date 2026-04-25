@@ -7,6 +7,7 @@
 import { Router, type Response } from "express";
 import { requireAuth, requireAdmin, requireServiceToken, type AuthRequest } from "../middleware/auth.js";
 import { isEncryptionConfigured } from "../lib/crypto.js";
+import prisma from "../lib/prisma.js";
 import {
   listCategories,
   getEntriesByCategory,
@@ -675,6 +676,43 @@ router.delete("/vpn-providers/:id", requireAuth, requireAdmin, async (req: AuthR
   } catch (err) {
     console.error("[admin-config] Delete VPN provider error:", err);
     res.status(500).json({ error: "Failed to delete VPN provider." });
+  }
+});
+
+// ─── VPS Events ───────────────────────────────────────────────────────
+
+/** GET /admin/config/vps-events — list VPS events with optional filters */
+router.get("/vps-events", requireAuth, requireAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const limit = Math.min(Number(req.query.limit) || 50, 200);
+    const offset = Math.max(Number(req.query.offset) || 0, 0);
+    const jobType = req.query.jobType as string | undefined;
+    const eventType = req.query.eventType as string | undefined;
+    const severity = req.query.severity as string | undefined;
+
+    const where: Record<string, unknown> = {};
+    if (jobType && ["download", "upload"].includes(jobType)) where.jobType = jobType;
+    if (eventType) where.eventType = eventType;
+    if (severity && ["info", "warning", "critical"].includes(severity)) where.severity = severity;
+
+    const [events, total] = await Promise.all([
+      prisma.vpsEvent.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        take: limit,
+        skip: offset,
+        include: {
+          downloadJob: { select: { id: true, status: true, hetznerServerId: true } },
+          uploadJob: { select: { id: true, status: true, hetznerServerId: true } },
+        },
+      }),
+      prisma.vpsEvent.count({ where }),
+    ]);
+
+    res.json({ events, total, limit, offset });
+  } catch (err) {
+    console.error("[admin-config] List VPS events error:", err);
+    res.status(500).json({ error: "Failed to list VPS events." });
   }
 });
 
