@@ -115,14 +115,13 @@ async function provisionHetznerVPS(job: any): Promise<void> {
 
   const serverName = `dl-${job.id.slice(0, 8)}`;
 
-  // Cloud-init now only carries 3 ENV vars — VPS fetches all config at boot via bootstrap API
+  // Cloud-init carries 3 ENV vars + bootstrap.sh — VPS fetches all config (incl. VPN) at boot
   const cloudInit = generateCloudInit({
     jobId: job.id,
     apiBaseUrl: config.apiBaseUrl,
     serviceToken: serviceTokenPlaintext,
     dockerImage: config.dockerImage,
     serverName,
-    vpnConfig: config.vpnConfig,
   });
 
   const rawNetworkId = process.env.HETZNER_NETWORK_ID;

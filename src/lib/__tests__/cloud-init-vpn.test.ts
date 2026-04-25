@@ -2,73 +2,10 @@ import { describe, it, expect } from "vitest";
 import {
   generateCloudInit,
   generateUploadCloudInit,
+  generateBootstrapScript,
 } from "../hetzner.js";
-import type { VpnConfigResolved } from "../vpn-config.js";
 
-// ─── Sample VPN configs ─────────────────────────────────────────────
-
-const SAMPLE_OPENVPN_CONFIG: VpnConfigResolved = {
-  providerId: "vpn-ovpn-1",
-  providerName: "Test OpenVPN",
-  protocol: "openvpn",
-  configBlob: `client
-dev tun
-proto udp
-remote 203.0.113.50 1194
-resolv-retry infinite
-nobind
-persist-key
-persist-tun
-cipher AES-256-GCM
-auth SHA256
-verb 3`,
-  allowedIPs: [],
-  excludedCIDRs: ["169.254.169.254/32", "10.0.0.0/8"],
-  username: "testuser",
-  password: "testpass",
-};
-
-const SAMPLE_OPENVPN_NO_CREDS: VpnConfigResolved = {
-  ...SAMPLE_OPENVPN_CONFIG,
-  providerName: "Test OpenVPN NoCreds",
-  username: null,
-  password: null,
-};
-
-const SAMPLE_OPENVPN_EXISTING_AUTH: VpnConfigResolved = {
-  ...SAMPLE_OPENVPN_CONFIG,
-  configBlob: `client
-dev tun
-proto udp
-remote 203.0.113.50 1194
-auth-user-pass /old/path.txt
-cipher AES-256-GCM`,
-};
-
-const SAMPLE_OPENVPN_NO_BYPASS: VpnConfigResolved = {
-  ...SAMPLE_OPENVPN_CONFIG,
-  excludedCIDRs: [],
-};
-
-const SAMPLE_VPN_CONFIG: VpnConfigResolved = {
-  providerId: "vpn-test-1",
-  providerName: "Test VPN",
-  protocol: "wireguard",
-  configBlob: `[Interface]
-PrivateKey = testkey123456789=
-Address = 10.66.66.2/32
-DNS = 1.1.1.1
-
-[Peer]
-PublicKey = peerpubkey987654=
-Endpoint = 198.51.100.1:51820
-AllowedIPs = 128.0.0.0/1, 0.0.0.0/5, 8.0.0.0/7
-PersistentKeepalive = 25`,
-  allowedIPs: ["128.0.0.0/1", "0.0.0.0/5", "8.0.0.0/7"],
-  excludedCIDRs: ["169.254.169.254/32", "10.0.0.0/8"],
-  username: null,
-  password: null,
-};
+// ─── Base params ────────────────────────────────────────────────────
 
 const BASE_PARAMS = {
   jobId: "test-job-123",
@@ -78,460 +15,441 @@ const BASE_PARAMS = {
   serverName: "dl-test-123",
 };
 
+const UPLOAD_PARAMS = {
+  jobId: "upload-job-456",
+  apiBaseUrl: "https://api.test.example.com",
+  serviceToken: "svc-token-upload",
+  serverName: "up-test-456",
+};
+
+// ─── Helper: decode base64 content from cloud-init write_files ──────
+
+function decodeWriteFile(cloudInit: string, path: string): string {
+  // Match the write_files entry for the given path and extract its base64 content
+  const regex = new RegExp(
+    `path: ${path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[\\s\\S]*?content: (\\S+)`
+  );
+  const match = cloudInit.match(regex);
+  if (!match) return "";
+  return Buffer.from(match[1], "base64").toString("utf-8");
+}
+
+// ─── generateBootstrapScript ────────────────────────────────────────
+
+describe("generateBootstrapScript", () => {
+  it("generates a bash script with shebang", () => {
+    const script = generateBootstrapScript({
+      ...BASE_PARAMS,
+      jobType: "download",
+    });
+    expect(script).toMatch(/^#!\/usr\/bin\/env bash/);
+    expect(script).toContain("set -euo pipefail");
+  });
+
+  it("contains API bootstrap call with correct endpoint", () => {
+    const script = generateBootstrapScript({
+      ...BASE_PARAMS,
+      jobType: "download",
+    });
+    expect(script).toContain("/service/jobs/${JOB_ID}/bootstrap");
+    expect(script).toContain("Authorization: Bearer ${SERVICE_TOKEN}");
+  });
+
+  it("uses download fail endpoint for download jobs", () => {
+    const script = generateBootstrapScript({
+      ...BASE_PARAMS,
+      jobType: "download",
+    });
+    expect(script).toContain(`/downloads/jobs/${BASE_PARAMS.jobId}/status`);
+  });
+
+  it("uses upload fail endpoint for upload jobs", () => {
+    const script = generateBootstrapScript({
+      ...UPLOAD_PARAMS,
+      jobType: "upload",
+    });
+    expect(script).toContain(`/uploads/${UPLOAD_PARAMS.jobId}`);
+  });
+
+  it("contains VPN protocol detection from API response", () => {
+    const script = generateBootstrapScript({
+      ...BASE_PARAMS,
+      jobType: "download",
+    });
+    expect(script).toContain("jq -r '.vpnConfig.protocol // empty'");
+  });
+
+  it("handles missing VPN config gracefully (exits 0)", () => {
+    const script = generateBootstrapScript({
+      ...BASE_PARAMS,
+      jobType: "download",
+    });
+    expect(script).toContain("No VPN config — skipping VPN setup");
+    expect(script).toContain("exit 0");
+  });
+
+  // ── WireGuard support ──
+
+  it("installs wireguard-tools for wireguard protocol", () => {
+    const script = generateBootstrapScript({
+      ...BASE_PARAMS,
+      jobType: "download",
+    });
+    expect(script).toContain("apt-get install -y wireguard-tools");
+  });
+
+  it("writes WireGuard config to /etc/wireguard/wg0.conf", () => {
+    const script = generateBootstrapScript({
+      ...BASE_PARAMS,
+      jobType: "download",
+    });
+    expect(script).toContain("/etc/wireguard/wg0.conf");
+  });
+
+  it("includes wg-quick up wg0 command", () => {
+    const script = generateBootstrapScript({
+      ...BASE_PARAMS,
+      jobType: "download",
+    });
+    expect(script).toContain("wg-quick up wg0");
+  });
+
+  // ── OpenVPN support ──
+
+  it("installs openvpn for openvpn protocol", () => {
+    const script = generateBootstrapScript({
+      ...BASE_PARAMS,
+      jobType: "download",
+    });
+    expect(script).toContain("apt-get install -y openvpn");
+  });
+
+  it("writes OpenVPN config to /etc/openvpn/client.conf", () => {
+    const script = generateBootstrapScript({
+      ...BASE_PARAMS,
+      jobType: "download",
+    });
+    expect(script).toContain("/etc/openvpn/client.conf");
+  });
+
+  it("handles OpenVPN auth credentials (auth.txt)", () => {
+    const script = generateBootstrapScript({
+      ...BASE_PARAMS,
+      jobType: "download",
+    });
+    expect(script).toContain("/etc/openvpn/auth.txt");
+    expect(script).toContain("auth-user-pass /etc/openvpn/auth.txt");
+  });
+
+  it("starts openvpn daemon and waits for tun0", () => {
+    const script = generateBootstrapScript({
+      ...BASE_PARAMS,
+      jobType: "download",
+    });
+    expect(script).toContain("openvpn --config /etc/openvpn/client.conf --daemon --log /var/log/openvpn.log");
+    expect(script).toContain("ip link show tun0");
+    expect(script).toContain("seq 1 30");
+  });
+
+  // ── Kill-switch ──
+
+  it("includes iptables kill-switch rules", () => {
+    const script = generateBootstrapScript({
+      ...BASE_PARAMS,
+      jobType: "download",
+    });
+    expect(script).toContain("iptables -A OUTPUT -o lo -j ACCEPT");
+    expect(script).toContain('iptables -A OUTPUT -o "$VPN_INTERFACE" -j ACCEPT');
+    expect(script).toContain("iptables -A OUTPUT -j DROP");
+    expect(script).toContain("iptables -A OUTPUT -d 169.254.169.254/32 -j ACCEPT");
+    expect(script).toContain("iptables -A OUTPUT -d 10.0.0.0/8 -j ACCEPT");
+    expect(script).toContain("iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT");
+  });
+
+  it("includes ip6tables kill-switch rules (IPv6 leak prevention)", () => {
+    const script = generateBootstrapScript({
+      ...BASE_PARAMS,
+      jobType: "download",
+    });
+    expect(script).toContain("ip6tables -A OUTPUT -o lo -j ACCEPT");
+    expect(script).toContain('ip6tables -A OUTPUT -o "$VPN_INTERFACE" -j ACCEPT');
+    expect(script).toContain("ip6tables -A OUTPUT -j DROP");
+  });
+
+  it("captures default gateway before kill-switch", () => {
+    const script = generateBootstrapScript({
+      ...BASE_PARAMS,
+      jobType: "download",
+    });
+    expect(script).toContain("ORIG_GW=$(ip route show default");
+    expect(script).toContain("ORIG_DEV=$(ip route show default");
+    // Gateway capture must come before kill-switch DROP
+    const gwPos = script.indexOf("ORIG_GW=");
+    const dropPos = script.indexOf("iptables -A OUTPUT -j DROP");
+    expect(gwPos).toBeGreaterThan(-1);
+    expect(dropPos).toBeGreaterThan(-1);
+    expect(gwPos).toBeLessThan(dropPos);
+  });
+
+  // ── Bypass routes ──
+
+  it("includes dynamic bypass route loop for excludedCIDRs", () => {
+    const script = generateBootstrapScript({
+      ...BASE_PARAMS,
+      jobType: "download",
+    });
+    expect(script).toContain("EXCLUDED_CIDRS");
+    expect(script).toContain("ip route add");
+    expect(script).toContain("ip -6 route add");
+  });
+
+  it("handles IPv6 bypass with device fallback", () => {
+    const script = generateBootstrapScript({
+      ...BASE_PARAMS,
+      jobType: "download",
+    });
+    expect(script).toContain("ORIG_DEV6");
+    expect(script).toContain("${ORIG_DEV6:-$ORIG_DEV}");
+  });
+
+  // ── Connectivity verification ──
+
+  it("includes VPN connectivity verification", () => {
+    const script = generateBootstrapScript({
+      ...BASE_PARAMS,
+      jobType: "download",
+    });
+    expect(script).toContain('curl -sf --interface "$VPN_INTERFACE"');
+    expect(script).toContain("http://1.1.1.1/cdn-cgi/trace");
+  });
+
+  it("includes VPN failure handling with fail_job", () => {
+    const script = generateBootstrapScript({
+      ...BASE_PARAMS,
+      jobType: "download",
+    });
+    expect(script).toContain('fail_job "VPN setup failed');
+  });
+
+  // ── VPN tunnel ordering ──
+
+  it("sets up kill-switch before starting VPN tunnel", () => {
+    const script = generateBootstrapScript({
+      ...BASE_PARAMS,
+      jobType: "download",
+    });
+    const killSwitchPos = script.indexOf("iptables -A OUTPUT -j DROP");
+    const wgUpPos = script.indexOf("wg-quick up wg0");
+    expect(killSwitchPos).toBeGreaterThan(-1);
+    expect(wgUpPos).toBeGreaterThan(-1);
+    expect(killSwitchPos).toBeLessThan(wgUpPos);
+  });
+
+  // ── DNS leak fix ──
+
+  it("includes DNS leak fix", () => {
+    const script = generateBootstrapScript({
+      ...BASE_PARAMS,
+      jobType: "download",
+    });
+    expect(script).toContain("nameserver 1.1.1.1");
+  });
+
+  // ── Watchdog ──
+
+  it("generates VPN watchdog script inline", () => {
+    const script = generateBootstrapScript({
+      ...BASE_PARAMS,
+      jobType: "download",
+    });
+    expect(script).toContain("/opt/vpn-watchdog.sh");
+    expect(script).toContain("WATCHDOG_EOF");
+    expect(script).toContain("BACKOFF_DELAYS=(5 15 30)");
+    expect(script).toContain("MAX_RETRIES=3");
+  });
+
+  it("watchdog contains WireGuard reconnect commands", () => {
+    const script = generateBootstrapScript({
+      ...BASE_PARAMS,
+      jobType: "download",
+    });
+    expect(script).toContain("wg-quick down wg0");
+    // wg-quick up wg0 appears in both main script and watchdog
+    const matches = script.match(/wg-quick up wg0/g);
+    expect(matches!.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("watchdog contains OpenVPN reconnect commands", () => {
+    const script = generateBootstrapScript({
+      ...BASE_PARAMS,
+      jobType: "download",
+    });
+    expect(script).toContain("killall -9 openvpn");
+  });
+
+  it("watchdog contains fail_job exhaustion message", () => {
+    const script = generateBootstrapScript({
+      ...BASE_PARAMS,
+      jobType: "download",
+    });
+    expect(script).toContain("VPN reconnect exhausted after");
+  });
+
+  it("launches watchdog via nohup after connectivity verification", () => {
+    const script = generateBootstrapScript({
+      ...BASE_PARAMS,
+      jobType: "download",
+    });
+    const connectivityPos = script.indexOf("Connectivity verified");
+    const nohupPos = script.indexOf("nohup /opt/vpn-watchdog.sh");
+    expect(connectivityPos).toBeGreaterThan(-1);
+    expect(nohupPos).toBeGreaterThan(-1);
+    expect(nohupPos).toBeGreaterThan(connectivityPos);
+  });
+
+  it("embeds correct API credentials in script", () => {
+    const script = generateBootstrapScript({
+      ...BASE_PARAMS,
+      jobType: "download",
+    });
+    expect(script).toContain(`API_BASE_URL="${BASE_PARAMS.apiBaseUrl}"`);
+    expect(script).toContain(`SERVICE_TOKEN="${BASE_PARAMS.serviceToken}"`);
+    expect(script).toContain(`JOB_ID="${BASE_PARAMS.jobId}"`);
+  });
+});
+
 // ─── generateCloudInit ──────────────────────────────────────────────
 
-describe("generateCloudInit", () => {
-  describe("without VPN (R017: unchanged cloud-init)", () => {
-    it("generates valid cloud-init without VPN blocks", () => {
-      const result = generateCloudInit({ ...BASE_PARAMS });
-      expect(result).toContain("#cloud-config");
-      expect(result).toContain("docker pull");
-      expect(result).not.toContain("wireguard");
-      expect(result).not.toContain("wg-quick");
-      expect(result).not.toContain("iptables");
-      expect(result).not.toContain("ip6tables");
-      expect(result).not.toContain("/etc/wireguard");
-    });
-
-    it("generates valid cloud-init with vpnConfig=null", () => {
-      const result = generateCloudInit({ ...BASE_PARAMS, vpnConfig: null });
-      expect(result).toContain("#cloud-config");
-      expect(result).not.toContain("wireguard");
-      expect(result).not.toContain("iptables");
-    });
-
-    it("contains env file and docker commands", () => {
-      const result = generateCloudInit({ ...BASE_PARAMS });
-      expect(result).toContain("/opt/openmedia-env");
-      expect(result).toContain(BASE_PARAMS.dockerImage);
-      expect(result).toContain("fail_job");
-    });
+describe("generateCloudInit (dynamic bootstrap)", () => {
+  it("generates valid cloud-init YAML", () => {
+    const result = generateCloudInit({ ...BASE_PARAMS });
+    expect(result).toContain("#cloud-config");
+    expect(result).toContain("docker pull");
+    expect(result).toContain("fail_job");
   });
 
-  describe("with VPN", () => {
-    it("includes WireGuard config write_files block", () => {
-      const result = generateCloudInit({
-        ...BASE_PARAMS,
-        vpnConfig: SAMPLE_VPN_CONFIG,
-      });
-      expect(result).toContain("/etc/wireguard/wg0.conf");
-      expect(result).toContain('permissions: "0600"');
-      expect(result).toContain("encoding: b64");
-    });
-
-    it("includes wireguard-tools installation", () => {
-      const result = generateCloudInit({
-        ...BASE_PARAMS,
-        vpnConfig: SAMPLE_VPN_CONFIG,
-      });
-      expect(result).toContain("apt-get install -y wireguard-tools");
-    });
-
-    it("includes wg-quick up command", () => {
-      const result = generateCloudInit({
-        ...BASE_PARAMS,
-        vpnConfig: SAMPLE_VPN_CONFIG,
-      });
-      expect(result).toContain("wg-quick up wg0");
-    });
-
-    it("includes iptables kill-switch rules", () => {
-      const result = generateCloudInit({
-        ...BASE_PARAMS,
-        vpnConfig: SAMPLE_VPN_CONFIG,
-      });
-      // Kill-switch rules
-      expect(result).toContain("iptables -A OUTPUT -o lo -j ACCEPT");
-      expect(result).toContain("iptables -A OUTPUT -o wg0 -j ACCEPT");
-      expect(result).toContain("iptables -A OUTPUT -j DROP");
-      // Endpoint allow rule
-      expect(result).toContain("iptables -A OUTPUT -d 198.51.100.1 -j ACCEPT");
-      // Cloud metadata + private network
-      expect(result).toContain("iptables -A OUTPUT -d 169.254.169.254/32 -j ACCEPT");
-      expect(result).toContain("iptables -A OUTPUT -d 10.0.0.0/8 -j ACCEPT");
-      // Established connections
-      expect(result).toContain("iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT");
-    });
-
-    it("includes ip6tables kill-switch rules (IPv6 leak prevention)", () => {
-      const result = generateCloudInit({
-        ...BASE_PARAMS,
-        vpnConfig: SAMPLE_VPN_CONFIG,
-      });
-      expect(result).toContain("ip6tables -A OUTPUT -o lo -j ACCEPT");
-      expect(result).toContain("ip6tables -A OUTPUT -j DROP");
-    });
-
-    it("includes VPN connectivity verification", () => {
-      const result = generateCloudInit({
-        ...BASE_PARAMS,
-        vpnConfig: SAMPLE_VPN_CONFIG,
-      });
-      expect(result).toContain("curl -sf --interface wg0");
-    });
-
-    it("includes VPN failure handling with fail_job", () => {
-      const result = generateCloudInit({
-        ...BASE_PARAMS,
-        vpnConfig: SAMPLE_VPN_CONFIG,
-      });
-      expect(result).toContain('fail_job "VPN setup failed');
-    });
-
-    it("places VPN setup before docker commands", () => {
-      const result = generateCloudInit({
-        ...BASE_PARAMS,
-        vpnConfig: SAMPLE_VPN_CONFIG,
-      });
-      const vpnPos = result.indexOf("wg-quick up wg0");
-      const dockerPos = result.indexOf("docker pull");
-      expect(vpnPos).toBeGreaterThan(-1);
-      expect(dockerPos).toBeGreaterThan(-1);
-      expect(vpnPos).toBeLessThan(dockerPos);
-    });
-
-    it("base64-encodes the WireGuard config blob", () => {
-      const result = generateCloudInit({
-        ...BASE_PARAMS,
-        vpnConfig: SAMPLE_VPN_CONFIG,
-      });
-      const expectedB64 = Buffer.from(SAMPLE_VPN_CONFIG.configBlob).toString(
-        "base64"
-      );
-      expect(result).toContain(expectedB64);
-    });
-
-    it("captures default gateway and interface before kill-switch", () => {
-      const result = generateCloudInit({
-        ...BASE_PARAMS,
-        vpnConfig: SAMPLE_VPN_CONFIG,
-      });
-      expect(result).toContain("ORIG_GW=$(ip route show default");
-      expect(result).toContain("ORIG_DEV=$(ip route show default");
-      // Gateway capture must come before kill-switch DROP
-      const gwPos = result.indexOf("ORIG_GW=");
-      const dropPos = result.indexOf("iptables -A OUTPUT -j DROP");
-      expect(gwPos).toBeGreaterThan(-1);
-      expect(dropPos).toBeGreaterThan(-1);
-      expect(gwPos).toBeLessThan(dropPos);
-    });
-
-    it("includes bypass routes for excludedCIDRs after wg-quick up", () => {
-      const result = generateCloudInit({
-        ...BASE_PARAMS,
-        vpnConfig: SAMPLE_VPN_CONFIG,
-      });
-      expect(result).toContain("ip route add 169.254.169.254/32 via $ORIG_GW dev $ORIG_DEV");
-      expect(result).toContain("ip route add 10.0.0.0/8 via $ORIG_GW dev $ORIG_DEV");
-      // Bypass routes must come AFTER wg-quick up (otherwise wg-quick overwrites them)
-      const wgUpPos = result.indexOf("wg-quick up wg0");
-      const routePos = result.indexOf("ip route add 169.254.169.254/32");
-      expect(wgUpPos).toBeGreaterThan(-1);
-      expect(routePos).toBeGreaterThan(-1);
-      expect(routePos).toBeGreaterThan(wgUpPos);
-    });
-
-    it("includes IPv6 bypass routes with correct device fallback", () => {
-      const ipv6BypassConfig: VpnConfigResolved = {
-        ...SAMPLE_VPN_CONFIG,
-        excludedCIDRs: ["169.254.169.254/32", "fd00::/8"],
-      };
-      const result = generateCloudInit({
-        ...BASE_PARAMS,
-        vpnConfig: ipv6BypassConfig,
-      });
-      // IPv4 route uses $ORIG_DEV
-      expect(result).toContain("ip route add 169.254.169.254/32 via $ORIG_GW dev $ORIG_DEV");
-      // IPv6 route uses $ORIG_DEV6 with fallback to $ORIG_DEV
-      expect(result).toContain("ip -6 route add fd00::/8 via $ORIG_GW6 dev ${ORIG_DEV6:-$ORIG_DEV}");
-      // ORIG_DEV6 must be captured
-      expect(result).toContain("ORIG_DEV6=$(ip -6 route show default");
-    });
-
-    it("generates no bypass routes when excludedCIDRs is empty", () => {
-      const noBypassConfig: VpnConfigResolved = {
-        ...SAMPLE_VPN_CONFIG,
-        excludedCIDRs: [],
-      };
-      const result = generateCloudInit({
-        ...BASE_PARAMS,
-        vpnConfig: noBypassConfig,
-      });
-      expect(result).not.toContain("ip route add");
-      expect(result).not.toContain("ip -6 route add");
-    });
-  });
-});
-
-// ─── OpenVPN cloud-init ─────────────────────────────────────────────
-
-describe("generateCloudInit with OpenVPN", () => {
-  it("writes /etc/openvpn/client.conf with base64-encoded config", () => {
-    const result = generateCloudInit({ ...BASE_PARAMS, vpnConfig: SAMPLE_OPENVPN_CONFIG });
-    expect(result).toContain("/etc/openvpn/client.conf");
-    expect(result).toContain('permissions: "0600"');
-    expect(result).toContain("encoding: b64");
-    expect(result).not.toContain("/etc/wireguard");
+  it("contains /opt/bootstrap.sh in write_files", () => {
+    const result = generateCloudInit({ ...BASE_PARAMS });
+    expect(result).toContain("/opt/bootstrap.sh");
+    expect(result).toContain('permissions: "0700"');
   });
 
-  it("writes auth.txt when credentials present", () => {
-    const result = generateCloudInit({ ...BASE_PARAMS, vpnConfig: SAMPLE_OPENVPN_CONFIG });
-    expect(result).toContain("/etc/openvpn/auth.txt");
-    const authBase64 = Buffer.from("testuser\ntestpass").toString("base64");
-    expect(result).toContain(authBase64);
+  it("bootstrap.sh is base64-encoded and decodable", () => {
+    const result = generateCloudInit({ ...BASE_PARAMS });
+    const decoded = decodeWriteFile(result, "/opt/bootstrap.sh");
+    expect(decoded).toContain("#!/usr/bin/env bash");
+    expect(decoded).toContain("/service/jobs/${JOB_ID}/bootstrap");
   });
 
-  it("injects auth-user-pass directive into config blob when credentials present", () => {
-    const result = generateCloudInit({ ...BASE_PARAMS, vpnConfig: SAMPLE_OPENVPN_CONFIG });
-    // The base64-encoded config should contain auth-user-pass
-    const confMatch = result.match(/path: \/etc\/openvpn\/client\.conf[\s\S]*?content: (\S+)/);
-    expect(confMatch).toBeTruthy();
-    const decoded = Buffer.from(confMatch![1], "base64").toString("utf-8");
-    expect(decoded).toContain("auth-user-pass /etc/openvpn/auth.txt");
+  it("runcmd installs jq and runs bootstrap.sh", () => {
+    const result = generateCloudInit({ ...BASE_PARAMS });
+    expect(result).toContain("apt-get install -y jq");
+    expect(result).toContain("/opt/bootstrap.sh || exit 1");
   });
 
-  it("does NOT write auth.txt file or inject auth-user-pass without credentials", () => {
-    const result = generateCloudInit({ ...BASE_PARAMS, vpnConfig: SAMPLE_OPENVPN_NO_CREDS });
-    expect(result).toContain("/etc/openvpn/client.conf");
-    // write_files section must NOT contain auth.txt path
-    const writeFilesSection = result.split("runcmd:")[0];
-    expect(writeFilesSection).not.toContain("/etc/openvpn/auth.txt");
-    // Decode the config and verify no auth-user-pass
-    const confMatch = result.match(/path: \/etc\/openvpn\/client\.conf[\s\S]*?content: (\S+)/);
-    const decoded = Buffer.from(confMatch![1], "base64").toString("utf-8");
-    expect(decoded).not.toContain("auth-user-pass");
+  it("does NOT contain static VPN configs in write_files", () => {
+    const result = generateCloudInit({ ...BASE_PARAMS });
+    expect(result).not.toContain("/etc/wireguard/wg0.conf");
+    expect(result).not.toContain("/etc/openvpn/client.conf");
+    expect(result).not.toContain("/etc/openvpn/auth.txt");
   });
 
-  it("replaces existing auth-user-pass line (no duplication)", () => {
-    const result = generateCloudInit({ ...BASE_PARAMS, vpnConfig: SAMPLE_OPENVPN_EXISTING_AUTH });
-    const confMatch = result.match(/path: \/etc\/openvpn\/client\.conf[\s\S]*?content: (\S+)/);
-    const decoded = Buffer.from(confMatch![1], "base64").toString("utf-8");
-    // Should have exactly one auth-user-pass line
-    const matches = decoded.match(/auth-user-pass/g);
-    expect(matches).toHaveLength(1);
-    expect(decoded).toContain("auth-user-pass /etc/openvpn/auth.txt");
-    expect(decoded).not.toContain("/old/path.txt");
+  it("does NOT contain static VPN setup in runcmd", () => {
+    const result = generateCloudInit({ ...BASE_PARAMS });
+    // These were previously in the static runcmd block
+    expect(result).not.toContain("apt-get install -y wireguard-tools");
+    expect(result).not.toContain("apt-get install -y openvpn");
+    expect(result).not.toContain("wg-quick up wg0");
+    expect(result).not.toContain("openvpn --config");
   });
 
-  it("includes openvpn installation in runcmd", () => {
-    const result = generateCloudInit({ ...BASE_PARAMS, vpnConfig: SAMPLE_OPENVPN_CONFIG });
-    expect(result).toContain("apt-get install -y openvpn");
+  it("does NOT accept vpnConfig parameter", () => {
+    // The function signature no longer includes vpnConfig.
+    // This is a compile-time check — if vpnConfig were still accepted,
+    // the TypeScript compiler would not flag it as an error.
+    const result = generateCloudInit({ ...BASE_PARAMS });
+    expect(result).toContain("#cloud-config");
   });
 
-  it("includes iptables kill-switch with tun0 and remote IP", () => {
-    const result = generateCloudInit({ ...BASE_PARAMS, vpnConfig: SAMPLE_OPENVPN_CONFIG });
-    expect(result).toContain("iptables -A OUTPUT -o lo -j ACCEPT");
-    expect(result).toContain("iptables -A OUTPUT -d 203.0.113.50 -j ACCEPT");
-    expect(result).toContain("iptables -A OUTPUT -o tun0 -j ACCEPT");
-    expect(result).toContain("iptables -A OUTPUT -j DROP");
-    expect(result).toContain("ip6tables -A OUTPUT -o lo -j ACCEPT");
-    expect(result).toContain("ip6tables -A OUTPUT -j DROP");
+  it("contains env file and docker commands", () => {
+    const result = generateCloudInit({ ...BASE_PARAMS });
+    expect(result).toContain("/opt/openmedia-env");
+    expect(result).toContain(BASE_PARAMS.dockerImage);
   });
 
-  it("includes openvpn daemon start and tun0 poll loop", () => {
-    const result = generateCloudInit({ ...BASE_PARAMS, vpnConfig: SAMPLE_OPENVPN_CONFIG });
-    expect(result).toContain("openvpn --config /etc/openvpn/client.conf --daemon --log /var/log/openvpn.log");
-    expect(result).toContain("ip link show tun0");
-    expect(result).toContain("seq 1 30");
-  });
-
-  it("includes bypass routes for excludedCIDRs", () => {
-    const result = generateCloudInit({ ...BASE_PARAMS, vpnConfig: SAMPLE_OPENVPN_CONFIG });
-    expect(result).toContain("ip route add 169.254.169.254/32 via $ORIG_GW dev eth0");
-    expect(result).toContain("ip route add 10.0.0.0/8 via $ORIG_GW dev eth0");
-  });
-
-  it("generates no bypass routes when excludedCIDRs is empty", () => {
-    const result = generateCloudInit({ ...BASE_PARAMS, vpnConfig: SAMPLE_OPENVPN_NO_BYPASS });
-    expect(result).not.toContain("ip route add");
-  });
-
-  it("includes DNS leak fix and does NOT prematurely remove auth.txt", () => {
-    const result = generateCloudInit({ ...BASE_PARAMS, vpnConfig: SAMPLE_OPENVPN_CONFIG });
-    expect(result).toContain("nameserver 1.1.1.1");
-    // auth.txt must NOT be removed in runcmd — the watchdog needs it for reconnects
-    expect(result).not.toContain("rm -f /etc/openvpn/auth.txt");
-  });
-
-  it("includes connectivity check through tun0", () => {
-    const result = generateCloudInit({ ...BASE_PARAMS, vpnConfig: SAMPLE_OPENVPN_CONFIG });
-    expect(result).toContain("curl -sf --interface tun0 http://1.1.1.1/cdn-cgi/trace");
-  });
-
-  it("places VPN setup before docker commands", () => {
-    const result = generateCloudInit({ ...BASE_PARAMS, vpnConfig: SAMPLE_OPENVPN_CONFIG });
-    const vpnPos = result.indexOf("openvpn --config");
+  it("places bootstrap before docker commands", () => {
+    const result = generateCloudInit({ ...BASE_PARAMS });
+    const bootstrapPos = result.indexOf("/opt/bootstrap.sh || exit 1");
     const dockerPos = result.indexOf("docker pull");
-    expect(vpnPos).toBeGreaterThan(-1);
+    expect(bootstrapPos).toBeGreaterThan(-1);
     expect(dockerPos).toBeGreaterThan(-1);
-    expect(vpnPos).toBeLessThan(dockerPos);
+    expect(bootstrapPos).toBeLessThan(dockerPos);
   });
 
-  it("includes failure handling with fail_job", () => {
-    const result = generateCloudInit({ ...BASE_PARAMS, vpnConfig: SAMPLE_OPENVPN_CONFIG });
-    expect(result).toContain('fail_job "VPN setup failed');
-  });
-});
-
-describe("generateUploadCloudInit with OpenVPN", () => {
-  const UPLOAD_PARAMS = {
-    jobId: "upload-job-456",
-    apiBaseUrl: "https://api.test.example.com",
-    serviceToken: "svc-token-upload",
-    serverName: "up-test-456",
-  };
-
-  it("includes OpenVPN config and kill-switch in upload cloud-init", () => {
-    const result = generateUploadCloudInit({ ...UPLOAD_PARAMS, vpnConfig: SAMPLE_OPENVPN_CONFIG });
-    expect(result).toContain("/etc/openvpn/client.conf");
-    expect(result).toContain("openvpn --config");
-    expect(result).toContain("iptables -A OUTPUT -o tun0 -j ACCEPT");
-    expect(result).toContain("iptables -A OUTPUT -j DROP");
-  });
-});
-
-// ─── VPN Watchdog ───────────────────────────────────────────────────
-
-describe("VPN Watchdog", () => {
-  const UPLOAD_PARAMS_WD = {
-    jobId: "upload-job-456",
-    apiBaseUrl: "https://api.test.example.com",
-    serviceToken: "svc-token-upload",
-    serverName: "up-test-456",
-  };
-
-  /** Extract and decode the base64-encoded watchdog script from cloud-init output */
-  function decodeWatchdog(cloudInit: string): string {
-    const match = cloudInit.match(
-      /path: \/opt\/vpn-watchdog\.sh[\s\S]*?content: (\S+)/
-    );
-    expect(match).toBeTruthy();
-    return Buffer.from(match![1], "base64").toString("utf-8");
-  }
-
-  it("WireGuard download cloud-init contains vpn-watchdog.sh in write_files", () => {
-    const result = generateCloudInit({ ...BASE_PARAMS, vpnConfig: SAMPLE_VPN_CONFIG });
-    expect(result).toContain("/opt/vpn-watchdog.sh");
-  });
-
-  it("OpenVPN download cloud-init contains vpn-watchdog.sh in write_files", () => {
-    const result = generateCloudInit({ ...BASE_PARAMS, vpnConfig: SAMPLE_OPENVPN_CONFIG });
-    expect(result).toContain("/opt/vpn-watchdog.sh");
-  });
-
-  it("watchdog script contains BACKOFF_DELAYS=(5 15 30)", () => {
-    const result = generateCloudInit({ ...BASE_PARAMS, vpnConfig: SAMPLE_VPN_CONFIG });
-    const watchdog = decodeWatchdog(result);
-    expect(watchdog).toContain("BACKOFF_DELAYS=(5 15 30)");
-  });
-
-  it("watchdog script contains MAX_RETRIES=3", () => {
-    const result = generateCloudInit({ ...BASE_PARAMS, vpnConfig: SAMPLE_VPN_CONFIG });
-    const watchdog = decodeWatchdog(result);
-    expect(watchdog).toContain("MAX_RETRIES=3");
-  });
-
-  it("WireGuard watchdog contains wg-quick reconnect commands", () => {
-    const result = generateCloudInit({ ...BASE_PARAMS, vpnConfig: SAMPLE_VPN_CONFIG });
-    const watchdog = decodeWatchdog(result);
-    expect(watchdog).toContain("wg-quick down wg0");
-    expect(watchdog).toContain("wg-quick up wg0");
-  });
-
-  it("OpenVPN watchdog contains killall+restart reconnect", () => {
-    const result = generateCloudInit({ ...BASE_PARAMS, vpnConfig: SAMPLE_OPENVPN_CONFIG });
-    const watchdog = decodeWatchdog(result);
-    expect(watchdog).toContain("killall -9 openvpn");
-    expect(watchdog).toContain("openvpn --config /etc/openvpn/client.conf --daemon --log /var/log/openvpn.log");
-  });
-
-  it("watchdog contains fail_job call with exhaustion message", () => {
-    const result = generateCloudInit({ ...BASE_PARAMS, vpnConfig: SAMPLE_VPN_CONFIG });
-    const watchdog = decodeWatchdog(result);
-    expect(watchdog).toContain("VPN reconnect exhausted after");
-  });
-
-  it("nohup watchdog launch appears after connectivity verification", () => {
-    const result = generateCloudInit({ ...BASE_PARAMS, vpnConfig: SAMPLE_VPN_CONFIG });
-    const connectivityPos = result.indexOf("Connectivity verified");
-    const watchdogLaunchPos = result.indexOf("nohup /opt/vpn-watchdog.sh");
-    expect(connectivityPos).toBeGreaterThan(-1);
-    expect(watchdogLaunchPos).toBeGreaterThan(-1);
-    expect(watchdogLaunchPos).toBeGreaterThan(connectivityPos);
-  });
-
-  it("upload cloud-init contains watchdog with correct endpoint", () => {
-    const result = generateUploadCloudInit({ ...UPLOAD_PARAMS_WD, vpnConfig: SAMPLE_VPN_CONFIG });
-    expect(result).toContain("/opt/vpn-watchdog.sh");
-    const watchdog = decodeWatchdog(result);
-    expect(watchdog).toContain(`/uploads/${UPLOAD_PARAMS_WD.jobId}`);
-  });
-
-  it("no vpnConfig → no watchdog in write_files", () => {
+  it("contains self-cleanup for download VPS", () => {
     const result = generateCloudInit({ ...BASE_PARAMS });
-    expect(result).not.toContain("vpn-watchdog.sh");
-    const resultNull = generateCloudInit({ ...BASE_PARAMS, vpnConfig: null });
-    expect(resultNull).not.toContain("vpn-watchdog.sh");
-  });
-
-  it("no vpnConfig → no nohup watchdog in runcmd", () => {
-    const result = generateCloudInit({ ...BASE_PARAMS });
-    expect(result).not.toContain("nohup /opt/vpn-watchdog.sh");
-    const resultNull = generateCloudInit({ ...BASE_PARAMS, vpnConfig: null });
-    expect(resultNull).not.toContain("nohup /opt/vpn-watchdog.sh");
+    expect(result).toContain("/cleanup");
+    expect(result).toContain("Self-cleanup");
   });
 });
 
 // ─── generateUploadCloudInit ────────────────────────────────────────
 
-describe("generateUploadCloudInit", () => {
-  const UPLOAD_PARAMS = {
-    jobId: "upload-job-456",
-    apiBaseUrl: "https://api.test.example.com",
-    serviceToken: "svc-token-upload",
-    serverName: "up-test-456",
-  };
-
-  describe("without VPN", () => {
-    it("generates valid cloud-init without VPN blocks", () => {
-      const result = generateUploadCloudInit({ ...UPLOAD_PARAMS });
-      expect(result).toContain("#cloud-config");
-      expect(result).toContain("docker pull");
-      expect(result).not.toContain("wireguard");
-      expect(result).not.toContain("wg-quick");
-      expect(result).not.toContain("iptables");
-    });
+describe("generateUploadCloudInit (dynamic bootstrap)", () => {
+  it("generates valid cloud-init YAML", () => {
+    const result = generateUploadCloudInit({ ...UPLOAD_PARAMS });
+    expect(result).toContain("#cloud-config");
+    expect(result).toContain("docker pull");
   });
 
-  describe("with VPN", () => {
-    it("includes WireGuard + kill-switch in upload cloud-init", () => {
-      const result = generateUploadCloudInit({
-        ...UPLOAD_PARAMS,
-        vpnConfig: SAMPLE_VPN_CONFIG,
-      });
-      expect(result).toContain("/etc/wireguard/wg0.conf");
-      expect(result).toContain("wg-quick up wg0");
-      expect(result).toContain("iptables -A OUTPUT -o wg0 -j ACCEPT");
-      expect(result).toContain("iptables -A OUTPUT -j DROP");
-      expect(result).toContain("ip6tables -A OUTPUT -j DROP");
-    });
+  it("contains /opt/bootstrap.sh in write_files", () => {
+    const result = generateUploadCloudInit({ ...UPLOAD_PARAMS });
+    expect(result).toContain("/opt/bootstrap.sh");
+  });
 
-    it("extracts endpoint IP for iptables allow rule", () => {
-      const result = generateUploadCloudInit({
-        ...UPLOAD_PARAMS,
-        vpnConfig: SAMPLE_VPN_CONFIG,
-      });
-      expect(result).toContain("iptables -A OUTPUT -d 198.51.100.1 -j ACCEPT");
-    });
+  it("bootstrap.sh uses upload fail endpoint", () => {
+    const result = generateUploadCloudInit({ ...UPLOAD_PARAMS });
+    const decoded = decodeWriteFile(result, "/opt/bootstrap.sh");
+    expect(decoded).toContain(`/uploads/${UPLOAD_PARAMS.jobId}`);
+  });
 
-    it("places VPN setup before docker commands", () => {
-      const result = generateUploadCloudInit({
-        ...UPLOAD_PARAMS,
-        vpnConfig: SAMPLE_VPN_CONFIG,
-      });
-      const vpnPos = result.indexOf("wg-quick up wg0");
-      const dockerPos = result.indexOf("docker pull");
-      expect(vpnPos).toBeLessThan(dockerPos);
+  it("does NOT contain static VPN configs", () => {
+    const result = generateUploadCloudInit({ ...UPLOAD_PARAMS });
+    expect(result).not.toContain("/etc/wireguard/wg0.conf");
+    expect(result).not.toContain("/etc/openvpn/client.conf");
+  });
+
+  it("runcmd installs jq and runs bootstrap.sh", () => {
+    const result = generateUploadCloudInit({ ...UPLOAD_PARAMS });
+    expect(result).toContain("apt-get install -y jq");
+    expect(result).toContain("/opt/bootstrap.sh || exit 1");
+  });
+
+  it("places bootstrap before docker commands", () => {
+    const result = generateUploadCloudInit({ ...UPLOAD_PARAMS });
+    const bootstrapPos = result.indexOf("/opt/bootstrap.sh || exit 1");
+    const dockerPos = result.indexOf("docker pull");
+    expect(bootstrapPos).toBeGreaterThan(-1);
+    expect(dockerPos).toBeGreaterThan(-1);
+    expect(bootstrapPos).toBeLessThan(dockerPos);
+  });
+
+  it("does NOT contain self-cleanup (upload VPS deleted server-side)", () => {
+    const result = generateUploadCloudInit({ ...UPLOAD_PARAMS });
+    expect(result).not.toContain("/cleanup");
+    expect(result).toContain("VPS deletion is handled by the API");
+  });
+
+  it("uses default docker image when not specified", () => {
+    const result = generateUploadCloudInit({ ...UPLOAD_PARAMS });
+    expect(result).toContain("ghcr.io/ichbinder/openmedia-uploader:latest");
+  });
+
+  it("uses custom docker image when specified", () => {
+    const result = generateUploadCloudInit({
+      ...UPLOAD_PARAMS,
+      dockerImage: "custom-image:v2",
     });
+    expect(result).toContain("custom-image:v2");
   });
 });
