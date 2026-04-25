@@ -25,13 +25,23 @@ const UPLOAD_PARAMS = {
 // ─── Helper: decode base64 content from cloud-init write_files ──────
 
 function decodeWriteFile(cloudInit: string, path: string): string {
-  // Match the write_files entry for the given path and extract its base64 content
-  const regex = new RegExp(
-    `path: ${path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[\\s\\S]*?content: (\\S+)`
-  );
-  const match = cloudInit.match(regex);
-  if (!match) return "";
-  return Buffer.from(match[1], "base64").toString("utf-8");
+  // Find the write_files entry for the given path using string-based parsing
+  // (avoids dynamic RegExp which triggers ReDoS warnings in static analyzers)
+  const pathMarker = `path: ${path}`;
+  const idx = cloudInit.indexOf(pathMarker);
+  if (idx === -1) return "";
+
+  const afterPath = cloudInit.substring(idx + pathMarker.length);
+  const contentPrefix = "content: ";
+  const contentIdx = afterPath.indexOf(contentPrefix);
+  if (contentIdx === -1) return "";
+
+  const valueStart = contentIdx + contentPrefix.length;
+  const lineEnd = afterPath.indexOf("\n", valueStart);
+  const b64 = afterPath.substring(valueStart, lineEnd === -1 ? undefined : lineEnd).trim();
+  if (!b64) return "";
+
+  return Buffer.from(b64, "base64").toString("utf-8");
 }
 
 // ─── generateBootstrapScript ────────────────────────────────────────

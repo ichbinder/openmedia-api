@@ -542,7 +542,7 @@ echo "\$EXCLUDED_CIDRS" | while IFS= read -r cidr; do
     fi
   else
     if [ "\$VPN_PROTOCOL" = "openvpn" ]; then
-      if ! ip route add "\$cidr" via "\$ORIG_GW" dev eth0; then
+      if ! ip route add "\$cidr" via "\$ORIG_GW" dev "\$ORIG_DEV"; then
         echo "[vpn] Warning: bypass route failed for \$cidr"
       fi
     else
@@ -659,6 +659,7 @@ done
 WATCHDOG_EOF
 
 chmod 700 /opt/vpn-watchdog.sh
+export VPN_PROTOCOL VPN_INTERFACE API_BASE_URL SERVICE_TOKEN FAIL_ENDPOINT
 nohup /opt/vpn-watchdog.sh > /var/log/vpn-watchdog.log 2>&1 &
 
 echo "[bootstrap] VPN setup complete"
