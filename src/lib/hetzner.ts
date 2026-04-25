@@ -414,6 +414,11 @@ while IFS= read -r cidr; do
   DIRECT_CIDRS+=("\$cidr")
 done <<< "\$MUST_DIRECT_CIDRS"
 
+# Detect the default physical interface (used as expected device for mustDirect checks)
+ORIG_DEV=\$(ip route show default 2>/dev/null | grep -oP 'dev \\K\\S+' | head -1)
+ORIG_DEV="\${ORIG_DEV:-eth0}"
+echo "[traffic-guard] Direct interface: \$ORIG_DEV"
+
 get_route_dev() {
   # Returns the output device for a given destination IP
   local dst="\$1"
@@ -422,14 +427,15 @@ get_route_dev() {
 
 ip_in_cidr() {
   # Check if an IP falls within a CIDR range using Python (available on all VPS)
+  # Values passed as sys.argv to prevent shell injection
   local ip="\$1" cidr="\$2"
-  python3 -c "
+  python3 - "\$ip" "\$cidr" 2>/dev/null <<'PYEOF'
 import ipaddress, sys
 try:
-  sys.exit(0 if ipaddress.ip_address('\$ip') in ipaddress.ip_network('\$cidr', strict=False) else 1)
+  sys.exit(0 if ipaddress.ip_address(sys.argv[1]) in ipaddress.ip_network(sys.argv[2], strict=False) else 1)
 except:
   sys.exit(1)
-" 2>/dev/null
+PYEOF
 }
 
 while true; do
@@ -483,7 +489,8 @@ while true; do
       vpn_hostname=\${VPN_HOST_IPS[\$vpn_key]}
       if [ "\$actual_dev" != "\${VPN_INTERFACE}" ]; then
         echo "[traffic-guard] ANOMALY: \$vpn_hostname:\$peer_port on \$actual_dev (expected \${VPN_INTERFACE})"
-        ANOMALY_JSON="{\\"interface\\":\\"\$actual_dev\\",\\"host\\":\\"\$vpn_hostname\\",\\"port\\":\$peer_port,\\"expected\\":\\"\${VPN_INTERFACE}\\",\\"actual\\":\\"\$actual_dev\\"}"
+        ANOMALY_JSON=\$(jq -n --arg iface "\$actual_dev" --arg host "\$vpn_hostname" --argjson port "\$peer_port" --arg expected "\${VPN_INTERFACE}" --arg actual "\$actual_dev" \
+          '{interface: \$iface, host: \$host, port: \$port, expected: \$expected, actual: \$actual}')
         if [ -z "\$ANOMALIES" ]; then
           ANOMALIES="\$ANOMALY_JSON"
         else
@@ -495,11 +502,13 @@ while true; do
     fi
 
     # Check 2: mustDirect — connection to bypass CIDR must NOT use VPN interface
+    if [ "\${#DIRECT_CIDRS[@]}" -gt 0 ]; then
     for cidr in "\${DIRECT_CIDRS[@]}"; do
       if ip_in_cidr "\$peer_ip" "\$cidr"; then
         if [ "\$actual_dev" = "\${VPN_INTERFACE}" ]; then
-          echo "[traffic-guard] ANOMALY: \$peer_ip:\$peer_port on \$actual_dev (expected eth0, CIDR: \$cidr)"
-          ANOMALY_JSON="{\\"interface\\":\\"\$actual_dev\\",\\"host\\":\\"\$peer_ip\\",\\"port\\":\$peer_port,\\"expected\\":\\"eth0\\",\\"actual\\":\\"\$actual_dev\\",\\"cidr\\":\\"\$cidr\\"}"
+          echo "[traffic-guard] ANOMALY: \$peer_ip:\$peer_port on \$actual_dev (expected \$ORIG_DEV, CIDR: \$cidr)"
+          ANOMALY_JSON=\$(jq -n --arg iface "\$actual_dev" --arg host "\$peer_ip" --argjson port "\$peer_port" --arg expected "\$ORIG_DEV" --arg actual "\$actual_dev" --arg cidr "\$cidr" \
+            '{interface: \$iface, host: \$host, port: \$port, expected: \$expected, actual: \$actual, cidr: \$cidr}')
           if [ -z "\$ANOMALIES" ]; then
             ANOMALIES="\$ANOMALY_JSON"
           else
@@ -510,6 +519,7 @@ while true; do
         break
       fi
     done
+    fi
   done < <(ss -tupnH state established 2>/dev/null)
 
   # Report anomalies as a single batched event

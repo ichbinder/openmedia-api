@@ -543,9 +543,28 @@ describe("generateTrafficGuardScript", () => {
     expect(script).toContain("grep -oP '\\[\\K[^]]+");
   });
 
-  it("uses python3 for CIDR matching", () => {
+  it("uses python3 for CIDR matching with sys.argv (no shell injection)", () => {
     expect(script).toContain("ipaddress.ip_address");
     expect(script).toContain("ipaddress.ip_network");
+    // Values must be passed as sys.argv, not interpolated into Python string
+    expect(script).toContain("sys.argv[1]");
+    expect(script).toContain("sys.argv[2]");
+    expect(script).not.toContain("ip_address('$ip')");
+  });
+
+  it("detects default interface dynamically (not hardcoded eth0)", () => {
+    expect(script).toContain("ORIG_DEV=$(ip route show default");
+    expect(script).toContain('ORIG_DEV="${ORIG_DEV:-eth0}"');
+    // mustDirect expected field uses ORIG_DEV, not hardcoded eth0
+    expect(script).toContain("expected $ORIG_DEV");
+  });
+
+  it("guards DIRECT_CIDRS iteration for empty array with set -u", () => {
+    expect(script).toContain('${#DIRECT_CIDRS[@]}" -gt 0');
+  });
+
+  it("uses jq -n for safe JSON construction in anomaly events", () => {
+    expect(script).toContain("jq -n --arg");
   });
 
   it("does not use set -e (non-fatal on ss/curl failures)", () => {
