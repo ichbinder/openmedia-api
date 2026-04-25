@@ -173,7 +173,7 @@ export async function getUploadVpsConfig(): Promise<UploadVpsConfig | null> {
 
       // Build routing policy for traffic guard
       const routingPolicy = buildRoutingPolicy(
-        providers.map((p) => ({ host: p.host, port: p.port })),
+        providers.map((p) => ({ host: p.host, port: p.port ?? 563 })),
         vpnConfig?.excludedCIDRs ?? null,
       );
 
