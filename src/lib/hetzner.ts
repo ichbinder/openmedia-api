@@ -959,9 +959,19 @@ write_files:
     content: ${bootstrapBase64}
 
 runcmd:
-  - apt-get update -qq && apt-get install -y jq > /dev/null 2>&1
   - |
     set -e
+
+    # Install jq with retry (network may not be ready immediately on ARM VPS)
+    for i in 1 2 3; do
+      apt-get update -qq > /dev/null 2>&1 && apt-get install -y jq > /dev/null 2>&1 && break
+      echo "[cloud-init] apt-get attempt $i failed, retrying in 5s..."
+      sleep 5
+    done
+    if ! command -v jq > /dev/null 2>&1; then
+      echo "[cloud-init] FATAL: jq installation failed after 3 attempts"
+      exit 1
+    fi
 
     # Source the env file for use in this script
     set -a
@@ -1096,9 +1106,19 @@ write_files:
     content: ${bootstrapBase64}
 
 runcmd:
-  - apt-get update -qq && apt-get install -y jq > /dev/null 2>&1
   - |
     set -e
+
+    # Install jq with retry (network may not be ready immediately on ARM VPS)
+    for i in 1 2 3; do
+      apt-get update -qq > /dev/null 2>&1 && apt-get install -y jq > /dev/null 2>&1 && break
+      echo "[cloud-init] apt-get attempt $i failed, retrying in 5s..."
+      sleep 5
+    done
+    if ! command -v jq > /dev/null 2>&1; then
+      echo "[cloud-init] FATAL: jq installation failed after 3 attempts"
+      exit 1
+    fi
 
     fail_job() {
       curl -sf -X PATCH "${params.apiBaseUrl}/uploads/${params.jobId}" \\
