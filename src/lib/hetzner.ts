@@ -424,6 +424,8 @@ ORIG_DEV=\$(ip route show default 2>/dev/null | grep -oP 'dev \\K\\S+' | head -1
 ORIG_DEV="\${ORIG_DEV:-eth0}"
 echo "[traffic-guard] Direct interface: \$ORIG_DEV"
 
+INITIAL_CHECK_DONE=0
+
 get_route_dev() {
   # Returns the output device for a given destination IP
   local dst="\$1"
@@ -546,6 +548,47 @@ while true; do
       echo "[traffic-guard] \$ANOMALY_COUNT anomalies (unchanged, throttled)"
     fi
   fi
+
+  # ── One-time routing verification after first check pass ────────────
+  if [ "\$INITIAL_CHECK_DONE" = "0" ] && [ -n "\$VPN_INTERFACE" ]; then
+    INITIAL_CHECK_DONE=1
+    VPN_OK_COUNT=0
+    VPN_FAIL_COUNT=0
+    DIRECT_OK_COUNT=0
+    DIRECT_FAIL_COUNT=0
+
+    # Verify mustVpn hosts route through VPN
+    for key in "\${!VPN_HOST_IPS[@]}"; do
+      ip=\${key%%:*}
+      dev=\$(get_route_dev "\$ip")
+      if [ "\$dev" = "\$VPN_INTERFACE" ]; then
+        VPN_OK_COUNT=\$((VPN_OK_COUNT + 1))
+      else
+        VPN_FAIL_COUNT=\$((VPN_FAIL_COUNT + 1))
+      fi
+    done
+
+    # Verify mustDirect CIDRs route through physical interface
+    for cidr in "\${DIRECT_CIDRS[@]}"; do
+      # Use first IP in CIDR as probe
+      probe_ip=\$(python3 -c "import ipaddress,sys; print(next(ipaddress.ip_network(sys.argv[1],strict=False).hosts()))" "\$cidr" 2>/dev/null)
+      [ -z "\$probe_ip" ] && continue
+      dev=\$(get_route_dev "\$probe_ip")
+      if [ "\$dev" != "\$VPN_INTERFACE" ]; then
+        DIRECT_OK_COUNT=\$((DIRECT_OK_COUNT + 1))
+      else
+        DIRECT_FAIL_COUNT=\$((DIRECT_FAIL_COUNT + 1))
+      fi
+    done
+
+    VERDICT="pass"
+    [ "\$VPN_FAIL_COUNT" -gt 0 ] || [ "\$DIRECT_FAIL_COUNT" -gt 0 ] && VERDICT="fail"
+    SEVERITY="info"
+    [ "\$VERDICT" = "fail" ] && SEVERITY="warning"
+
+    report_event "routing_verified" "\$SEVERITY" "{\\"verdict\\":\\"\$VERDICT\\",\\"vpnInterface\\":\\"\$VPN_INTERFACE\\",\\"directInterface\\":\\"\$ORIG_DEV\\",\\"mustVpn\\":{\\"ok\\":\$VPN_OK_COUNT,\\"fail\\":\$VPN_FAIL_COUNT},\\"mustDirect\\":{\\"ok\\":\$DIRECT_OK_COUNT,\\"fail\\":\$DIRECT_FAIL_COUNT}}"
+    echo "[traffic-guard] Routing verified: mustVpn=\${VPN_OK_COUNT}ok/\${VPN_FAIL_COUNT}fail, mustDirect=\${DIRECT_OK_COUNT}ok/\${DIRECT_FAIL_COUNT}fail (\$VERDICT)"
+  fi
 done`;
 }
 
@@ -589,6 +632,16 @@ fail_job() {
     -H "Authorization: Bearer \${SERVICE_TOKEN}" \\
     -H "Content-Type: application/json" \\
     -d "{\\"status\\":\\"failed\\",\\"error\\":\\"\$msg\\"}" || true
+}
+
+report_event() {
+  local event_type="\$1" severity="\$2" details="\$3"
+  curl -sf --connect-timeout 5 --max-time 10 \\
+    -X POST "\${API_BASE_URL}/service/jobs/\${JOB_ID}/events" \\
+    -H "Authorization: Bearer \${SERVICE_TOKEN}" \\
+    -H "Content-Type: application/json" \\
+    -d "{\\"eventType\\":\\"\$event_type\\",\\"severity\\":\\"\$severity\\",\\"details\\":\$details}" \\
+    > /dev/null 2>&1 || echo "[bootstrap] Warning: event report failed"
 }
 
 echo "[bootstrap] Fetching config from API..."
@@ -825,6 +878,11 @@ fi
 
 echo "[vpn] Connectivity verified through \$VPN_INTERFACE"
 
+# ── Report bootstrap_complete event ──────────────────────────────────
+VPN_PUBLIC_IP=$(curl -sf --interface "\$VPN_INTERFACE" --connect-timeout 5 "https://api.ipify.org" 2>/dev/null || echo "unknown")
+report_event "bootstrap_complete" "info" "{\\"protocol\\":\\"\$VPN_PROTOCOL\\",\\"interface\\":\\"\$VPN_INTERFACE\\",\\"vpnPublicIp\\":\\"\$VPN_PUBLIC_IP\\"}"
+echo "[bootstrap] Reported bootstrap_complete (VPN IP: \$VPN_PUBLIC_IP)"
+
 # ── VPN Watchdog ──────────────────────────────────────────────────────
 # Write watchdog script dynamically (identical logic to the old static version)
 cat > /opt/vpn-watchdog.sh << 'WATCHDOG_EOF'
@@ -844,6 +902,16 @@ watchdog_fail_job() {
     -H "Authorization: Bearer \${SERVICE_TOKEN}" \\
     -H "Content-Type: application/json" \\
     -d "{\\"status\\":\\"failed\\",\\"error\\":\\"\$msg\\"}" || true
+}
+
+watchdog_report_event() {
+  local event_type="\$1" severity="\$2" details="\$3"
+  curl -sf --connect-timeout 5 --max-time 10 \\
+    -X POST "\${API_BASE_URL}/service/jobs/\${JOB_ID}/events" \\
+    -H "Authorization: Bearer \${SERVICE_TOKEN}" \\
+    -H "Content-Type: application/json" \\
+    -d "{\\"eventType\\":\\"\$event_type\\",\\"severity\\":\\"\$severity\\",\\"details\\":\$details}" \\
+    > /dev/null 2>&1 || echo "[vpn-watchdog] Warning: event report failed"
 }
 
 reconnect_vpn() {
@@ -885,6 +953,7 @@ while true; do
   fi
 
   echo "[vpn-watchdog] Health check failed — starting reconnect sequence"
+  watchdog_report_event "vpn_down" "warning" "{\\"protocol\\":\\"\$VPN_PROTOCOL\\",\\"interface\\":\\"\$VPN_INTERFACE\\"}"
 
   RECONNECTED=0
   for attempt in $(seq 0 $((MAX_RETRIES - 1))); do
@@ -897,12 +966,14 @@ while true; do
     sleep 2
     if health_check; then
       echo "[vpn-watchdog] Reconnected successfully on attempt $((attempt + 1))"
+      watchdog_report_event "vpn_reconnect" "info" "{\\"protocol\\":\\"\$VPN_PROTOCOL\\",\\"interface\\":\\"\$VPN_INTERFACE\\",\\"attempt\\":$((attempt + 1))}"
       RECONNECTED=1
       break
     fi
   done
 
   if [ "\$RECONNECTED" = "0" ]; then
+    watchdog_report_event "vpn_reconnect_failed" "error" "{\\"protocol\\":\\"\$VPN_PROTOCOL\\",\\"interface\\":\\"\$VPN_INTERFACE\\",\\"attempts\\":\$MAX_RETRIES}"
     watchdog_fail_job "VPN reconnect exhausted after \$MAX_RETRIES attempts"
     exit 1
   fi
@@ -910,7 +981,7 @@ done
 WATCHDOG_EOF
 
 chmod 700 /opt/vpn-watchdog.sh
-export VPN_PROTOCOL VPN_INTERFACE API_BASE_URL SERVICE_TOKEN FAIL_ENDPOINT
+export VPN_PROTOCOL VPN_INTERFACE API_BASE_URL SERVICE_TOKEN FAIL_ENDPOINT JOB_ID
 nohup /opt/vpn-watchdog.sh > /var/log/vpn-watchdog.log 2>&1 &
 
 echo "[bootstrap] VPN setup complete"
