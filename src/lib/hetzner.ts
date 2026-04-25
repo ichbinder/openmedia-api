@@ -400,14 +400,14 @@ echo "[vpn] Updating package lists..."
 apt-get update -qq > /dev/null 2>&1
 
 if [ "\$VPN_PROTOCOL" = "openvpn" ]; then
-  echo "[vpn] Installing openvpn + jq..."
-  if ! timeout 60 apt-get install -y openvpn > /dev/null 2>&1; then
+  echo "[vpn] Installing openvpn..."
+  if ! timeout 60 apt-get install -y openvpn jq > /dev/null 2>&1; then
     fail_job "VPN setup failed: apt install openvpn timed out or failed"
     exit 1
   fi
 else
-  echo "[vpn] Installing wireguard-tools + jq..."
-  if ! timeout 60 apt-get install -y wireguard-tools > /dev/null 2>&1; then
+  echo "[vpn] Installing wireguard-tools..."
+  if ! timeout 60 apt-get install -y wireguard-tools jq > /dev/null 2>&1; then
     fail_job "VPN setup failed: apt install wireguard-tools timed out or failed"
     exit 1
   fi
@@ -420,8 +420,8 @@ if [ "\$VPN_PROTOCOL" = "openvpn" ]; then
 
   if [ -n "\$VPN_USERNAME" ] && [ -n "\$VPN_PASSWORD" ]; then
     # Inject or replace auth-user-pass directive
-    if echo "\$OVPN_CONF" | grep -q '^[[:space:]]*auth-user-pass'; then
-      OVPN_CONF=$(echo "\$OVPN_CONF" | sed 's|^[[:space:]]*auth-user-pass.*|auth-user-pass /etc/openvpn/auth.txt|')
+    if printf '%s\\n' "\$OVPN_CONF" | grep -q '^[[:space:]]*auth-user-pass'; then
+      OVPN_CONF=$(printf '%s\\n' "\$OVPN_CONF" | sed 's|^[[:space:]]*auth-user-pass.*|auth-user-pass /etc/openvpn/auth.txt|')
     else
       OVPN_CONF="\${OVPN_CONF}
 auth-user-pass /etc/openvpn/auth.txt"
@@ -432,18 +432,18 @@ auth-user-pass /etc/openvpn/auth.txt"
     chmod 600 /etc/openvpn/auth.txt
   else
     # Remove any auth-user-pass directive to prevent interactive prompt
-    OVPN_CONF=$(echo "\$OVPN_CONF" | sed '/^[[:space:]]*auth-user-pass/d')
+    OVPN_CONF=$(printf '%s\\n' "\$OVPN_CONF" | sed '/^[[:space:]]*auth-user-pass/d')
   fi
 
   mkdir -p /etc/openvpn
-  echo "\$OVPN_CONF" > /etc/openvpn/client.conf
+  printf '%s\\n' "\$OVPN_CONF" > /etc/openvpn/client.conf
   chmod 600 /etc/openvpn/client.conf
 
   VPN_INTERFACE="tun0"
 else
   # WireGuard: write config
   mkdir -p /etc/wireguard
-  echo "\$VPN_CONFIG_BLOB" > /etc/wireguard/wg0.conf
+  printf '%s\\n' "\$VPN_CONFIG_BLOB" > /etc/wireguard/wg0.conf
   chmod 600 /etc/wireguard/wg0.conf
 
   VPN_INTERFACE="wg0"
@@ -459,14 +459,14 @@ echo "[vpn] Default gateway: \$ORIG_GW via \$ORIG_DEV"
 # ── iptables kill-switch ──────────────────────────────────────────────
 # Parse VPN endpoint for ACCEPT rule
 if [ "\$VPN_PROTOCOL" = "openvpn" ]; then
-  ENDPOINT_HOST=$(echo "\$VPN_CONFIG_BLOB" | grep -oP '^\\s*remote\\s+\\K\\S+' | head -1)
+  ENDPOINT_HOST=$(printf '%s\\n' "\$VPN_CONFIG_BLOB" | grep -oP '^\\s*remote\\s+\\K\\S+' | head -1)
 else
-  ENDPOINT_RAW=$(echo "\$VPN_CONFIG_BLOB" | grep -oP '^\\s*Endpoint\\s*=\\s*\\K.+' | head -1 | xargs)
+  ENDPOINT_RAW=$(printf '%s\\n' "\$VPN_CONFIG_BLOB" | grep -oP '^\\s*Endpoint\\s*=\\s*\\K.+' | head -1 | xargs)
   # Handle bracketed IPv6: [addr]:port
-  if echo "\$ENDPOINT_RAW" | grep -qP '^\\['; then
-    ENDPOINT_HOST=$(echo "\$ENDPOINT_RAW" | grep -oP '\\[\\K[^]]+')
+  if printf '%s\\n' "\$ENDPOINT_RAW" | grep -qP '^\\['; then
+    ENDPOINT_HOST=$(printf '%s\\n' "\$ENDPOINT_RAW" | grep -oP '\\[\\K[^]]+')
   else
-    ENDPOINT_HOST=$(echo "\$ENDPOINT_RAW" | sed 's/:[0-9]*\$//')
+    ENDPOINT_HOST=$(printf '%s\\n' "\$ENDPOINT_RAW" | sed 's/:[0-9]*\$//')
   fi
 fi
 
@@ -483,11 +483,21 @@ iptables -A OUTPUT -o "\$VPN_INTERFACE" -j ACCEPT
 iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 iptables -A OUTPUT -d 169.254.169.254/32 -j ACCEPT
 iptables -A OUTPUT -d 10.0.0.0/8 -j ACCEPT
+
+# Allow fail_job callbacks to the API even when VPN is down
+API_CALLBACK_HOST=$(echo "\$API_BASE_URL" | sed -E 's|https?://||' | sed 's|:[0-9]*$||' | sed 's|/.*||')
+if echo "\$API_CALLBACK_HOST" | grep -q ':'; then
+  ip6tables -I OUTPUT 1 -d "\$API_CALLBACK_HOST" -j ACCEPT
+else
+  iptables -I OUTPUT 1 -d "\$API_CALLBACK_HOST" -j ACCEPT
+fi
+
 iptables -A OUTPUT -j DROP
 
 # IPv6 kill-switch
 ip6tables -A OUTPUT -o lo -j ACCEPT
 ip6tables -A OUTPUT -o "\$VPN_INTERFACE" -j ACCEPT
+ip6tables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 if [ -n "\$ENDPOINT_HOST" ] && [ "\$ENDPOINT_IS_IPV6" = "1" ]; then
   ip6tables -A OUTPUT -d "\$ENDPOINT_HOST" -j ACCEPT
 fi
@@ -541,14 +551,8 @@ echo "\$EXCLUDED_CIDRS" | while IFS= read -r cidr; do
       echo "[vpn] Warning: bypass route failed for \$cidr"
     fi
   else
-    if [ "\$VPN_PROTOCOL" = "openvpn" ]; then
-      if ! ip route add "\$cidr" via "\$ORIG_GW" dev "\$ORIG_DEV"; then
-        echo "[vpn] Warning: bypass route failed for \$cidr"
-      fi
-    else
-      if ! ip route add "\$cidr" via "\$ORIG_GW" dev "\$ORIG_DEV"; then
-        echo "[vpn] Warning: bypass route failed for \$cidr"
-      fi
+    if ! ip route add "\$cidr" via "\$ORIG_GW" dev "\$ORIG_DEV"; then
+      echo "[vpn] Warning: bypass route failed for \$cidr"
     fi
   fi
 done
@@ -723,13 +727,6 @@ runcmd:
         -d "{\\"status\\":\\"failed\\",\\"error\\":\\"$1\\"}" || true
     }
 
-    # Install jq for JSON parsing in bootstrap script
-    apt-get update -qq > /dev/null 2>&1
-    if ! timeout 60 apt-get install -y jq > /dev/null 2>&1; then
-      fail_job "Bootstrap setup failed: apt install jq timed out or failed"
-      exit 1
-    fi
-
     # Run dynamic VPN bootstrap (fetches config from API, sets up VPN + kill-switch)
     /opt/bootstrap.sh || exit 1
 
@@ -860,13 +857,6 @@ runcmd:
         -H "Content-Type: application/json" \\
         -d "{\\"status\\":\\"failed\\",\\"error\\":\\"$1\\"}" || true
     }
-
-    # Install jq for JSON parsing in bootstrap script
-    apt-get update -qq > /dev/null 2>&1
-    if ! timeout 60 apt-get install -y jq > /dev/null 2>&1; then
-      fail_job "Bootstrap setup failed: apt install jq timed out or failed"
-      exit 1
-    fi
 
     # Run dynamic VPN bootstrap (fetches config from API, sets up VPN + kill-switch)
     /opt/bootstrap.sh || exit 1

@@ -351,9 +351,9 @@ describe("generateCloudInit (dynamic bootstrap)", () => {
     expect(decoded).toContain("/service/jobs/${JOB_ID}/bootstrap");
   });
 
-  it("runcmd installs jq and runs bootstrap.sh", () => {
+  it("runcmd runs bootstrap.sh (jq installed inside bootstrap)", () => {
     const result = generateCloudInit({ ...BASE_PARAMS });
-    expect(result).toContain("apt-get install -y jq");
+    expect(result).not.toContain("apt-get install -y jq");
     expect(result).toContain("/opt/bootstrap.sh || exit 1");
   });
 
@@ -379,6 +379,9 @@ describe("generateCloudInit (dynamic bootstrap)", () => {
     // the TypeScript compiler would not flag it as an error.
     const result = generateCloudInit({ ...BASE_PARAMS });
     expect(result).toContain("#cloud-config");
+
+    // Runtime guard: function source should not reference vpnConfig
+    expect(generateCloudInit.toString()).not.toContain("vpnConfig");
   });
 
   it("contains env file and docker commands", () => {
@@ -429,9 +432,9 @@ describe("generateUploadCloudInit (dynamic bootstrap)", () => {
     expect(result).not.toContain("/etc/openvpn/client.conf");
   });
 
-  it("runcmd installs jq and runs bootstrap.sh", () => {
+  it("runcmd runs bootstrap.sh (jq installed inside bootstrap)", () => {
     const result = generateUploadCloudInit({ ...UPLOAD_PARAMS });
-    expect(result).toContain("apt-get install -y jq");
+    expect(result).not.toContain("apt-get install -y jq");
     expect(result).toContain("/opt/bootstrap.sh || exit 1");
   });
 
