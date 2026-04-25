@@ -161,13 +161,18 @@ router.post("/jobs/:id/events", async (req: AuthRequest, res: Response) => {
   try {
     const requestedJobId = String(req.params.id);
 
-    // Scoped access: same as bootstrap
+    // Scoped access: legacy static tokens are never allowed for event reporting.
+    // A legacy token has no jobId and cannot be scoped to a specific job,
+    // so it would silently have write access to any job's events — reject it.
     if (!req.serviceToken) {
-      if (process.env.ENABLE_LEGACY_SERVICE_TOKEN !== "true") {
-        res.status(401).json({ error: "Per-job service token required." });
-        return;
-      }
-    } else if (req.serviceToken.jobId !== requestedJobId) {
+      console.log(`[vps-event] Legacy static token rejected for event POST on job ${requestedJobId} — per-job token required`);
+      res.status(401).json({ error: "Per-job service token required for event reporting." });
+      return;
+    }
+    if (req.serviceToken.jobId !== requestedJobId) {
+      console.log(
+        `[vps-event] Token scoped to job ${req.serviceToken.jobId} tried to post event for job ${requestedJobId}`,
+      );
       res.status(401).json({ error: "Token not authorized for this job." });
       return;
     }
@@ -248,13 +253,17 @@ router.get("/jobs/:id/events", async (req: AuthRequest, res: Response) => {
   try {
     const requestedJobId = String(req.params.id);
 
-    // Scoped access
+    // Scoped access: legacy static tokens are never allowed for event reads.
+    // Without a jobId in the token there is no way to scope access to a single job.
     if (!req.serviceToken) {
-      if (process.env.ENABLE_LEGACY_SERVICE_TOKEN !== "true") {
-        res.status(401).json({ error: "Per-job service token required." });
-        return;
-      }
-    } else if (req.serviceToken.jobId !== requestedJobId) {
+      console.log(`[vps-event] Legacy static token rejected for event GET on job ${requestedJobId} — per-job token required`);
+      res.status(401).json({ error: "Per-job service token required for event access." });
+      return;
+    }
+    if (req.serviceToken.jobId !== requestedJobId) {
+      console.log(
+        `[vps-event] Token scoped to job ${req.serviceToken.jobId} tried to read events for job ${requestedJobId}`,
+      );
       res.status(401).json({ error: "Token not authorized for this job." });
       return;
     }

@@ -246,6 +246,35 @@ describe("VPS Events + Routing Policy", () => {
     expect(res.status).toBe(401);
   });
 
+  it("rejects legacy static token for event POST (even with ENABLE_LEGACY_SERVICE_TOKEN=true)", async () => {
+    process.env.SERVICE_API_TOKEN = "legacy-static-token-events";
+    process.env.ENABLE_LEGACY_SERVICE_TOKEN = "true";
+    const { job } = await createTestDownloadJob();
+
+    const res = await request(app)
+      .post(`/service/jobs/${job.id}/events`)
+      .set("Authorization", "Bearer legacy-static-token-events")
+      .send({ eventType: "watchdog", details: {} });
+
+    expect(res.status).toBe(401);
+    expect(res.body.error).toContain("Per-job service token required");
+    delete process.env.ENABLE_LEGACY_SERVICE_TOKEN;
+  });
+
+  it("rejects legacy static token for event GET (even with ENABLE_LEGACY_SERVICE_TOKEN=true)", async () => {
+    process.env.SERVICE_API_TOKEN = "legacy-static-token-events";
+    process.env.ENABLE_LEGACY_SERVICE_TOKEN = "true";
+    const { job } = await createTestDownloadJob();
+
+    const res = await request(app)
+      .get(`/service/jobs/${job.id}/events`)
+      .set("Authorization", "Bearer legacy-static-token-events");
+
+    expect(res.status).toBe(401);
+    expect(res.body.error).toContain("Per-job service token required");
+    delete process.env.ENABLE_LEGACY_SERVICE_TOKEN;
+  });
+
   // ─── GET /service/jobs/:id/events ────────────────────────────
 
   it("returns events for a job", async () => {
