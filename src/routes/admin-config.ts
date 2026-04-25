@@ -689,6 +689,10 @@ router.get("/vps-events", requireAuth, requireAdmin, async (req: AuthRequest, re
     const rawLimit = req.query.limit;
     let limit = 50;
     if (rawLimit !== undefined) {
+      if (Array.isArray(rawLimit) || typeof rawLimit !== "string") {
+        res.status(400).json({ error: "limit must be a single string value." });
+        return;
+      }
       const parsed = Number(rawLimit);
       if (!Number.isInteger(parsed) || parsed < 1 || parsed > 200) {
         res.status(400).json({ error: "limit must be an integer between 1 and 200." });
@@ -702,6 +706,10 @@ router.get("/vps-events", requireAuth, requireAdmin, async (req: AuthRequest, re
     let offset = 0;
     const MAX_OFFSET = 1_000_000;
     if (rawOffset !== undefined) {
+      if (Array.isArray(rawOffset) || typeof rawOffset !== "string") {
+        res.status(400).json({ error: "offset must be a single string value." });
+        return;
+      }
       const parsed = Number(rawOffset);
       if (!Number.isInteger(parsed) || parsed < 0 || parsed > MAX_OFFSET) {
         res.status(400).json({ error: `offset must be an integer between 0 and ${MAX_OFFSET}.` });
