@@ -1238,8 +1238,8 @@ export async function provisionUploadVps(
   console.log(`[hetzner] Provisioning upload VPS: ${params.serverName}`);
 
   const rawNetworkId = process.env.HETZNER_NETWORK_ID;
-  const networkId = rawNetworkId ? parseInt(rawNetworkId, 10) : undefined;
-  if (rawNetworkId && (!networkId || isNaN(networkId))) {
+  const networkId = rawNetworkId && /^\d+$/.test(rawNetworkId) ? parseInt(rawNetworkId, 10) : undefined;
+  if (rawNetworkId && !networkId) {
     console.warn(`[hetzner] HETZNER_NETWORK_ID is not a valid number: "${rawNetworkId}" — upload VPS will not be attached to private network`);
   }
 

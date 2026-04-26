@@ -141,13 +141,15 @@ router.post("/", requireAuth, async (req: AuthRequest, res: Response) => {
           serverName,
         });
 
+        const resolvedServerIp = result.server.privateIp || result.server.publicIpv4;
+
         try {
           await prisma.uploadJob.update({
             where: { id: job.id },
             data: {
               status: "running",
               hetznerServerId: result.server.id,
-              hetznerServerIp: result.server.privateIp || result.server.publicIpv4,
+              hetznerServerIp: resolvedServerIp,
               startedAt: new Date(),
             },
           });
@@ -158,7 +160,7 @@ router.post("/", requireAuth, async (req: AuthRequest, res: Response) => {
         }
 
         console.log(
-          `[uploads] Upload VPS provisioned: ${result.server.name} (id=${result.server.id}, ip=${result.server.publicIpv4})`
+          `[uploads] Upload VPS provisioned: ${result.server.name} (id=${result.server.id}, ip=${resolvedServerIp})`
         );
 
         res.status(201).json({
@@ -166,7 +168,7 @@ router.post("/", requireAuth, async (req: AuthRequest, res: Response) => {
           nzbFileId: job.nzbFileId,
           status: "running",
           hetznerServerId: result.server.id,
-          hetznerServerIp: result.server.publicIpv4,
+          hetznerServerIp: resolvedServerIp,
           createdAt: job.createdAt,
         });
         return;
