@@ -406,6 +406,15 @@ describe("generateCloudInit (dynamic bootstrap)", () => {
     expect(result).toContain("/cleanup");
     expect(result).toContain("Self-cleanup");
   });
+
+  it("disables IPv6 before any network activity", () => {
+    const result = generateCloudInit({ ...BASE_PARAMS });
+    expect(result).toContain("net.ipv6.conf.all.disable_ipv6=1");
+    expect(result).toContain("net.ipv6.conf.default.disable_ipv6=1");
+    const ipv6Pos = result.indexOf("disable_ipv6=1");
+    const aptPos = result.indexOf("apt-get");
+    expect(ipv6Pos).toBeLessThan(aptPos);
+  });
 });
 
 // ─── generateUploadCloudInit ────────────────────────────────────────
@@ -467,6 +476,15 @@ describe("generateUploadCloudInit (dynamic bootstrap)", () => {
     });
     expect(result).toContain("custom-image:v2");
   });
+
+  it("disables IPv6 before any network activity", () => {
+    const result = generateUploadCloudInit({ ...UPLOAD_PARAMS });
+    expect(result).toContain("net.ipv6.conf.all.disable_ipv6=1");
+    expect(result).toContain("net.ipv6.conf.default.disable_ipv6=1");
+    const ipv6Pos = result.indexOf("disable_ipv6=1");
+    const aptPos = result.indexOf("apt-get");
+    expect(ipv6Pos).toBeLessThan(aptPos);
+  });
 });
 
 // ─── generateTrafficGuardScript ───────────────────────────────────────
@@ -499,7 +517,7 @@ describe("generateTrafficGuardScript", () => {
   });
 
   it("resolves mustVpn hostnames to IPs via getent", () => {
-    expect(script).toContain("getent ahostsv4");
+    expect(script).toContain("getent ahosts");
   });
 
   it("reports anomalies via POST to events endpoint", () => {

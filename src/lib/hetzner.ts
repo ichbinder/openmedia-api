@@ -400,7 +400,7 @@ while IFS= read -r entry; do
   port=\${entry##*:}
 
   # Resolve hostname to IP(s)
-  resolved=$(getent ahostsv4 "\$host" 2>/dev/null | awk '{print \$1}' | sort -u)
+  resolved=$(getent ahosts "\$host" 2>/dev/null | awk '{print \$1}' | sort -u)
   if [ -z "\$resolved" ]; then
     echo "[traffic-guard] Warning: cannot resolve \$host"
     continue
@@ -1024,6 +1024,10 @@ runcmd:
   - |
     set -e
 
+    # Disable IPv6 — all traffic must go through the WireGuard IPv4 tunnel
+    sysctl -w net.ipv6.conf.all.disable_ipv6=1
+    sysctl -w net.ipv6.conf.default.disable_ipv6=1
+
     # Source the env file for use in this script
     set -a
     . /opt/openmedia-env
@@ -1175,6 +1179,10 @@ write_files:
 runcmd:
   - |
     set -e
+
+    # Disable IPv6 — all traffic must go through the WireGuard IPv4 tunnel
+    sysctl -w net.ipv6.conf.all.disable_ipv6=1
+    sysctl -w net.ipv6.conf.default.disable_ipv6=1
 
     # Source the env file for use in this script
     set -a
