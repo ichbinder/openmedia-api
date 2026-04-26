@@ -796,6 +796,17 @@ else
   iptables -I OUTPUT 1 -d "\$API_CALLBACK_HOST" -j ACCEPT
 fi
 
+# Cache API host in /etc/hosts so curl works without DNS when VPN is down
+API_CALLBACK_IP=$(getent ahostsv4 "\$API_CALLBACK_HOST" 2>/dev/null | awk 'NR==1{print \$1}')
+if [ -n "\$API_CALLBACK_IP" ]; then
+  echo "\$API_CALLBACK_IP \$API_CALLBACK_HOST" >> /etc/hosts
+  echo "[vpn] Cached \$API_CALLBACK_HOST → \$API_CALLBACK_IP in /etc/hosts"
+fi
+
+# Allow DNS (1.1.1.1) through kill-switch for hostname resolution
+iptables -I OUTPUT 1 -d 1.1.1.1 -p udp --dport 53 -j ACCEPT
+iptables -I OUTPUT 1 -d 1.1.1.1 -p tcp --dport 53 -j ACCEPT
+
 iptables -A OUTPUT -j DROP
 
 # IPv6 kill-switch
@@ -1113,6 +1124,11 @@ runcmd:
     docker logs openmedia-downloader > /var/log/openmedia-downloader.log 2>&1
     rm -f /opt/openmedia-env
 
+    # Stop watchdog and traffic guard to prevent phantom events after job completion (K111)
+    echo "Stopping watchdog and traffic guard..."
+    pkill -f vpn-watchdog.sh 2>/dev/null || true
+    pkill -f traffic-guard.sh 2>/dev/null || true
+
     # Self-cleanup: ask the API to delete this VPS with retry (K112)
     echo "Requesting self-cleanup via API..."
     CLEANUP_OK=0
@@ -1257,6 +1273,10 @@ runcmd:
 
     echo "openmedia-uploader exited with code $?"
     rm -f /opt/openmedia-env
+
+    # Stop watchdog and traffic guard to prevent phantom events after job completion (K111)
+    pkill -f vpn-watchdog.sh 2>/dev/null || true
+    pkill -f traffic-guard.sh 2>/dev/null || true
 
     # VPS deletion is handled by the API after PATCH /uploads/:id completed/failed.
     # Do NOT embed Hetzner credentials in cloud-init.
