@@ -499,7 +499,7 @@ describe("generateTrafficGuardScript", () => {
   });
 
   it("resolves mustVpn hostnames to IPs via getent", () => {
-    expect(script).toContain("getent ahosts");
+    expect(script).toContain("getent ahostsv4");
   });
 
   it("reports anomalies via POST to events endpoint", () => {
