@@ -616,13 +616,17 @@ export function generateBootstrapScript(params: {
   return `#!/usr/bin/env bash
 set -euo pipefail
 
-# ── Dynamic VPN Bootstrap ─────────────────────────────────────────────
+# ── Dynamic VPN Bootstrap ───────────────────────────────────────────���─
 # Fetches VPN config from the Bootstrap API and configures the tunnel
 # dynamically. No static VPN config in cloud-init.
 
-API_BASE_URL="${params.apiBaseUrl}"
-SERVICE_TOKEN="${params.serviceToken}"
-JOB_ID="${params.jobId}"
+# Source env from cloud-init write_files (fallback to params for compat)
+if [ -f /opt/openmedia-env ]; then
+  set +u; set -a; . /opt/openmedia-env; set +a; set -u
+fi
+API_BASE_URL="\${API_BASE_URL:-${params.apiBaseUrl}}"
+SERVICE_TOKEN="\${SERVICE_TOKEN:-${params.serviceToken}}"
+JOB_ID="\${JOB_ID:-${params.jobId}}"
 FAIL_ENDPOINT="${failEndpoint}"
 
 fail_job() {
@@ -1007,15 +1011,6 @@ export function generateCloudInit(params: {
   // Base64-encode the env content to avoid YAML parsing issues
   const envBase64 = Buffer.from(envContent).toString("base64");
 
-  // Bootstrap script fetches VPN config dynamically from the API
-  const bootstrapScript = generateBootstrapScript({
-    jobId: params.jobId,
-    apiBaseUrl: params.apiBaseUrl,
-    serviceToken: params.serviceToken,
-    jobType: "download",
-  });
-  const bootstrapBase64 = Buffer.from(bootstrapScript).toString("base64");
-
   return `#cloud-config
 package_update: false
 
@@ -1024,25 +1019,10 @@ write_files:
     permissions: "0600"
     encoding: b64
     content: ${envBase64}
-  - path: /opt/bootstrap.sh
-    permissions: "0700"
-    encoding: b64
-    content: ${bootstrapBase64}
 
 runcmd:
   - |
     set -e
-
-    # Install jq with retry (network may not be ready immediately on ARM VPS)
-    for i in 1 2 3; do
-      apt-get update -qq > /dev/null 2>&1 && apt-get install -y jq > /dev/null 2>&1 && break
-      echo "[cloud-init] apt-get attempt $i failed, retrying in 5s..."
-      sleep 5
-    done
-    if ! command -v jq > /dev/null 2>&1; then
-      echo "[cloud-init] FATAL: jq installation failed after 3 attempts"
-      exit 1
-    fi
 
     # Source the env file for use in this script
     set -a
@@ -1055,6 +1035,35 @@ runcmd:
         -H "Content-Type: application/json" \\
         -d "{\\"status\\":\\"failed\\",\\"error\\":\\"$1\\"}" || true
     }
+
+    # Install jq with retry (network may not be ready immediately on ARM VPS)
+    for i in 1 2 3; do
+      apt-get update -qq > /dev/null 2>&1 && apt-get install -y jq > /dev/null 2>&1 && break
+      echo "[cloud-init] apt-get attempt $i failed, retrying in 5s..."
+      sleep 5
+    done
+    if ! command -v jq > /dev/null 2>&1; then
+      fail_job "jq installation failed after 3 attempts"
+      exit 1
+    fi
+
+    # Fetch bootstrap script from API (avoids 32KB user_data limit)
+    echo "[cloud-init] Fetching bootstrap script..."
+    for i in 1 2 3; do
+      if curl -sf --connect-timeout 10 --max-time 30 \\
+        "${params.apiBaseUrl}/service/jobs/${params.jobId}/bootstrap-script" \\
+        -H "Authorization: Bearer ${params.serviceToken}" \\
+        -o /opt/bootstrap.sh; then
+        break
+      fi
+      echo "[cloud-init] Bootstrap script fetch attempt $i failed, retrying in 5s..."
+      sleep 5
+    done
+    if [ ! -s /opt/bootstrap.sh ]; then
+      fail_job "Bootstrap script fetch failed after 3 attempts"
+      exit 1
+    fi
+    chmod 700 /opt/bootstrap.sh
 
     # Run dynamic VPN bootstrap (fetches config from API, sets up VPN + kill-switch)
     /opt/bootstrap.sh || exit 1
@@ -1153,15 +1162,6 @@ export function generateUploadCloudInit(params: GenerateUploadCloudInitParams): 
   const envContent = envLines.join("\n");
   const envBase64 = Buffer.from(envContent).toString("base64");
 
-  // Bootstrap script fetches VPN config dynamically from the API
-  const bootstrapScript = generateBootstrapScript({
-    jobId: params.jobId,
-    apiBaseUrl: params.apiBaseUrl,
-    serviceToken: params.serviceToken,
-    jobType: "upload",
-  });
-  const bootstrapBase64 = Buffer.from(bootstrapScript).toString("base64");
-
   return `#cloud-config
 
 package_update: false
@@ -1171,14 +1171,22 @@ write_files:
     permissions: "0600"
     encoding: b64
     content: ${envBase64}
-  - path: /opt/bootstrap.sh
-    permissions: "0700"
-    encoding: b64
-    content: ${bootstrapBase64}
 
 runcmd:
   - |
     set -e
+
+    # Source the env file for use in this script
+    set -a
+    . /opt/openmedia-env
+    set +a
+
+    fail_job() {
+      curl -sf -X PATCH "${params.apiBaseUrl}/uploads/${params.jobId}" \\
+        -H "Authorization: Bearer ${params.serviceToken}" \\
+        -H "Content-Type: application/json" \\
+        -d "{\\"status\\":\\"failed\\",\\"error\\":\\"$1\\"}" || true
+    }
 
     # Install jq with retry (network may not be ready immediately on ARM VPS)
     for i in 1 2 3; do
@@ -1187,16 +1195,27 @@ runcmd:
       sleep 5
     done
     if ! command -v jq > /dev/null 2>&1; then
-      echo "[cloud-init] FATAL: jq installation failed after 3 attempts"
+      fail_job "jq installation failed after 3 attempts"
       exit 1
     fi
 
-    fail_job() {
-      curl -sf -X PATCH "${params.apiBaseUrl}/uploads/${params.jobId}" \\
+    # Fetch bootstrap script from API (avoids 32KB user_data limit)
+    echo "[cloud-init] Fetching bootstrap script..."
+    for i in 1 2 3; do
+      if curl -sf --connect-timeout 10 --max-time 30 \\
+        "${params.apiBaseUrl}/service/jobs/${params.jobId}/bootstrap-script" \\
         -H "Authorization: Bearer ${params.serviceToken}" \\
-        -H "Content-Type: application/json" \\
-        -d "{\\"status\\":\\"failed\\",\\"error\\":\\"$1\\"}" || true
-    }
+        -o /opt/bootstrap.sh; then
+        break
+      fi
+      echo "[cloud-init] Bootstrap script fetch attempt $i failed, retrying in 5s..."
+      sleep 5
+    done
+    if [ ! -s /opt/bootstrap.sh ]; then
+      fail_job "Bootstrap script fetch failed after 3 attempts"
+      exit 1
+    fi
+    chmod 700 /opt/bootstrap.sh
 
     # Run dynamic VPN bootstrap (fetches config from API, sets up VPN + kill-switch)
     /opt/bootstrap.sh || exit 1

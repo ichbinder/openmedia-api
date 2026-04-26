@@ -9,6 +9,7 @@ import { Router, type Response } from "express";
 import prisma from "../lib/prisma.js";
 import { requireServiceToken, type AuthRequest } from "../middleware/auth.js";
 import { getDownloadVpsConfig, getUploadVpsConfig } from "../lib/vps-config.js";
+import { generateBootstrapScript } from "../lib/hetzner.js";
 
 const router = Router();
 
@@ -146,7 +147,69 @@ router.get("/jobs/:id/bootstrap", async (req: AuthRequest, res: Response) => {
   }
 });
 
-// ─── VPS Event Reporting ─────────────────────────────────────────────
+/**
+ * GET /service/jobs/:id/bootstrap-script
+ *
+ * Returns the VPN bootstrap shell script as text/plain.
+ * Called by cloud-init runcmd via curl — avoids embedding the large script
+ * as base64 in user_data (which has a 32 KB Hetzner limit).
+ */
+router.get("/jobs/:id/bootstrap-script", async (req: AuthRequest, res: Response) => {
+  try {
+    const requestedJobId = String(req.params.id);
+
+    if (!req.serviceToken) {
+      if (process.env.ENABLE_LEGACY_SERVICE_TOKEN !== "true") {
+        res.status(401).json({ error: "Per-job service token required." });
+        return;
+      }
+    } else if (req.serviceToken.jobId !== requestedJobId) {
+      res.status(401).json({ error: "Token not authorized for this job." });
+      return;
+    }
+
+    // Determine job type
+    const downloadJob = await prisma.downloadJob.findUnique({
+      where: { id: requestedJobId },
+      select: { id: true },
+    });
+    let jobType: "download" | "upload";
+    if (downloadJob) {
+      jobType = "download";
+    } else {
+      const uploadJob = await prisma.uploadJob.findUnique({
+        where: { id: requestedJobId },
+        select: { id: true },
+      });
+      if (!uploadJob) {
+        res.status(404).json({ error: "Job not found." });
+        return;
+      }
+      jobType = "upload";
+    }
+
+    // Extract raw token from Authorization header (already validated by middleware)
+    const rawToken = req.headers.authorization?.startsWith("Bearer ")
+      ? req.headers.authorization.slice(7)
+      : "";
+
+    const script = generateBootstrapScript({
+      jobId: requestedJobId,
+      apiBaseUrl: process.env.API_BASE_URL || `http://10.0.0.2:${process.env.PORT || 4000}`,
+      serviceToken: rawToken,
+      jobType,
+    });
+
+    console.log(`[service-api] Bootstrap script served for ${jobType} job ${requestedJobId} (${script.length} bytes)`);
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.send(script);
+  } catch (err) {
+    console.error("[service-api] Bootstrap script error:", err);
+    res.status(500).send("#!/bin/bash\necho '[bootstrap] Script fetch failed'\nexit 1\n");
+  }
+});
+
+// ─── VPS Event Reporting ─────────���───────────────────────────���───────
 
 const VALID_EVENT_TYPES = ["routing_anomaly", "routing_verified", "vpn_down", "vpn_reconnect", "vpn_reconnect_failed", "watchdog", "bootstrap", "bootstrap_complete"] as const;
 const VALID_SEVERITIES = ["info", "warning", "error", "critical"] as const;

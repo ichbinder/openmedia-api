@@ -318,14 +318,17 @@ describe("generateBootstrapScript", () => {
     expect(nohupPos).toBeGreaterThan(connectivityPos);
   });
 
-  it("embeds correct API credentials in script", () => {
+  it("embeds correct API credentials in script with env fallback", () => {
     const script = generateBootstrapScript({
       ...BASE_PARAMS,
       jobType: "download",
     });
-    expect(script).toContain(`API_BASE_URL="${BASE_PARAMS.apiBaseUrl}"`);
-    expect(script).toContain(`SERVICE_TOKEN="${BASE_PARAMS.serviceToken}"`);
-    expect(script).toContain(`JOB_ID="${BASE_PARAMS.jobId}"`);
+    // Values are set as fallback defaults: ${VAR:-default}
+    expect(script).toContain(BASE_PARAMS.apiBaseUrl);
+    expect(script).toContain(BASE_PARAMS.serviceToken);
+    expect(script).toContain(BASE_PARAMS.jobId);
+    // Sources env file when available
+    expect(script).toContain(". /opt/openmedia-env");
   });
 });
 
@@ -339,17 +342,12 @@ describe("generateCloudInit (dynamic bootstrap)", () => {
     expect(result).toContain("fail_job");
   });
 
-  it("contains /opt/bootstrap.sh in write_files", () => {
+  it("fetches bootstrap script from API via curl in runcmd", () => {
     const result = generateCloudInit({ ...BASE_PARAMS });
-    expect(result).toContain("/opt/bootstrap.sh");
-    expect(result).toContain('permissions: "0700"');
-  });
-
-  it("bootstrap.sh is base64-encoded and decodable", () => {
-    const result = generateCloudInit({ ...BASE_PARAMS });
-    const decoded = decodeWriteFile(result, "/opt/bootstrap.sh");
-    expect(decoded).toContain("#!/usr/bin/env bash");
-    expect(decoded).toContain("/service/jobs/${JOB_ID}/bootstrap");
+    expect(result).toContain("/service/jobs/");
+    expect(result).toContain("/bootstrap-script");
+    expect(result).toContain("-o /opt/bootstrap.sh");
+    expect(result).toContain("chmod 700 /opt/bootstrap.sh");
   });
 
   it("runcmd installs jq before bootstrap.sh", () => {
@@ -419,15 +417,12 @@ describe("generateUploadCloudInit (dynamic bootstrap)", () => {
     expect(result).toContain("docker pull");
   });
 
-  it("contains /opt/bootstrap.sh in write_files", () => {
+  it("fetches bootstrap script from API via curl in runcmd", () => {
     const result = generateUploadCloudInit({ ...UPLOAD_PARAMS });
-    expect(result).toContain("/opt/bootstrap.sh");
-  });
-
-  it("bootstrap.sh uses upload fail endpoint", () => {
-    const result = generateUploadCloudInit({ ...UPLOAD_PARAMS });
-    const decoded = decodeWriteFile(result, "/opt/bootstrap.sh");
-    expect(decoded).toContain(`/uploads/${UPLOAD_PARAMS.jobId}`);
+    expect(result).toContain("/service/jobs/");
+    expect(result).toContain("/bootstrap-script");
+    expect(result).toContain("-o /opt/bootstrap.sh");
+    expect(result).toContain("chmod 700 /opt/bootstrap.sh");
   });
 
   it("does NOT contain static VPN configs", () => {
