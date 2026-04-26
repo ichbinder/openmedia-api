@@ -1237,12 +1237,19 @@ export async function provisionUploadVps(
 
   console.log(`[hetzner] Provisioning upload VPS: ${params.serverName}`);
 
+  const rawNetworkId = process.env.HETZNER_NETWORK_ID;
+  const networkId = rawNetworkId ? parseInt(rawNetworkId, 10) : undefined;
+  if (rawNetworkId && (!networkId || isNaN(networkId))) {
+    console.warn(`[hetzner] HETZNER_NETWORK_ID is not a valid number: "${rawNetworkId}" — upload VPS will not be attached to private network`);
+  }
+
   const result = await createServer({
     name: params.serverName,
     serverType: "cpx42",  // 8 vCPU x86, 16GB RAM — more power for PAR2 + Nyuu
     location: "hel1",     // Helsinki — close to Hetzner S3 and EU Usenet providers
     userData: cloudInit,
     ...(process.env.HETZNER_SSH_KEY_NAME ? { sshKeys: [process.env.HETZNER_SSH_KEY_NAME] } : {}),
+    networks: networkId ? [networkId] : undefined,
     labels: {
       purpose: "openmedia-upload",
       uploadJobId: params.jobId,

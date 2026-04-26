@@ -1049,11 +1049,11 @@ router.patch("/jobs/:id/status", requireServiceOrUserAuth, async (req: AuthReque
                       data: {
                         status: "running",
                         hetznerServerId: result.server.id,
-                        hetznerServerIp: result.server.publicIpv4,
+                        hetznerServerIp: result.server.privateIp || result.server.publicIpv4,
                         startedAt: new Date(),
                       },
                     });
-                    console.log(`[auto-upload] Upload VPS provisioned: ${result.server.name} (id=${result.server.id})`);
+                    console.log(`[auto-upload] Upload VPS provisioned: ${result.server.name} (id=${result.server.id}, ip=${result.server.privateIp || result.server.publicIpv4})`);
                   } catch (provErr) {
                     deleteServiceTokens(uploadJob.id).catch(() => {});
                     console.error(`[auto-upload] VPS provisioning failed: ${(provErr as Error).message}`);

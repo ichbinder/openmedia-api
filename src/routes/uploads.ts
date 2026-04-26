@@ -147,7 +147,7 @@ router.post("/", requireAuth, async (req: AuthRequest, res: Response) => {
             data: {
               status: "running",
               hetznerServerId: result.server.id,
-              hetznerServerIp: result.server.publicIpv4,
+              hetznerServerIp: result.server.privateIp || result.server.publicIpv4,
               startedAt: new Date(),
             },
           });
