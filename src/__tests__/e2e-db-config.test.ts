@@ -194,6 +194,7 @@ describe("e2e-db-config: config readers without mock", () => {
     expect(config!.usenetServers[0].host).toBe("news.test.com");
     expect(config!.usenetServers[0].username).toBe("testuser");
     expect(config!.usenetServers[0].password).toBe("testpass");
+    expect(config!.usenetServers[0].priority).toBe(0);
   });
 
   it("getUploadVpsConfig() returns non-null with correct structure", async () => {
