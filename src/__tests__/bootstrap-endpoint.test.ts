@@ -21,7 +21,7 @@ vi.mock("../lib/vps-config.js", () => ({
     s3Region: "hel1",
     nzbServiceUrl: "http://nzb.example.com",
     dockerImage: "ghcr.io/test/downloader:latest",
-    usenetServers: [{ host: "news.example.com", username: "user", password: "pass" }],
+    usenetServers: [{ host: "news.example.com", username: "user", password: "pass", priority: 0 }],
   }),
   getUploadVpsConfig: vi.fn().mockResolvedValue({
     apiBaseUrl: "http://localhost:4000",
@@ -445,7 +445,7 @@ describe("Bootstrap with VPN config", () => {
       s3Region: "hel1",
       nzbServiceUrl: "http://nzb.example.com",
       dockerImage: "ghcr.io/test/downloader:latest",
-      usenetServers: [{ host: "news.example.com", username: "user", password: "pass" }],
+      usenetServers: [{ host: "news.example.com", username: "user", password: "pass", priority: 0 }],
       vpnConfig: mockVpnConfig,
       routingPolicy: null,
     });
@@ -521,7 +521,7 @@ describe("Bootstrap with VPN config", () => {
       s3Region: "hel1",
       nzbServiceUrl: "http://nzb.example.com",
       dockerImage: "ghcr.io/test/downloader:latest",
-      usenetServers: [{ host: "news.example.com", username: "user", password: "pass" }],
+      usenetServers: [{ host: "news.example.com", username: "user", password: "pass", priority: 0 }],
       vpnConfig: mockVpnConfig,
       routingPolicy: null,
     });

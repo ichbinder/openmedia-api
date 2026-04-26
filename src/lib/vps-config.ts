@@ -84,6 +84,7 @@ export async function getDownloadVpsConfig(): Promise<DownloadVpsConfig | null> 
             password: p.password,
             ssl: p.ssl,
             connections: p.connections,
+            priority: p.priority,
           }));
           console.log(`[vps-config] Download servers from UsenetProvider table (${providers.length} providers)`);
         }
