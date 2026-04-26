@@ -1117,14 +1117,16 @@ runcmd:
     echo "Requesting self-cleanup via API..."
     CLEANUP_OK=0
     for attempt in 1 2 3; do
-      if curl -sf --connect-timeout 10 --max-time 30 -X POST "${params.apiBaseUrl}/downloads/jobs/${params.jobId}/cleanup" \\
+      HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 10 --max-time 30 -X POST "${params.apiBaseUrl}/downloads/jobs/${params.jobId}/cleanup" \\
         -H "Authorization: Bearer ${params.serviceToken}" \\
-        -H "Content-Type: application/json"; then
-        echo "Self-cleanup request succeeded on attempt \$attempt"
+        -H "Content-Type: application/json")
+      echo "Self-cleanup attempt \$attempt returned HTTP \$HTTP_CODE"
+      if [ "\$HTTP_CODE" -ge 200 ] && [ "\$HTTP_CODE" -lt 300 ] || [ "\$HTTP_CODE" = "422" ]; then
+        echo "Self-cleanup request succeeded on attempt \$attempt (HTTP \$HTTP_CODE)"
         CLEANUP_OK=1
         break
       fi
-      echo "Self-cleanup attempt \$attempt failed, retrying in \$((attempt * 5))s..."
+      echo "Self-cleanup attempt \$attempt failed (HTTP \$HTTP_CODE), retrying in \$((attempt * 5))s..."
       sleep \$((attempt * 5))
     done
 

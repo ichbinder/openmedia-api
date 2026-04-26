@@ -84,6 +84,7 @@ describe("Bootstrap endpoint", () => {
     expect(res.body.config).toBeDefined();
     expect(res.body.config.s3AccessKey).toBeDefined();
     expect(res.body.config.usenetServers).toBeDefined();
+    expect(res.body.config.usenetServers[0].priority).toBe(0);
     expect(res.body.config.nzbServiceUrl).toBeDefined();
 
     // R017: vpnConfig must be undefined when no VPN provider is configured
@@ -467,6 +468,7 @@ describe("Bootstrap with VPN config", () => {
     expect(res.body.vpnConfig.excludedCIDRs).toEqual(
       expect.arrayContaining(["169.254.169.254/32", "10.0.0.0/8"]),
     );
+    expect(res.body.config.usenetServers[0].priority).toBe(0);
   });
 
   it("upload bootstrap with VPN returns vpnConfig as top-level field", async () => {
@@ -549,6 +551,7 @@ describe("Bootstrap with VPN config", () => {
     expect(res.body.vpnConfig).toHaveProperty("protocol");
     expect(res.body.vpnConfig).toHaveProperty("configBlob");
     expect(res.body.vpnConfig).toHaveProperty("excludedCIDRs");
+    expect(res.body.config.usenetServers[0].priority).toBe(0);
   });
 });
 
