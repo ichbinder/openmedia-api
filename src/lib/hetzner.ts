@@ -400,7 +400,7 @@ while IFS= read -r entry; do
   port=\${entry##*:}
 
   # Resolve hostname to IP(s)
-  resolved=$(getent ahosts "\$host" 2>/dev/null | awk '{print \$1}' | sort -u)
+  resolved=$(getent ahostsv4 "\$host" 2>/dev/null | awk '{print \$1}' | sort -u)
   if [ -z "\$resolved" ]; then
     echo "[traffic-guard] Warning: cannot resolve \$host"
     continue
