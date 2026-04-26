@@ -934,8 +934,8 @@ reconnect_vpn() {
 }
 
 health_check() {
-  curl -sf --interface "\$VPN_INTERFACE" --connect-timeout 5 "https://api.ipify.org" > /dev/null 2>&1 \\
-    && curl -sf --connect-timeout 5 "\${API_BASE_URL}/health" > /dev/null 2>&1
+  # Only check VPN connectivity — API reachability is a separate concern (K111)
+  curl -sf --interface "\$VPN_INTERFACE" --connect-timeout 5 --max-time 10 "https://api.ipify.org" > /dev/null 2>&1
 }
 
 echo "[vpn-watchdog] Started — monitoring \$VPN_INTERFACE every \${CHECK_INTERVAL}s"
@@ -1113,11 +1113,24 @@ runcmd:
     docker logs openmedia-downloader > /var/log/openmedia-downloader.log 2>&1
     rm -f /opt/openmedia-env
 
-    # Self-cleanup: ask the API to delete this VPS using the per-VPS service token
+    # Self-cleanup: ask the API to delete this VPS with retry (K112)
     echo "Requesting self-cleanup via API..."
-    curl -sf --connect-timeout 5 --max-time 15 -X POST "${params.apiBaseUrl}/downloads/jobs/${params.jobId}/cleanup" \\
-      -H "Authorization: Bearer ${params.serviceToken}" \\
-      -H "Content-Type: application/json" || echo "Self-cleanup request failed (reconciler will handle)"
+    CLEANUP_OK=0
+    for attempt in 1 2 3; do
+      if curl -sf --connect-timeout 10 --max-time 30 -X POST "${params.apiBaseUrl}/downloads/jobs/${params.jobId}/cleanup" \\
+        -H "Authorization: Bearer ${params.serviceToken}" \\
+        -H "Content-Type: application/json"; then
+        echo "Self-cleanup request succeeded on attempt \$attempt"
+        CLEANUP_OK=1
+        break
+      fi
+      echo "Self-cleanup attempt \$attempt failed, retrying in \$((attempt * 5))s..."
+      sleep \$((attempt * 5))
+    done
+
+    if [ "\$CLEANUP_OK" = "0" ]; then
+      echo "All self-cleanup attempts failed (reconciler will handle)"
+    fi
 `;
 }
 
