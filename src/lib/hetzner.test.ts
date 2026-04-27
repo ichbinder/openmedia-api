@@ -95,6 +95,13 @@ describe("Hetzner Service", () => {
       expect(cloudInit).toContain("wg-quick down wg0");
       expect(cloudInit).toContain("killall openvpn");
 
+      // Must flush iptables kill-switch after VPN teardown
+      const iptablesFlushPos = cloudInit.indexOf("iptables -F OUTPUT");
+      expect(iptablesFlushPos).toBeGreaterThan(vpnTeardownPos);
+      expect(iptablesFlushPos).toBeLessThan(cleanupPos);
+      expect(cloudInit).toContain("iptables -P OUTPUT ACCEPT");
+      expect(cloudInit).toContain("ip6tables -F OUTPUT");
+
       // Must restore DNS after VPN teardown
       expect(cloudInit).toContain("nameserver 1.1.1.1");
       expect(cloudInit).toContain("nameserver 8.8.8.8");

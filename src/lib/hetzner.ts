@@ -1143,6 +1143,12 @@ runcmd:
       echo "OpenVPN tunnel stopped"
     fi
 
+    # Flush iptables kill-switch so traffic can flow directly (VPN is down now)
+    iptables -F OUTPUT 2>/dev/null || true
+    iptables -P OUTPUT ACCEPT 2>/dev/null || true
+    ip6tables -F OUTPUT 2>/dev/null || true
+    ip6tables -P OUTPUT ACCEPT 2>/dev/null || true
+
     # Restore DNS to a public resolver (VPN may have overwritten resolv.conf)
     echo 'nameserver 1.1.1.1' > /etc/resolv.conf
     echo 'nameserver 8.8.8.8' >> /etc/resolv.conf
