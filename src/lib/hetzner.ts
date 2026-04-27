@@ -1155,7 +1155,7 @@ runcmd:
 
     # Verify connectivity before cleanup call
     echo "Verifying API connectivity..."
-    if curl -sf --connect-timeout 5 --max-time 10 -o /dev/null "${params.apiBaseUrl}/health"; then
+    if curl -sf --connect-timeout 3 --max-time 5 -o /dev/null "${params.apiBaseUrl}/health"; then
       echo "API reachable"
     else
       echo "WARNING: API not reachable after VPN teardown — trying cleanup anyway"
@@ -1165,7 +1165,7 @@ runcmd:
     echo "Requesting self-cleanup via API..."
     CLEANUP_OK=0
     for attempt in 1 2 3; do
-      HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 10 --max-time 30 -X POST "${params.apiBaseUrl}/downloads/jobs/${params.jobId}/cleanup" \\
+      HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 15 -X POST "${params.apiBaseUrl}/downloads/jobs/${params.jobId}/cleanup" \\
         -H "Authorization: Bearer ${params.serviceToken}" \\
         -H "Content-Type: application/json")
       echo "Self-cleanup attempt \$attempt returned HTTP \$HTTP_CODE"
@@ -1174,8 +1174,8 @@ runcmd:
         CLEANUP_OK=1
         break
       fi
-      echo "Self-cleanup attempt \$attempt failed (HTTP \$HTTP_CODE), retrying in \$((attempt * 5))s..."
-      sleep \$((attempt * 5))
+      echo "Self-cleanup attempt \$attempt failed (HTTP \$HTTP_CODE), retrying in \$((attempt * 2))s..."
+      sleep \$((attempt * 2))
     done
 
     if [ "\$CLEANUP_OK" = "0" ]; then
@@ -1310,8 +1310,42 @@ runcmd:
     pkill -f vpn-watchdog.sh 2>/dev/null || true
     pkill -f traffic-guard.sh 2>/dev/null || true
 
-    # VPS deletion is handled by the API after PATCH /uploads/:id completed/failed.
-    # Do NOT embed Hetzner credentials in cloud-init.
+    # Tear down VPN so cleanup call can reach API directly
+    if ip link show wg0 > /dev/null 2>&1; then
+      wg-quick down wg0 2>/dev/null || true
+      echo "WireGuard tunnel stopped"
+    fi
+
+    # Flush iptables kill-switch
+    iptables -F OUTPUT 2>/dev/null || true
+    iptables -P OUTPUT ACCEPT 2>/dev/null || true
+
+    # Restore DNS
+    echo 'nameserver 1.1.1.1' > /etc/resolv.conf
+    echo 'nameserver 8.8.8.8' >> /etc/resolv.conf
+
+    # Self-cleanup fallback: ask the API to delete this VPS
+    # Primary path: PATCH callback in the container already triggers deletion.
+    # This is a safety net in case that PATCH didn't go through.
+    echo "Requesting self-cleanup via API..."
+    CLEANUP_OK=0
+    for attempt in 1 2 3; do
+      HTTP_CODE=\$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 15 -X POST "${params.apiBaseUrl}/uploads/${params.jobId}/cleanup" \\
+        -H "Authorization: Bearer ${params.serviceToken}" \\
+        -H "Content-Type: application/json")
+      echo "Self-cleanup attempt \$attempt returned HTTP \$HTTP_CODE"
+      if [ "\$HTTP_CODE" -ge 200 ] && [ "\$HTTP_CODE" -lt 300 ] || [ "\$HTTP_CODE" = "422" ]; then
+        echo "Self-cleanup succeeded on attempt \$attempt (HTTP \$HTTP_CODE)"
+        CLEANUP_OK=1
+        break
+      fi
+      echo "Self-cleanup attempt \$attempt failed (HTTP \$HTTP_CODE), retrying in \$((attempt * 2))s..."
+      sleep \$((attempt * 2))
+    done
+
+    if [ "\$CLEANUP_OK" = "0" ]; then
+      echo "All self-cleanup attempts failed (reconciler will handle)"
+    fi
 `;
 }
 
