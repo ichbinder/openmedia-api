@@ -387,7 +387,13 @@ router.patch("/:id", requireServiceOrUserAuth, async (req: AuthRequest, res: Res
       // Non-blocking — zombie cleanup will catch it later
     }
 
-    // Delete service tokens for this job (non-fatal)
+    // Null out server reference so cleanup endpoint's guard fires (422)
+    await prisma.uploadJob.update({
+      where: { id },
+      data: { hetznerServerId: null, hetznerServerIp: null },
+    });
+
+    // Delete service tokens only after cleanup state is persisted (non-fatal)
     try {
       await deleteServiceTokens(id);
     } catch (tokenErr: any) {
@@ -401,6 +407,55 @@ router.patch("/:id", requireServiceOrUserAuth, async (req: AuthRequest, res: Res
     status: updated.status,
     completedAt: updated!.completedAt,
   });
+});
+
+// POST /uploads/:id/cleanup — VPS self-cleanup fallback (analogous to downloads cleanup)
+// Called by cloud-init after the upload container exits, as a safety net
+// in case the PATCH callback didn't trigger VPS deletion.
+router.post("/:id/cleanup", requireServiceOrUserAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    if (!isHetznerConfigured()) {
+      res.status(503).json({ error: "Hetzner Cloud API ist nicht konfiguriert." });
+      return;
+    }
+
+    const job = await prisma.uploadJob.findUnique({
+      where: { id: String(req.params.id) },
+    });
+
+    if (!job) {
+      res.status(404).json({ error: "Upload-Job nicht gefunden." });
+      return;
+    }
+
+    if (!job.hetznerServerId) {
+      // Already cleaned up (PATCH callback got there first) — that's the happy path
+      res.status(422).json({ error: "Job hat keinen zugeordneten Server." });
+      return;
+    }
+
+    const deleted = await deleteServer(job.hetznerServerId);
+
+    // Clear server reference first — so PATCH guard fires on concurrent calls
+    await prisma.uploadJob.update({
+      where: { id: job.id },
+      data: { hetznerServerId: null, hetznerServerIp: null },
+    });
+
+    // Delete service tokens only after cleanup state is persisted (non-fatal)
+    try {
+      await deleteServiceTokens(job.id);
+    } catch (tokenErr: any) {
+      console.error(`[upload-vps] Token cleanup failed (non-fatal): ${tokenErr.message}`);
+    }
+
+    console.log(`[upload-vps] Cleanup: server ${job.hetznerServerId} for job ${job.id} — ${deleted ? "deleted" : "already gone"}`);
+
+    res.json({ success: true, deleted, serverId: job.hetznerServerId });
+  } catch (err: any) {
+    console.error("[upload-vps] Cleanup error:", err.message);
+    res.status(500).json({ error: `Fehler beim Löschen des Upload-Servers: ${err.message}` });
+  }
 });
 
 export default router;

@@ -458,10 +458,12 @@ describe("generateUploadCloudInit (dynamic bootstrap)", () => {
     expect(bootstrapPos).toBeLessThan(dockerPos);
   });
 
-  it("does NOT contain self-cleanup (upload VPS deleted server-side)", () => {
+  it("contains self-cleanup fallback with retry loop", () => {
     const result = generateUploadCloudInit({ ...UPLOAD_PARAMS });
-    expect(result).not.toContain("/cleanup");
-    expect(result).toContain("VPS deletion is handled by the API");
+    expect(result).toContain("/uploads/");
+    expect(result).toContain("/cleanup");
+    expect(result).toContain("Self-cleanup");
+    expect(result).toContain("for attempt in 1 2 3");
   });
 
   it("uses default docker image when not specified", () => {
