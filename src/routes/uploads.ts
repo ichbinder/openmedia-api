@@ -387,7 +387,13 @@ router.patch("/:id", requireServiceOrUserAuth, async (req: AuthRequest, res: Res
       // Non-blocking — zombie cleanup will catch it later
     }
 
-    // Delete service tokens for this job (non-fatal)
+    // Null out server reference so cleanup endpoint's guard fires (422)
+    await prisma.uploadJob.update({
+      where: { id },
+      data: { hetznerServerId: null, hetznerServerIp: null },
+    });
+
+    // Delete service tokens only after cleanup state is persisted (non-fatal)
     try {
       await deleteServiceTokens(id);
     } catch (tokenErr: any) {
@@ -430,18 +436,18 @@ router.post("/:id/cleanup", requireServiceOrUserAuth, async (req: AuthRequest, r
 
     const deleted = await deleteServer(job.hetznerServerId);
 
-    // Delete service tokens for this job (non-fatal)
+    // Clear server reference first — so PATCH guard fires on concurrent calls
+    await prisma.uploadJob.update({
+      where: { id: job.id },
+      data: { hetznerServerId: null, hetznerServerIp: null },
+    });
+
+    // Delete service tokens only after cleanup state is persisted (non-fatal)
     try {
       await deleteServiceTokens(job.id);
     } catch (tokenErr: any) {
       console.error(`[upload-vps] Token cleanup failed (non-fatal): ${tokenErr.message}`);
     }
-
-    // Clear server reference from job
-    await prisma.uploadJob.update({
-      where: { id: job.id },
-      data: { hetznerServerId: null, hetznerServerIp: null },
-    });
 
     console.log(`[upload-vps] Cleanup: server ${job.hetznerServerId} for job ${job.id} — ${deleted ? "deleted" : "already gone"}`);
 

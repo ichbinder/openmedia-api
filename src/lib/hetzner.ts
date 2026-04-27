@@ -1311,14 +1311,21 @@ runcmd:
     pkill -f traffic-guard.sh 2>/dev/null || true
 
     # Tear down VPN so cleanup call can reach API directly
+    echo "Tearing down VPN tunnel for cleanup..."
     if ip link show wg0 > /dev/null 2>&1; then
       wg-quick down wg0 2>/dev/null || true
       echo "WireGuard tunnel stopped"
+    elif ip link show tun0 > /dev/null 2>&1; then
+      killall openvpn 2>/dev/null || true
+      sleep 2
+      echo "OpenVPN tunnel stopped"
     fi
 
-    # Flush iptables kill-switch
+    # Flush kill-switch rules for both IPv4 and IPv6
     iptables -F OUTPUT 2>/dev/null || true
     iptables -P OUTPUT ACCEPT 2>/dev/null || true
+    ip6tables -F OUTPUT 2>/dev/null || true
+    ip6tables -P OUTPUT ACCEPT 2>/dev/null || true
 
     # Restore DNS
     echo 'nameserver 1.1.1.1' > /etc/resolv.conf
