@@ -1129,6 +1129,32 @@ runcmd:
     pkill -f vpn-watchdog.sh 2>/dev/null || true
     pkill -f traffic-guard.sh 2>/dev/null || true
 
+    # Tear down VPN tunnel so the cleanup curl can reach the API directly.
+    # With VPN active, all traffic routes through the tunnel which may be
+    # unstable after the container exits. Stopping the tunnel restores the
+    # default route through the host's public interface.
+    echo "Tearing down VPN tunnel for cleanup..."
+    if ip link show wg0 > /dev/null 2>&1; then
+      wg-quick down wg0 2>/dev/null || true
+      echo "WireGuard tunnel stopped"
+    elif ip link show tun0 > /dev/null 2>&1; then
+      killall openvpn 2>/dev/null || true
+      sleep 2
+      echo "OpenVPN tunnel stopped"
+    fi
+
+    # Restore DNS to a public resolver (VPN may have overwritten resolv.conf)
+    echo 'nameserver 1.1.1.1' > /etc/resolv.conf
+    echo 'nameserver 8.8.8.8' >> /etc/resolv.conf
+
+    # Verify connectivity before cleanup call
+    echo "Verifying API connectivity..."
+    if curl -sf --connect-timeout 5 --max-time 10 -o /dev/null "${params.apiBaseUrl}/health"; then
+      echo "API reachable"
+    else
+      echo "WARNING: API not reachable after VPN teardown — trying cleanup anyway"
+    fi
+
     # Self-cleanup: ask the API to delete this VPS with retry (K112)
     echo "Requesting self-cleanup via API..."
     CLEANUP_OK=0
