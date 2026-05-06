@@ -34,6 +34,7 @@ import {
   updateVpnProvider,
   deleteVpnProvider,
 } from "../lib/vpn-provider-service.js";
+import { getActiveVpsCounts, getVpsLimits } from "../lib/vps-config.js";
 
 const router = Router();
 
@@ -770,6 +771,33 @@ router.get("/vps-events", requireAuth, requireAdmin, async (req: AuthRequest, re
   } catch (err) {
     console.error("[admin-config] List VPS events error:", err);
     res.status(500).json({ error: "Failed to list VPS events." });
+  }
+});
+
+// ─── VPS Status Dashboard ─────────────────────────────────────────────
+
+/** GET /admin/config/vps-status — active VPS counts, limits, and queued jobs */
+router.get("/vps-status", requireAuth, requireAdmin, async (_req: AuthRequest, res: Response) => {
+  try {
+    const [counts, limits, queuedDownloads, queuedUploads] = await Promise.all([
+      getActiveVpsCounts(),
+      getVpsLimits(),
+      prisma.downloadJob.count({ where: { status: "queued", hetznerServerId: null } }),
+      prisma.uploadJob.count({ where: { status: "queued", hetznerServerId: null } }),
+    ]);
+
+    res.json({
+      counts,
+      limits,
+      queued: {
+        downloads: queuedDownloads,
+        uploads: queuedUploads,
+        total: queuedDownloads + queuedUploads,
+      },
+    });
+  } catch (err) {
+    console.error("[admin-config] VPS status error:", err);
+    res.status(500).json({ error: "Failed to get VPS status." });
   }
 });
 

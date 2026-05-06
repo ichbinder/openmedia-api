@@ -327,4 +327,52 @@ describe("Admin Config Routes", () => {
       expect(res.body.history[1].action).toBe("created");
     });
   });
+
+  describe("vps-status", () => {
+    it("GET /admin/config/vps-status — returns counts, limits, and queued", async () => {
+      const { token } = await createTestUserAndToken();
+
+      const res = await request(app)
+        .get("/admin/config/vps-status")
+        .set("Authorization", `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.counts).toEqual({
+        downloads: expect.any(Number),
+        uploads: expect.any(Number),
+        total: expect.any(Number),
+      });
+      expect(res.body.limits).toEqual({
+        globalLimit: expect.any(Number),
+        maxUploadVps: expect.any(Number),
+      });
+      expect(res.body.queued).toEqual({
+        downloads: expect.any(Number),
+        uploads: expect.any(Number),
+        total: expect.any(Number),
+      });
+    });
+
+    it("rejects unauthenticated requests", async () => {
+      const res = await request(app).get("/admin/config/vps-status");
+      expect(res.status).toBe(401);
+    });
+
+    it("rejects non-admin users", async () => {
+      const nonAdmin = await prisma.user.create({
+        data: {
+          email: `nonadmin-vps-${Date.now()}@test.de`,
+          password: "$2b$10$hash",
+          name: "Non-Admin VPS",
+        },
+      });
+      const token = signToken({ userId: nonAdmin.id, email: nonAdmin.email });
+
+      const res = await request(app)
+        .get("/admin/config/vps-status")
+        .set("Authorization", `Bearer ${token}`);
+
+      expect(res.status).toBe(403);
+    });
+  });
 });
