@@ -2,7 +2,7 @@ import { Router, type Response } from "express";
 import prisma from "../lib/prisma.js";
 import { requireAuth, requireServiceOrUserAuth, type AuthRequest } from "../middleware/auth.js";
 import { isHetznerConfigured, provisionUploadVps, deleteServer } from "../lib/hetzner.js";
-import { getUploadVpsConfig } from "../lib/vps-config.js";
+import { getUploadVpsConfig, canProvision } from "../lib/vps-config.js";
 import { generateServiceToken, storeServiceToken, deleteServiceTokens } from "../lib/service-token.js";
 import { resolveQualityTier } from "../lib/nzb-parser.js";
 
@@ -121,6 +121,21 @@ router.post("/", requireAuth, async (req: AuthRequest, res: Response) => {
 
   // Start upload VPS if fully configured
   if (isHetznerConfigured()) {
+    // Concurrency gate: check VPS limits before provisioning
+    const gate = await canProvision("upload");
+    if (!gate.allowed) {
+      console.log(`[uploads] VPS limit reached: ${gate.reason} — job ${job.id} stays queued`);
+      res.status(201).json({
+        id: job.id,
+        nzbFileId: job.nzbFileId,
+        status: job.status,
+        createdAt: job.createdAt,
+        queued: true,
+        reason: gate.reason,
+      });
+      return;
+    }
+
     const uploadConfig = await getUploadVpsConfig();
 
     if (!uploadConfig) {
