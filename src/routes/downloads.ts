@@ -10,6 +10,7 @@ import { computeReviewExpiresAt, computeInitialTmdbRetryAfter } from "../lib/rev
 import { storeNzbInService } from "../lib/nzb-service.js";
 import { getDownloadVpsConfig, getUploadVpsConfig } from "../lib/vps-config.js";
 import { generateServiceToken, storeServiceToken, deleteServiceTokens } from "../lib/service-token.js";
+import { drainQueue } from "../lib/queue-drain.js";
 
 const router = Router();
 
@@ -1757,6 +1758,9 @@ router.post("/jobs/:id/cleanup", requireServiceOrUserAuth, async (req: AuthReque
     });
 
     console.log(`[download-vps] Cleanup: server ${job.hetznerServerId} for job ${job.id} — ${deleted ? "deleted" : "already gone"}`);
+
+    // Slot freed — try to provision next queued job
+    drainQueue().catch((err) => console.error("[download-vps] Queue drain failed:", err.message));
 
     res.json({ success: true, deleted, serverId: job.hetznerServerId });
   } catch (err: any) {

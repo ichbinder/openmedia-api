@@ -5,6 +5,7 @@ import { isHetznerConfigured, provisionUploadVps, deleteServer } from "../lib/he
 import { getUploadVpsConfig, canProvision } from "../lib/vps-config.js";
 import { generateServiceToken, storeServiceToken, deleteServiceTokens } from "../lib/service-token.js";
 import { resolveQualityTier } from "../lib/nzb-parser.js";
+import { drainQueue } from "../lib/queue-drain.js";
 
 const router = Router();
 
@@ -414,6 +415,9 @@ router.patch("/:id", requireServiceOrUserAuth, async (req: AuthRequest, res: Res
     } catch (tokenErr: any) {
       console.error(`[uploads] Token cleanup failed (non-fatal): ${tokenErr.message}`);
     }
+
+    // Slot freed — try to provision next queued job
+    drainQueue().catch((err) => console.error("[uploads] Queue drain failed:", err.message));
   }
 
   console.log(`[uploads] UploadJob ${id} → ${status || job.status}`);
@@ -465,6 +469,9 @@ router.post("/:id/cleanup", requireServiceOrUserAuth, async (req: AuthRequest, r
     }
 
     console.log(`[upload-vps] Cleanup: server ${job.hetznerServerId} for job ${job.id} — ${deleted ? "deleted" : "already gone"}`);
+
+    // Slot freed — try to provision next queued job
+    drainQueue().catch((err) => console.error("[upload-vps] Queue drain failed:", err.message));
 
     res.json({ success: true, deleted, serverId: job.hetznerServerId });
   } catch (err: any) {
