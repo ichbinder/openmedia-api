@@ -12,6 +12,7 @@ import type { UploadProvider } from "./usenet-config.js";
 import type { UsenetServer } from "./hetzner.js";
 import { getDownloadProviders, getUploadProviders } from "./usenet-provider-service.js";
 import { resolveVpnConfig, type VpnConfigResolved, type VpnBypassEntry } from "./vpn-config.js";
+import prisma from "./prisma.js";
 
 // ─── Types ────────────────────────────────────────────────────────────
 
@@ -270,6 +271,128 @@ function hasRequiredUploadKeys(config: Record<string, Record<string, string>>): 
     nzb && nzb.url && nzb.token &&
     docker && docker.uploader &&
     runtime && runtime.api_base_url);
+}
+
+// ─── VPS Limits (Concurrency Gate) ───────────────────────────────────
+
+export interface VpsLimits {
+  globalLimit: number;
+  maxUploadVps: number;
+}
+
+export interface ActiveVpsCounts {
+  downloads: number;
+  uploads: number;
+  total: number;
+}
+
+export interface CanProvisionResult {
+  allowed: boolean;
+  reason?: string;
+  counts?: ActiveVpsCounts;
+  limits?: VpsLimits;
+}
+
+const DEFAULT_GLOBAL_LIMIT = 10;
+const DEFAULT_MAX_UPLOAD_VPS = 3;
+
+/**
+ * Read VPS limits from DB config store.
+ * Falls back to defaults if config entries don't exist.
+ */
+export async function getVpsLimits(): Promise<VpsLimits> {
+  let globalLimit = DEFAULT_GLOBAL_LIMIT;
+  let maxUploadVps = DEFAULT_MAX_UPLOAD_VPS;
+
+  try {
+    const globalEntry = await getEntry("vps", "globalLimit", false);
+    if (globalEntry?.value) {
+      const parsed = parseInt(globalEntry.value, 10);
+      if (!isNaN(parsed) && parsed >= 1) globalLimit = parsed;
+    }
+
+    const uploadEntry = await getEntry("vps", "maxUploadVps", false);
+    if (uploadEntry?.value) {
+      const parsed = parseInt(uploadEntry.value, 10);
+      if (!isNaN(parsed) && parsed >= 0) maxUploadVps = parsed;
+    }
+  } catch (err) {
+    console.warn(`[vps-config] Failed to read VPS limits from DB — using defaults: ${(err as Error).message}`);
+  }
+
+  // Clamp: upload max can't exceed global limit
+  if (maxUploadVps > globalLimit) {
+    maxUploadVps = globalLimit;
+  }
+
+  return { globalLimit, maxUploadVps };
+}
+
+/**
+ * Count active VPS by type (jobs that have a hetznerServerId = VPS is running).
+ */
+export async function getActiveVpsCounts(): Promise<ActiveVpsCounts> {
+  const [downloads, uploads] = await Promise.all([
+    prisma.downloadJob.count({
+      where: {
+        hetznerServerId: { not: null },
+        status: { in: ["provisioning", "downloading", "uploading"] },
+      },
+    }),
+    prisma.uploadJob.count({
+      where: {
+        hetznerServerId: { not: null },
+        status: { in: ["queued", "running"] },
+      },
+    }),
+  ]);
+
+  return { downloads, uploads, total: downloads + uploads };
+}
+
+/**
+ * Check if a new VPS of the given type can be provisioned within limits.
+ */
+export async function canProvision(type: "download" | "upload"): Promise<CanProvisionResult> {
+  const [limits, counts] = await Promise.all([
+    getVpsLimits(),
+    getActiveVpsCounts(),
+  ]);
+
+  // Global limit check
+  if (counts.total >= limits.globalLimit) {
+    return {
+      allowed: false,
+      reason: `Global VPS limit reached (${counts.total}/${limits.globalLimit})`,
+      counts,
+      limits,
+    };
+  }
+
+  // Upload-specific limit check
+  if (type === "upload" && counts.uploads >= limits.maxUploadVps) {
+    return {
+      allowed: false,
+      reason: `Upload VPS limit reached (${counts.uploads}/${limits.maxUploadVps})`,
+      counts,
+      limits,
+    };
+  }
+
+  // Download-specific: remaining slots after uploads are reserved
+  if (type === "download") {
+    const maxDownloadVps = limits.globalLimit - limits.maxUploadVps;
+    if (counts.downloads >= maxDownloadVps) {
+      return {
+        allowed: false,
+        reason: `Download VPS limit reached (${counts.downloads}/${maxDownloadVps})`,
+        counts,
+        limits,
+      };
+    }
+  }
+
+  return { allowed: true, counts, limits };
 }
 
 /**

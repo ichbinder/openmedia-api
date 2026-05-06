@@ -14,7 +14,7 @@ import prisma from "./prisma.js";
 import { isHetznerConfigured, createServer, generateCloudInit } from "./hetzner.js";
 import { markJobFailed } from "./job-failure.js";
 import { addMapping } from "./caddy-mapping.js";
-import { getDownloadVpsConfig } from "./vps-config.js";
+import { getDownloadVpsConfig, canProvision } from "./vps-config.js";
 import { generateServiceToken, storeServiceToken, deleteServiceTokens } from "./service-token.js";
 
 type ProvisionMode = "hetzner" | "local" | "false";
@@ -59,6 +59,15 @@ export async function provisionDownload(jobId: string): Promise<void> {
       `[provision] Skipping job ${jobId}: NzbFile ${job.nzbFile.hash.slice(0, 12)}... has no movie (needs_review)`
     );
     return;
+  }
+
+  // Concurrency gate: check VPS limits before provisioning (Hetzner only)
+  if (mode === "hetzner") {
+    const gate = await canProvision("download");
+    if (!gate.allowed) {
+      console.log(`[provision] Skipping job ${jobId}: ${gate.reason} — job stays queued`);
+      return;
+    }
   }
 
   // CAS: set to provisioning
