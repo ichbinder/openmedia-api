@@ -394,10 +394,12 @@ router.patch("/:id", requireServiceOrUserAuth, async (req: AuthRequest, res: Res
   // If completed or failed: delete the upload VPS server-side
   // (Hetzner token is never exposed to the VPS)
   if ((status === "completed" || status === "failed") && job.hetznerServerId) {
+    let vpsDeleted = false;
     try {
       const { deleteServer } = await import("../lib/hetzner.js");
       await deleteServer(job.hetznerServerId);
       console.log(`[uploads] VPS ${job.hetznerServerId} deleted after status=${status}`);
+      vpsDeleted = true;
     } catch (deleteErr) {
       console.error(`[uploads] Failed to delete VPS ${job.hetznerServerId}:`, deleteErr);
       // Non-blocking — zombie cleanup will catch it later
@@ -416,8 +418,10 @@ router.patch("/:id", requireServiceOrUserAuth, async (req: AuthRequest, res: Res
       console.error(`[uploads] Token cleanup failed (non-fatal): ${tokenErr.message}`);
     }
 
-    // Slot freed — try to provision next queued job
-    drainQueue().catch((err) => console.error("[uploads] Queue drain failed:", err.message));
+    // Slot freed — try to provision next queued job (only if VPS was actually deleted)
+    if (vpsDeleted) {
+      drainQueue().catch((err) => console.error("[uploads] Queue drain failed:", err.message));
+    }
   }
 
   console.log(`[uploads] UploadJob ${id} → ${status || job.status}`);

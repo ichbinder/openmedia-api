@@ -361,7 +361,7 @@ describe("Admin Config Routes", () => {
     it("rejects non-admin users", async () => {
       const nonAdmin = await prisma.user.create({
         data: {
-          email: `nonadmin-vps-${Date.now()}@test.de`,
+          email: `nonadmin-config-vps-${Date.now()}@test.de`,
           password: "$2b$10$hash",
           name: "Non-Admin VPS",
         },
