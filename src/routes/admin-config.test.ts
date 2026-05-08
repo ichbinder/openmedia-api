@@ -342,6 +342,9 @@ describe("Admin Config Routes", () => {
         uploads: expect.any(Number),
         total: expect.any(Number),
       });
+      expect(res.body.counts.total).toBe(
+        res.body.counts.downloads + res.body.counts.uploads,
+      );
       expect(res.body.limits).toEqual({
         globalLimit: expect.any(Number),
         maxUploadVps: expect.any(Number),
@@ -351,6 +354,9 @@ describe("Admin Config Routes", () => {
         uploads: expect.any(Number),
         total: expect.any(Number),
       });
+      expect(res.body.queued.total).toBe(
+        res.body.queued.downloads + res.body.queued.uploads,
+      );
     });
 
     it("rejects unauthenticated requests", async () => {

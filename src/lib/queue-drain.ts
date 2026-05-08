@@ -103,11 +103,12 @@ async function drainUploadQueue(): Promise<void> {
 
   const { generateServiceToken, storeServiceToken } = await import("./service-token.js");
   const { plaintext: serviceToken, hash: tokenHash } = generateServiceToken();
-  await storeServiceToken(tokenHash, candidate.id, "upload");
 
   const serverName = `up-${candidate.nzbFile.hash.substring(0, 8)}`;
 
   try {
+    await storeServiceToken(tokenHash, candidate.id, "upload");
+
     const result = await provisionUploadVps({
       jobId: candidate.id,
       nzbFileHash: candidate.nzbFile.hash,
