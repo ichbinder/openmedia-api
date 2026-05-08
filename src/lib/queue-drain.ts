@@ -87,7 +87,7 @@ async function drainUploadQueue(): Promise<void> {
   console.log(`[queue-drain] Provisioning queued upload job ${candidate.id}`);
 
   // Inline upload provisioning (mirrors uploads.ts POST logic)
-  const { isHetznerConfigured, provisionUploadVps } = await import("./hetzner.js");
+  const { isHetznerConfigured, provisionUploadVps, deleteServer } = await import("./hetzner.js");
   if (!isHetznerConfigured()) {
     await resetToQueued("upload", candidate.id);
     return;
@@ -105,6 +105,7 @@ async function drainUploadQueue(): Promise<void> {
   const { plaintext: serviceToken, hash: tokenHash } = generateServiceToken();
 
   const serverName = `up-${candidate.nzbFile.hash.substring(0, 8)}`;
+  let provisionedServerId: number | null = null;
 
   try {
     await storeServiceToken(tokenHash, candidate.id, "upload");
@@ -117,6 +118,7 @@ async function drainUploadQueue(): Promise<void> {
       dockerImage: uploadConfig.dockerImage,
       serverName,
     });
+    provisionedServerId = result.server.id;
 
     const resolvedServerIp = result.server.privateIp || result.server.publicIpv4;
 
@@ -133,7 +135,14 @@ async function drainUploadQueue(): Promise<void> {
     console.log(`[queue-drain] Upload VPS created: ${serverName} (ID: ${result.server.id})`);
   } catch (err) {
     console.error(`[queue-drain] Upload VPS creation failed for job ${candidate.id}:`, (err as Error).message);
-    // Rollback: clean up token, reset to queued
+    // Rollback: delete VPS if provisioned, clean up token, reset to queued
+    if (provisionedServerId !== null) {
+      try {
+        await deleteServer(provisionedServerId);
+      } catch (delErr) {
+        console.error(`[queue-drain] Failed to delete orphaned VPS ${provisionedServerId}:`, (delErr as Error).message);
+      }
+    }
     try {
       const { deleteServiceTokens } = await import("./service-token.js");
       await deleteServiceTokens(candidate.id);

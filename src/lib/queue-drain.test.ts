@@ -27,6 +27,7 @@ vi.mock("./provisioner.js", () => ({
 vi.mock("./hetzner.js", () => ({
   isHetznerConfigured: vi.fn().mockReturnValue(true),
   provisionUploadVps: vi.fn(),
+  deleteServer: vi.fn(),
 }));
 
 vi.mock("./service-token.js", () => ({
