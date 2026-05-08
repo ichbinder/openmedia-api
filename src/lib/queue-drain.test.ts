@@ -4,10 +4,12 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 vi.mock("./prisma.js", () => ({
   default: {
     downloadJob: {
-      findFirst: vi.fn(),
+      findMany: vi.fn(),
+      updateMany: vi.fn(),
     },
     uploadJob: {
-      findFirst: vi.fn(),
+      findMany: vi.fn(),
+      updateMany: vi.fn(),
       update: vi.fn(),
     },
   },
@@ -25,18 +27,20 @@ vi.mock("./provisioner.js", () => ({
 vi.mock("./hetzner.js", () => ({
   isHetznerConfigured: vi.fn().mockReturnValue(true),
   provisionUploadVps: vi.fn(),
+  deleteServer: vi.fn(),
 }));
 
 vi.mock("./service-token.js", () => ({
   generateServiceToken: vi.fn().mockReturnValue({ plaintext: "tok-abc", hash: "hash-abc" }),
   storeServiceToken: vi.fn(),
+  deleteServiceTokens: vi.fn(),
 }));
 
 import prisma from "./prisma.js";
 import { canProvision, getUploadVpsConfig } from "./vps-config.js";
 import { provisionDownload } from "./provisioner.js";
 import { isHetznerConfigured, provisionUploadVps } from "./hetzner.js";
-import { storeServiceToken } from "./service-token.js";
+import { storeServiceToken, deleteServiceTokens } from "./service-token.js";
 import { drainQueue } from "./queue-drain.js";
 
 const mockCanProvision = canProvision as any;
@@ -45,6 +49,7 @@ const mockProvisionUploadVps = provisionUploadVps as any;
 const mockGetUploadVpsConfig = getUploadVpsConfig as any;
 const mockIsHetznerConfigured = isHetznerConfigured as any;
 const mockStoreServiceToken = storeServiceToken as any;
+const mockDeleteServiceTokens = deleteServiceTokens as any;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -57,20 +62,26 @@ describe("drainQueue", () => {
       mockCanProvision.mockResolvedValueOnce({ allowed: true }); // download check
       mockCanProvision.mockResolvedValueOnce({ allowed: false }); // upload check (no slot)
 
-      (prisma.downloadJob.findFirst as any).mockResolvedValue({
+      (prisma.downloadJob.findMany as any).mockResolvedValue([{
         id: "dl-001",
         status: "queued",
         createdAt: new Date(),
-      });
+      }]);
 
+      (prisma.downloadJob.updateMany as any).mockResolvedValue({ count: 1 });
       mockProvisionDownload.mockResolvedValue(undefined);
 
       await drainQueue();
 
       expect(mockCanProvision).toHaveBeenCalledWith("download");
-      expect(prisma.downloadJob.findFirst).toHaveBeenCalledWith({
+      expect(prisma.downloadJob.findMany).toHaveBeenCalledWith({
         where: { status: "queued", hetznerServerId: null },
         orderBy: { createdAt: "asc" },
+        take: 1,
+      });
+      expect(prisma.downloadJob.updateMany).toHaveBeenCalledWith({
+        where: { id: "dl-001", status: "queued", hetznerServerId: null },
+        data: { status: "provisioning" },
       });
       expect(mockProvisionDownload).toHaveBeenCalledWith("dl-001");
     });
@@ -81,7 +92,7 @@ describe("drainQueue", () => {
 
       await drainQueue();
 
-      expect(prisma.downloadJob.findFirst).not.toHaveBeenCalled();
+      expect(prisma.downloadJob.findMany).not.toHaveBeenCalled();
       expect(mockProvisionDownload).not.toHaveBeenCalled();
     });
 
@@ -89,7 +100,24 @@ describe("drainQueue", () => {
       mockCanProvision.mockResolvedValueOnce({ allowed: true });
       mockCanProvision.mockResolvedValueOnce({ allowed: false });
 
-      (prisma.downloadJob.findFirst as any).mockResolvedValue(null);
+      (prisma.downloadJob.findMany as any).mockResolvedValue([]);
+
+      await drainQueue();
+
+      expect(mockProvisionDownload).not.toHaveBeenCalled();
+    });
+
+    it("skips if another drain already claimed the job (CAS miss)", async () => {
+      mockCanProvision.mockResolvedValueOnce({ allowed: true });
+      mockCanProvision.mockResolvedValueOnce({ allowed: false });
+
+      (prisma.downloadJob.findMany as any).mockResolvedValue([{
+        id: "dl-002",
+        status: "queued",
+      }]);
+
+      // Another drain already claimed it
+      (prisma.downloadJob.updateMany as any).mockResolvedValue({ count: 0 });
 
       await drainQueue();
 
@@ -102,11 +130,13 @@ describe("drainQueue", () => {
       mockCanProvision.mockResolvedValueOnce({ allowed: false }); // download (no slot)
       mockCanProvision.mockResolvedValueOnce({ allowed: true }); // upload
 
-      (prisma.uploadJob.findFirst as any).mockResolvedValue({
+      (prisma.uploadJob.findMany as any).mockResolvedValue([{
         id: "up-001",
         status: "queued",
         nzbFile: { id: "nzb-1", hash: "abc12345deadbeef" },
-      });
+      }]);
+
+      (prisma.uploadJob.updateMany as any).mockResolvedValue({ count: 1 });
 
       mockGetUploadVpsConfig.mockResolvedValue({
         apiBaseUrl: "http://api:4000",
@@ -120,10 +150,15 @@ describe("drainQueue", () => {
       await drainQueue();
 
       expect(mockCanProvision).toHaveBeenCalledWith("upload");
-      expect(prisma.uploadJob.findFirst).toHaveBeenCalledWith({
+      expect(prisma.uploadJob.findMany).toHaveBeenCalledWith({
         where: { status: "queued", hetznerServerId: null },
         orderBy: { createdAt: "asc" },
+        take: 1,
         include: { nzbFile: true },
+      });
+      expect(prisma.uploadJob.updateMany).toHaveBeenCalledWith({
+        where: { id: "up-001", status: "queued", hetznerServerId: null },
+        data: { status: "provisioning" },
       });
       expect(mockStoreServiceToken).toHaveBeenCalledWith("hash-abc", "up-001", "upload");
       expect(mockProvisionUploadVps).toHaveBeenCalledWith(
@@ -149,32 +184,20 @@ describe("drainQueue", () => {
 
       await drainQueue();
 
-      expect(prisma.uploadJob.findFirst).not.toHaveBeenCalled();
-    });
-  });
-
-  describe("error isolation", () => {
-    it("upload drain still runs if download drain throws", async () => {
-      mockCanProvision.mockRejectedValueOnce(new Error("DB connection lost")); // download throws
-      mockCanProvision.mockResolvedValueOnce({ allowed: true }); // upload succeeds
-
-      (prisma.uploadJob.findFirst as any).mockResolvedValue(null);
-
-      // Should not throw
-      await drainQueue();
-
-      expect(mockCanProvision).toHaveBeenCalledTimes(2);
+      expect(prisma.uploadJob.findMany).not.toHaveBeenCalled();
     });
 
-    it("does not mark upload job as failed if VPS creation fails", async () => {
+    it("rolls back token and resets to queued when VPS creation fails", async () => {
       mockCanProvision.mockResolvedValueOnce({ allowed: false }); // download
       mockCanProvision.mockResolvedValueOnce({ allowed: true }); // upload
 
-      (prisma.uploadJob.findFirst as any).mockResolvedValue({
+      (prisma.uploadJob.findMany as any).mockResolvedValue([{
         id: "up-002",
         status: "queued",
         nzbFile: { id: "nzb-2", hash: "deadbeef12345678" },
-      });
+      }]);
+
+      (prisma.uploadJob.updateMany as any).mockResolvedValue({ count: 1 });
 
       mockGetUploadVpsConfig.mockResolvedValue({
         apiBaseUrl: "http://api:4000",
@@ -183,10 +206,30 @@ describe("drainQueue", () => {
 
       mockProvisionUploadVps.mockRejectedValue(new Error("Hetzner 503"));
 
-      // Should not throw — job stays queued
+      // Should not throw — job resets to queued
       await drainQueue();
 
       expect(prisma.uploadJob.update).not.toHaveBeenCalled();
+      expect(mockDeleteServiceTokens).toHaveBeenCalledWith("up-002");
+      // Verify reset to queued
+      expect(prisma.uploadJob.updateMany).toHaveBeenCalledWith({
+        where: { id: "up-002", status: "provisioning" },
+        data: { status: "queued" },
+      });
+    });
+  });
+
+  describe("error isolation", () => {
+    it("upload drain still runs if download drain throws", async () => {
+      mockCanProvision.mockRejectedValueOnce(new Error("DB connection lost")); // download throws
+      mockCanProvision.mockResolvedValueOnce({ allowed: true }); // upload succeeds
+
+      (prisma.uploadJob.findMany as any).mockResolvedValue([]);
+
+      // Should not throw
+      await drainQueue();
+
+      expect(mockCanProvision).toHaveBeenCalledTimes(2);
     });
   });
 });

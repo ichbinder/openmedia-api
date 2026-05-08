@@ -31,71 +31,99 @@ async function drainDownloadQueue(): Promise<void> {
   const gate = await canProvision("download");
   if (!gate.allowed) return;
 
-  // Find oldest queued download job without a server
-  const nextJob = await prisma.downloadJob.findFirst({
-    where: {
-      status: "queued",
-      hetznerServerId: null,
-    },
+  // Atomic CAS claim: find + claim in one step to prevent race conditions
+  const candidates = await prisma.downloadJob.findMany({
+    where: { status: "queued", hetznerServerId: null },
     orderBy: { createdAt: "asc" },
+    take: 1,
   });
 
-  if (!nextJob) return;
+  if (candidates.length === 0) return;
+  const candidate = candidates[0];
 
-  console.log(`[queue-drain] Provisioning queued download job ${nextJob.id}`);
-  // provisionDownload handles its own error handling (markJobFailed etc.)
-  await provisionDownload(nextJob.id);
+  // Atomic claim — updateMany returns count; if 0, another drain already claimed it
+  const claimed = await prisma.downloadJob.updateMany({
+    where: { id: candidate.id, status: "queued", hetznerServerId: null },
+    data: { status: "provisioning" },
+  });
+
+  if (claimed.count === 0) return;
+
+  console.log(`[queue-drain] Provisioning queued download job ${candidate.id}`);
+  try {
+    await provisionDownload(candidate.id);
+  } catch (err) {
+    // Reset to queued so the job can be retried on next drain
+    await prisma.downloadJob.updateMany({
+      where: { id: candidate.id, status: "provisioning" },
+      data: { status: "queued" },
+    }).catch(() => {});
+    throw err;
+  }
 }
 
 async function drainUploadQueue(): Promise<void> {
   const gate = await canProvision("upload");
   if (!gate.allowed) return;
 
-  // Find oldest queued upload job without a server
-  const nextJob = await prisma.uploadJob.findFirst({
-    where: {
-      status: "queued",
-      hetznerServerId: null,
-    },
+  // Atomic CAS claim: find + claim in one step to prevent race conditions
+  const candidates = await prisma.uploadJob.findMany({
+    where: { status: "queued", hetznerServerId: null },
     orderBy: { createdAt: "asc" },
+    take: 1,
     include: { nzbFile: true },
   });
 
-  if (!nextJob) return;
+  if (candidates.length === 0) return;
+  const candidate = candidates[0];
 
-  console.log(`[queue-drain] Provisioning queued upload job ${nextJob.id}`);
+  const claimed = await prisma.uploadJob.updateMany({
+    where: { id: candidate.id, status: "queued", hetznerServerId: null },
+    data: { status: "provisioning" },
+  });
+
+  if (claimed.count === 0) return;
+
+  console.log(`[queue-drain] Provisioning queued upload job ${candidate.id}`);
 
   // Inline upload provisioning (mirrors uploads.ts POST logic)
-  const { isHetznerConfigured, provisionUploadVps } = await import("./hetzner.js");
-  if (!isHetznerConfigured()) return;
+  const { isHetznerConfigured, provisionUploadVps, deleteServer } = await import("./hetzner.js");
+  if (!isHetznerConfigured()) {
+    await resetToQueued("upload", candidate.id);
+    return;
+  }
 
   const { getUploadVpsConfig } = await import("./vps-config.js");
   const uploadConfig = await getUploadVpsConfig();
   if (!uploadConfig) {
     console.warn("[queue-drain] Upload config incomplete — skipping");
+    await resetToQueued("upload", candidate.id);
     return;
   }
 
   const { generateServiceToken, storeServiceToken } = await import("./service-token.js");
   const { plaintext: serviceToken, hash: tokenHash } = generateServiceToken();
-  await storeServiceToken(tokenHash, nextJob.id, "upload");
 
-  const serverName = `up-${nextJob.nzbFile.hash.substring(0, 8)}`;
+  const serverName = `up-${candidate.nzbFile.hash.substring(0, 8)}`;
+  let provisionedServerId: number | null = null;
 
   try {
+    await storeServiceToken(tokenHash, candidate.id, "upload");
+
     const result = await provisionUploadVps({
-      jobId: nextJob.id,
-      nzbFileHash: nextJob.nzbFile.hash,
+      jobId: candidate.id,
+      nzbFileHash: candidate.nzbFile.hash,
       apiBaseUrl: uploadConfig.apiBaseUrl,
       serviceToken,
       dockerImage: uploadConfig.dockerImage,
       serverName,
     });
+    provisionedServerId = result.server.id;
 
     const resolvedServerIp = result.server.privateIp || result.server.publicIpv4;
 
     await prisma.uploadJob.update({
-      where: { id: nextJob.id },
+      where: { id: candidate.id },
       data: {
         status: "running",
         hetznerServerId: result.server.id,
@@ -106,7 +134,38 @@ async function drainUploadQueue(): Promise<void> {
 
     console.log(`[queue-drain] Upload VPS created: ${serverName} (ID: ${result.server.id})`);
   } catch (err) {
-    console.error(`[queue-drain] Upload VPS creation failed for job ${nextJob.id}:`, (err as Error).message);
-    // Don't mark as failed — job stays queued for next drain attempt
+    console.error(`[queue-drain] Upload VPS creation failed for job ${candidate.id}:`, (err as Error).message);
+    // Rollback: delete VPS if provisioned, clean up token, reset to queued
+    if (provisionedServerId !== null) {
+      try {
+        await deleteServer(provisionedServerId);
+      } catch (delErr) {
+        console.error(`[queue-drain] Failed to delete orphaned VPS ${provisionedServerId}:`, (delErr as Error).message);
+      }
+    }
+    try {
+      const { deleteServiceTokens } = await import("./service-token.js");
+      await deleteServiceTokens(candidate.id);
+    } catch { /* non-fatal */ }
+    await resetToQueued("upload", candidate.id);
+  }
+}
+
+/** Reset a claimed job back to queued (non-fatal). */
+async function resetToQueued(type: "download" | "upload", jobId: string): Promise<void> {
+  try {
+    if (type === "download") {
+      await prisma.downloadJob.updateMany({
+        where: { id: jobId, status: "provisioning" },
+        data: { status: "queued" },
+      });
+    } else {
+      await prisma.uploadJob.updateMany({
+        where: { id: jobId, status: "provisioning" },
+        data: { status: "queued" },
+      });
+    }
+  } catch (err) {
+    console.error(`[queue-drain] Failed to reset ${type} job ${jobId} to queued:`, (err as Error).message);
   }
 }
