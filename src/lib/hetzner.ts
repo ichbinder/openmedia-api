@@ -1033,10 +1033,18 @@ cat > /opt/vpn-watchdog.sh << 'WATCHDOG_EOF'
 set -euo pipefail
 
 # VPN Watchdog — reconnect with backoff (R018), fail after 3 attempts (R019)
+#
+# Hysteresis: a single failed health check is NOT sufficient to trigger a
+# reconnect. We require FAIL_THRESHOLD consecutive failures to debounce
+# transient ipify timeouts, DNS hiccups, and provider micro-outages. Without
+# this, downloads were aborted dozens of times per hour by the watchdog
+# itself even though the tunnel was healthy.
 
 BACKOFF_DELAYS=(5 15 30)
 MAX_RETRIES=3
 CHECK_INTERVAL=10
+FAIL_THRESHOLD=2     # consecutive failures before declaring VPN down
+HEALTH_TIMEOUT=15    # seconds — tolerant of transient slowness
 
 watchdog_fail_job() {
   local msg="\$1"
@@ -1073,13 +1081,15 @@ reconnect_vpn() {
 }
 
 health_check() {
-  # Only check VPN connectivity — API reachability is a separate concern (K111)
-  curl -sf --interface "\$VPN_INTERFACE" --connect-timeout 5 --max-time 10 "https://api.ipify.org" > /dev/null 2>&1
+  # Only check VPN connectivity — API reachability is a separate concern (K111).
+  # 15s max-time tolerates transient slowness from ipify and the VPN provider.
+  curl -sf --interface "\$VPN_INTERFACE" --connect-timeout 5 --max-time \$HEALTH_TIMEOUT "https://api.ipify.org" > /dev/null 2>&1
 }
 
-echo "[vpn-watchdog] Started — monitoring \$VPN_INTERFACE every \${CHECK_INTERVAL}s"
+echo "[vpn-watchdog] Started — monitoring \$VPN_INTERFACE every \${CHECK_INTERVAL}s (threshold: \${FAIL_THRESHOLD} consecutive fails)"
 
 SEEN_WORKLOAD=0
+FAIL_STREAK=0
 
 while true; do
   sleep "\$CHECK_INTERVAL"
@@ -1092,11 +1102,21 @@ while true; do
   fi
 
   if health_check; then
+    if [ "\$FAIL_STREAK" -gt 0 ]; then
+      echo "[vpn-watchdog] Health recovered after \${FAIL_STREAK} transient fail(s) — no reconnect needed"
+      FAIL_STREAK=0
+    fi
     continue
   fi
 
-  echo "[vpn-watchdog] Health check failed — starting reconnect sequence"
-  watchdog_report_event "vpn_down" "warning" "{\\"protocol\\":\\"\$VPN_PROTOCOL\\",\\"interface\\":\\"\$VPN_INTERFACE\\"}"
+  FAIL_STREAK=$((FAIL_STREAK + 1))
+  if [ "\$FAIL_STREAK" -lt "\$FAIL_THRESHOLD" ]; then
+    echo "[vpn-watchdog] Transient health-check failure (\${FAIL_STREAK}/\${FAIL_THRESHOLD}) — waiting for confirmation"
+    continue
+  fi
+
+  echo "[vpn-watchdog] Health check failed \${FAIL_STREAK}x consecutively — starting reconnect sequence"
+  watchdog_report_event "vpn_down" "warning" "{\\"protocol\\":\\"\$VPN_PROTOCOL\\",\\"interface\\":\\"\$VPN_INTERFACE\\",\\"failStreak\\":\$FAIL_STREAK}"
 
   RECONNECTED=0
   for attempt in $(seq 0 $((MAX_RETRIES - 1))); do
@@ -1111,6 +1131,7 @@ while true; do
       echo "[vpn-watchdog] Reconnected successfully on attempt $((attempt + 1))"
       watchdog_report_event "vpn_reconnect" "info" "{\\"protocol\\":\\"\$VPN_PROTOCOL\\",\\"interface\\":\\"\$VPN_INTERFACE\\",\\"attempt\\":$((attempt + 1))}"
       RECONNECTED=1
+      FAIL_STREAK=0
       break
     fi
   done

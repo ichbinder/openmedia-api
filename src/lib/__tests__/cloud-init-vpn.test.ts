@@ -279,6 +279,30 @@ describe("generateBootstrapScript", () => {
     expect(script).toContain("MAX_RETRIES=3");
   });
 
+  it("watchdog requires consecutive failures before declaring VPN down (hysteresis)", () => {
+    const script = generateBootstrapScript({
+      ...BASE_PARAMS,
+      jobType: "download",
+    });
+    // Hysteresis: a single failed health check must NOT trigger reconnect.
+    // We require FAIL_THRESHOLD consecutive failures to debounce transient
+    // ipify timeouts and provider micro-outages.
+    expect(script).toContain("FAIL_THRESHOLD=2");
+    expect(script).toContain("FAIL_STREAK=0");
+    expect(script).toContain('FAIL_STREAK=$((FAIL_STREAK + 1))');
+    expect(script).toContain('Transient health-check failure');
+    expect(script).toContain('consecutively');
+  });
+
+  it("watchdog uses tolerant 15s health-check max-time", () => {
+    const script = generateBootstrapScript({
+      ...BASE_PARAMS,
+      jobType: "download",
+    });
+    expect(script).toContain("HEALTH_TIMEOUT=15");
+    expect(script).toContain('--max-time $HEALTH_TIMEOUT');
+  });
+
   it("watchdog contains WireGuard reconnect commands", () => {
     const script = generateBootstrapScript({
       ...BASE_PARAMS,
