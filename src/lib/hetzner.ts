@@ -1087,9 +1087,16 @@ reconnect_vpn() {
 }
 
 health_check() {
-  # Only check VPN connectivity — API reachability is a separate concern (K111).
-  # 15s max-time tolerates transient slowness from ipify and the VPN provider.
-  curl -sf --interface "\$VPN_INTERFACE" --connect-timeout 5 --max-time \$HEALTH_TIMEOUT "https://api.ipify.org" > /dev/null 2>&1
+  # Two-stage probe to keep DNS hiccups from triggering false reconnects:
+  #  1. DNS-dependent HTTPS probe against api.ipify.org (cheap, common path).
+  #  2. DNS-free fallback HEAD request against the 1.1.1.1 IP literal.
+  # Tunnel is only declared "down" when BOTH probes fail — catches the case
+  # where systemd-resolved blips while the actual VPN tunnel is healthy.
+  # 15s max-time per probe tolerates transient slowness on either endpoint.
+  if curl -sf --interface "\$VPN_INTERFACE" --connect-timeout 5 --max-time \$HEALTH_TIMEOUT "https://api.ipify.org" > /dev/null 2>&1; then
+    return 0
+  fi
+  curl -sfI --interface "\$VPN_INTERFACE" --connect-timeout 5 --max-time \$HEALTH_TIMEOUT "http://1.1.1.1" > /dev/null 2>&1
 }
 
 echo "[vpn-watchdog] Started — monitoring \$VPN_INTERFACE every \${CHECK_INTERVAL}s (threshold: \${FAIL_THRESHOLD} consecutive fails)"

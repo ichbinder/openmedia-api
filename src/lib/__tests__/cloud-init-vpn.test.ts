@@ -292,6 +292,23 @@ describe("generateBootstrapScript", () => {
     expect(script).toContain('FAIL_STREAK=$((FAIL_STREAK + 1))');
     expect(script).toContain('Transient health-check failure');
     expect(script).toContain('consecutively');
+
+    // Operator visibility: the vpn_down event must report the actual streak
+    // value so we can correlate flapping in the events tab.
+    expect(script).toContain('\\"failStreak\\":$FAIL_STREAK');
+
+    // FAIL_STREAK must reset BOTH after a transient recovery (no reconnect
+    // needed) and after a successful reconnect — otherwise hysteresis still
+    // accumulates across runs and the next miss instantly triggers a flap.
+    const recoveryMsgPos = script.indexOf("Health recovered after");
+    const resetAfterRecoveryPos = script.indexOf("FAIL_STREAK=0", recoveryMsgPos);
+    expect(recoveryMsgPos).toBeGreaterThan(-1);
+    expect(resetAfterRecoveryPos).toBeGreaterThan(recoveryMsgPos);
+
+    const reconnectEventPos = script.indexOf('watchdog_report_event "vpn_reconnect"');
+    const resetAfterReconnectPos = script.indexOf("FAIL_STREAK=0", reconnectEventPos);
+    expect(reconnectEventPos).toBeGreaterThan(-1);
+    expect(resetAfterReconnectPos).toBeGreaterThan(reconnectEventPos);
   });
 
   it("watchdog uses tolerant 15s health-check max-time", () => {
@@ -301,6 +318,27 @@ describe("generateBootstrapScript", () => {
     });
     expect(script).toContain("HEALTH_TIMEOUT=15");
     expect(script).toContain('--max-time $HEALTH_TIMEOUT');
+  });
+
+  it("watchdog uses dual probes (api.ipify.org + 1.1.1.1) so DNS hiccups don't trigger reconnects", () => {
+    const script = generateBootstrapScript({
+      ...BASE_PARAMS,
+      jobType: "download",
+    });
+    // Both probes must be present; the 1.1.1.1 fallback is DNS-free so a
+    // resolver hiccup alone can no longer mark the tunnel as down.
+    expect(script).toContain("api.ipify.org");
+    expect(script).toContain("http://1.1.1.1");
+    // The fallback runs only when the primary probe failed — verify ordering
+    // inside health_check() by scoping to the watchdog block (between the
+    // health_check definition and the next function/loop boundary).
+    const healthFnStart = script.indexOf("health_check()");
+    expect(healthFnStart).toBeGreaterThan(-1);
+    const watchdogBlock = script.slice(healthFnStart, healthFnStart + 1500);
+    const ipifyPos = watchdogBlock.indexOf("api.ipify.org");
+    const fallbackPos = watchdogBlock.indexOf("http://1.1.1.1");
+    expect(ipifyPos).toBeGreaterThan(-1);
+    expect(fallbackPos).toBeGreaterThan(ipifyPos);
   });
 
   it("watchdog contains WireGuard reconnect commands", () => {
