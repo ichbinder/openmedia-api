@@ -27,7 +27,7 @@ vi.mock("./job-failure.js", () => ({
 import prisma from "./prisma.js";
 import { getServer, deleteServer, listServers, isHetznerConfigured } from "./hetzner.js";
 import { markJobFailed } from "./job-failure.js";
-import { reconcileStaleJobs } from "./job-reconciler.js";
+import { reconcileStaleJobs, _resetProgressSnapshotsForTests } from "./job-reconciler.js";
 
 const mockPrisma = prisma as any;
 const mockGetServer = getServer as any;
@@ -86,6 +86,8 @@ beforeEach(() => {
   mockMarkJobFailed.mockResolvedValue({ changed: true, failedAttempts: 1, brokenNow: false });
   // Default: no active jobs — individual tests override via mockActiveJobs
   mockActiveJobs([]);
+  // Reset progress-stagnation snapshot map between tests
+  _resetProgressSnapshotsForTests();
 });
 
 describe("reconcileStaleJobs", () => {
@@ -178,5 +180,106 @@ describe("reconcileStaleJobs", () => {
 
     expect(result.failed).toBe(1);
     expect(result.details[0]).toContain("VPS off");
+  });
+
+  it("fails a downloading job whose progress hasn't moved for 30+ minutes", async () => {
+    // Two snapshots of the same job. First run records the 5%-snapshot,
+    // second run (35min later) sees identical progress and triggers the
+    // stagnation timeout. updatedAt is kept fresh on purpose — exactly the
+    // case the new check is supposed to catch.
+    const t0 = Date.now();
+    const job1 = makeJob({
+      status: "downloading",
+      progress: 5,
+      updatedAt: new Date(t0 - 60 * 1000), // 1min ago
+    });
+    mockActiveJobs([job1]);
+    mockGetServer.mockResolvedValue({ id: 12345, status: "running" });
+
+    const r1 = await reconcileStaleJobs();
+    expect(r1.failed).toBe(0);
+
+    // Advance virtual clock by 35min and run again with same progress.
+    vi.useFakeTimers();
+    vi.setSystemTime(t0 + 35 * 60 * 1000);
+    try {
+      const job2 = makeJob({
+        status: "downloading",
+        progress: 5,
+        updatedAt: new Date(t0 + 35 * 60 * 1000 - 60 * 1000), // still fresh
+      });
+      mockActiveJobs([job2]);
+
+      const r2 = await reconcileStaleJobs();
+      expect(r2.failed).toBe(1);
+      expect(r2.details[0]).toContain("Progress stagnation");
+      expect(mockMarkJobFailed).toHaveBeenCalledWith(
+        expect.objectContaining({
+          jobId: "test-job-id",
+          source: "reconciler",
+          expectedStatus: "downloading",
+          error: expect.stringContaining("Fortschritt steckt"),
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not flag stagnation when progress advances between runs", async () => {
+    const t0 = Date.now();
+    mockGetServer.mockResolvedValue({ id: 12345, status: "running" });
+
+    mockActiveJobs([
+      makeJob({ status: "downloading", progress: 10, updatedAt: new Date(t0 - 60 * 1000) }),
+    ]);
+    await reconcileStaleJobs();
+
+    vi.useFakeTimers();
+    vi.setSystemTime(t0 + 35 * 60 * 1000);
+    try {
+      // Progress moved from 10 → 40 within the window → snapshot resets
+      mockActiveJobs([
+        makeJob({
+          status: "downloading",
+          progress: 40,
+          updatedAt: new Date(t0 + 35 * 60 * 1000 - 60 * 1000),
+        }),
+      ]);
+
+      const r = await reconcileStaleJobs();
+      expect(r.failed).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not apply progress-stagnation to queued or provisioning jobs", async () => {
+    // Provisioning at progress=0 for hours is normal (waiting on Hetzner).
+    // Only the hard-timeout / VPS-gone paths should fail it, not stagnation.
+    const t0 = Date.now();
+    mockGetServer.mockResolvedValue({ id: 12345, status: "running" });
+
+    mockActiveJobs([
+      makeJob({ status: "provisioning", progress: 0, updatedAt: new Date(t0 - 60 * 1000) }),
+    ]);
+    await reconcileStaleJobs();
+
+    vi.useFakeTimers();
+    vi.setSystemTime(t0 + 35 * 60 * 1000);
+    try {
+      mockActiveJobs([
+        makeJob({
+          status: "provisioning",
+          progress: 0,
+          updatedAt: new Date(t0 + 35 * 60 * 1000 - 60 * 1000),
+        }),
+      ]);
+
+      const r = await reconcileStaleJobs();
+      expect(r.failed).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
