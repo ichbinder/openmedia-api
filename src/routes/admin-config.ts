@@ -817,6 +817,31 @@ router.get("/vps-events", requireAuth, requireAdmin, async (req: AuthRequest, re
   }
 });
 
+// ─── Service Incidents ────────────────────────────────────────────────
+
+/** GET /admin/config/incidents — list open ServiceIncidents, latest first */
+router.get("/incidents", requireAuth, requireAdmin, async (_req: AuthRequest, res: Response) => {
+  try {
+    const incidents = await prisma.serviceIncident.findMany({
+      where: { status: "open" },
+      orderBy: { lastSeenAt: "desc" },
+      select: {
+        id: true,
+        service: true,
+        operation: true,
+        message: true,
+        firstSeenAt: true,
+        lastSeenAt: true,
+        occurrences: true,
+      },
+    });
+    res.json({ incidents });
+  } catch (err) {
+    console.error("[admin-config] List incidents error:", err);
+    res.status(500).json({ error: "Failed to list incidents." });
+  }
+});
+
 // ─── VPS Status Dashboard ─────────────────────────────────────────────
 
 /** GET /admin/config/vps-status — active VPS counts, limits, and queued jobs */
