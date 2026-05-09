@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach, vi } from "vitest";
 import {
   isHetznerConfigured,
   generateCloudInit,
+  generateUploadCloudInit,
   createServer,
 } from "../lib/hetzner.js";
 
@@ -60,6 +61,33 @@ describe("Hetzner Service", () => {
       expect(cloudInit).toContain("openmedia-downloader");
       expect(cloudInit).toContain("fail_job");
       expect(cloudInit).toContain("--env-file");
+    });
+
+    it("docker pull is wrapped in a retry loop (5 attempts)", () => {
+      const cloudInit = generateCloudInit(defaultParams);
+
+      expect(cloudInit).toContain("PULL_OK=0");
+      expect(cloudInit).toContain("for attempt in 1 2 3 4 5");
+      expect(cloudInit).toContain("RETRY_DELAY=$((attempt * 10))");
+      expect(cloudInit).toContain('Docker pull failed after 5 attempts');
+      // Sleep nur vor weiteren Versuchen — kein unnoetiges Warten nach dem letzten Fehlschlag
+      expect(cloudInit).toContain('[ "$attempt" -lt 5 ]');
+    });
+
+    it("upload cloud-init: docker pull ist ebenfalls in Retry-Loop (5 Versuche) gekapselt", () => {
+      const cloudInit = generateUploadCloudInit({
+        jobId: "test-job-123",
+        apiBaseUrl: "http://api.example.com",
+        serviceToken: "test-service-token-hex",
+        dockerImage: "ghcr.io/ichbinder/openmedia-uploader:latest",
+        serverName: "ul-test1234",
+      });
+
+      expect(cloudInit).toContain("PULL_OK=0");
+      expect(cloudInit).toContain("for attempt in 1 2 3 4 5");
+      expect(cloudInit).toContain("RETRY_DELAY=$((attempt * 10))");
+      expect(cloudInit).toContain("Docker pull failed after 5 attempts");
+      expect(cloudInit).toContain('[ "$attempt" -lt 5 ]');
     });
 
     it("env file contains only JOB_ID, API_BASE_URL, SERVICE_TOKEN", () => {
