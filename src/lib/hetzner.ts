@@ -1252,9 +1252,13 @@ runcmd:
         PULL_OK=1
         break
       fi
-      RETRY_DELAY=$((attempt * 10))
-      echo "[cloud-init] Docker pull attempt $attempt failed, retrying in $RETRY_DELAY s..."
-      sleep "$RETRY_DELAY"
+      if [ "$attempt" -lt 5 ]; then
+        RETRY_DELAY=$((attempt * 10))
+        echo "[cloud-init] Docker pull attempt $attempt failed, retrying in $RETRY_DELAY s..."
+        sleep "$RETRY_DELAY"
+      else
+        echo "[cloud-init] Docker pull attempt $attempt failed (final attempt)."
+      fi
     done
     if [ "$PULL_OK" = "0" ]; then
       fail_job "Docker pull failed after 5 attempts: ${params.dockerImage}"
@@ -1471,9 +1475,13 @@ runcmd:
         PULL_OK=1
         break
       fi
-      RETRY_DELAY=$((attempt * 10))
-      echo "[cloud-init] Docker pull attempt $attempt failed, retrying in $RETRY_DELAY s..."
-      sleep "$RETRY_DELAY"
+      if [ "$attempt" -lt 5 ]; then
+        RETRY_DELAY=$((attempt * 10))
+        echo "[cloud-init] Docker pull attempt $attempt failed, retrying in $RETRY_DELAY s..."
+        sleep "$RETRY_DELAY"
+      else
+        echo "[cloud-init] Docker pull attempt $attempt failed (final attempt)."
+      fi
     done
     if [ "$PULL_OK" = "0" ]; then
       fail_job "Docker pull failed after 5 attempts: ${dockerImage}"
