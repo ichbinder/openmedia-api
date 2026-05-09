@@ -165,10 +165,16 @@ export async function createServer(
   const totalCombinations = serverTypeCandidates.length * locationCandidates.length;
   let lastErr: { status: number; message: string; serverType: string; location: string } | null = null;
 
-  // Outer loop: server types (admin-prioritized fallback).
-  // Inner loop: locations (capacity fallback within a chosen type).
-  for (const serverType of serverTypeCandidates) {
-    for (const location of locationCandidates) {
+  // Outer loop: locations (region-prioritized — keep VPS close to S3 bucket).
+  // Inner loop: server types (admin-prioritized fallback within a region).
+  //
+  // Rationale: the S3 bucket lives in HEL1, so a VPS in HEL1 has the lowest
+  // S3 latency. We exhaust ALL admin-listed server types in the preferred
+  // region before falling over to the next region. Reverse order would
+  // silently drift to FSN1/NBG1 (Germany) when the first server type is
+  // briefly unavailable in HEL1, even when other types are available there.
+  for (const location of locationCandidates) {
+    for (const serverType of serverTypeCandidates) {
       const start = Date.now();
       const body = { ...baseBody, server_type: serverType, location };
 
