@@ -47,8 +47,26 @@ const STALE_CHECK_HOURS = 10 / 60; // 10 minutes
 /** Hours after which a job is force-failed regardless */
 const HARD_TIMEOUT_HOURS = 4;
 
+/** Minutes a job's progress value may stay unchanged before we declare it
+ * stuck. Targets jobs where `updatedAt` keeps getting bumped by VPN events
+ * or other state writes while no bytes actually flow. Only applied to the
+ * `downloading` and `uploading` phases — for `queued` / `provisioning`
+ * a static progress=0 is normal. */
+const PROGRESS_STAGNATION_MINUTES = 30;
+
 /** Interval between reconciliation runs (ms) */
 const RECONCILE_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+
+/** In-memory snapshot of `{progress, firstSeen}` per job id used by the
+ * progress-stagnation check. Reset on process restart — acceptable because
+ * the 4h hard timeout remains as ultimate safety net. */
+const progressSnapshots = new Map<string, { progress: number; firstSeen: number }>();
+
+/** Test helper — clear the progress-stagnation snapshot map so each test
+ * starts from a clean state. Not part of the public API. */
+export function _resetProgressSnapshotsForTests(): void {
+  progressSnapshots.clear();
+}
 
 // ── TMDB background retry configuration ────────────────────
 
@@ -564,6 +582,36 @@ export async function reconcileStaleJobs(): Promise<ReconcileResult> {
         }
       }
 
+      // Progress stagnation — only meaningful while bytes should be flowing.
+      // `updatedAt` can advance independently of `progress` (e.g. VPN watchdog
+      // touches the row), so we track the progress value itself across runs.
+      if (job.status === "downloading" || job.status === "uploading") {
+        const snap = progressSnapshots.get(job.id);
+        if (!snap || snap.progress !== job.progress) {
+          progressSnapshots.set(job.id, { progress: job.progress, firstSeen: now });
+        } else {
+          const stagnantMs = now - snap.firstSeen;
+          if (stagnantMs >= PROGRESS_STAGNATION_MINUTES * 60 * 1000) {
+            const stagnantMin = stagnantMs / (60 * 1000);
+            const failResult = await markJobFailed({
+              jobId: job.id,
+              error: `Fortschritt steckt seit ${stagnantMin.toFixed(0)}min bei ${job.progress}% fest. Automatisch abgebrochen.`,
+              source: "reconciler",
+              expectedStatus: job.status,
+            });
+
+            if (failResult.changed) {
+              result.failed++;
+              const msg = `Progress stagnation: job ${job.id.slice(0, 8)} (${hash}...) — ${job.progress}% for ${stagnantMin.toFixed(0)}min in ${job.status}`;
+              result.details.push(msg);
+              console.log(`[reconciler] ${msg}`);
+              progressSnapshots.delete(job.id);
+            }
+            continue;
+          }
+        }
+      }
+
       // Queued jobs without VPS that are stale → provisioning probably failed silently
       if (ageHours >= STALE_CHECK_HOURS && job.status === "queued") {
         const failResult = await markJobFailed({
@@ -580,6 +628,13 @@ export async function reconcileStaleJobs(): Promise<ReconcileResult> {
           console.log(`[reconciler] ${msg}`);
         }
       }
+    }
+
+    // Prune progress snapshots for jobs no longer in the active set
+    // (terminal, deleted, or otherwise gone) — keeps the map bounded.
+    const activeIds = new Set(activeJobs.map((j) => j.id));
+    for (const id of progressSnapshots.keys()) {
+      if (!activeIds.has(id)) progressSnapshots.delete(id);
     }
 
     // ── Zombie VPS cleanup ──────────────────────────────────
