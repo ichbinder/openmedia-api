@@ -21,17 +21,24 @@ async function createAdminToken() {
 describe("GET /admin/config/incidents", () => {
   const originalAdminEmails = process.env.ADMIN_EMAILS;
   let token: string;
+  // Track only users created by this test run so afterEach doesn't accidentally
+  // delete unrelated users that happen to match a "incidents" substring.
+  const createdUserIds: string[] = [];
 
   beforeEach(async () => {
     process.env.ADMIN_EMAILS = ADMIN_EMAIL;
     await prisma.serviceIncident.deleteMany();
     const result = await createAdminToken();
+    createdUserIds.push(result.userId);
     token = result.token;
   });
 
   afterEach(async () => {
     await prisma.serviceIncident.deleteMany();
-    await prisma.user.deleteMany({ where: { email: { contains: "incidents" } } });
+    if (createdUserIds.length > 0) {
+      await prisma.user.deleteMany({ where: { id: { in: createdUserIds } } });
+      createdUserIds.length = 0;
+    }
 
     if (originalAdminEmails !== undefined) process.env.ADMIN_EMAILS = originalAdminEmails;
     else delete process.env.ADMIN_EMAILS;
@@ -116,6 +123,7 @@ describe("GET /admin/config/incidents", () => {
         name: "Non Admin",
       },
     });
+    createdUserIds.push(user.id);
     const nonAdminToken = signToken({ userId: user.id, email: user.email });
 
     const res = await request(app)

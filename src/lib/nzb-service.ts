@@ -25,12 +25,9 @@ const STORE_OPERATION = "store";
  * were written.
  */
 export class NzbServiceUnavailableError extends Error {
-  readonly cause?: unknown;
-
   constructor(message: string, options?: { cause?: unknown }) {
-    super(message);
+    super(message, options);
     this.name = "NzbServiceUnavailableError";
-    this.cause = options?.cause;
   }
 }
 
