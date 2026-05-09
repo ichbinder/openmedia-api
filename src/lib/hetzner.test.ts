@@ -1,7 +1,8 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import {
   isHetznerConfigured,
   generateCloudInit,
+  createServer,
 } from "../lib/hetzner.js";
 
 describe("Hetzner Service", () => {
@@ -79,6 +80,99 @@ describe("Hetzner Service", () => {
     it("uses service token in fail_job and cleanup curl calls", () => {
       const cloudInit = generateCloudInit(defaultParams);
       expect(cloudInit).toContain("test-service-token-hex");
+    });
+
+    it("location fallback: tries each location until one succeeds", async () => {
+      const origToken = process.env.HETZNER_API_TOKEN;
+      process.env.HETZNER_API_TOKEN = "test-token";
+      const fetchMock = vi.fn();
+      const origFetch = globalThis.fetch;
+      globalThis.fetch = fetchMock as any;
+
+      // First two locations return 412 placement_error, third succeeds.
+      fetchMock.mockResolvedValueOnce({
+        ok: false,
+        status: 412,
+        json: async () => ({ error: { code: "resource_unavailable_in_location", message: "no capacity" } }),
+      } as any);
+      fetchMock.mockResolvedValueOnce({
+        ok: false,
+        status: 412,
+        json: async () => ({ error: { code: "placement_error", message: "no capacity" } }),
+      } as any);
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          server: { id: 42, name: "x", status: "initializing", server_type: { name: "cax21" }, datacenter: { location: { name: "nbg1" } }, public_net: {}, labels: {}, created: new Date().toISOString() },
+          root_password: null,
+        }),
+      } as any);
+
+      try {
+        const result = await createServer({
+          name: "test",
+          locations: ["hel1", "fsn1", "nbg1"],
+        });
+
+        expect(fetchMock).toHaveBeenCalledTimes(3);
+        expect(result.server.id).toBe(42);
+        // Verify each call sent the right location.
+        const bodies = fetchMock.mock.calls.map(([, init]: any) => JSON.parse(init.body));
+        expect(bodies[0].location).toBe("hel1");
+        expect(bodies[1].location).toBe("fsn1");
+        expect(bodies[2].location).toBe("nbg1");
+      } finally {
+        globalThis.fetch = origFetch;
+        if (origToken) process.env.HETZNER_API_TOKEN = origToken;
+        else delete process.env.HETZNER_API_TOKEN;
+      }
+    });
+
+    it("location fallback: throws after all locations exhausted", async () => {
+      const origToken = process.env.HETZNER_API_TOKEN;
+      process.env.HETZNER_API_TOKEN = "test-token";
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 412,
+        json: async () => ({ error: { code: "placement_error", message: "no capacity" } }),
+      });
+      const origFetch = globalThis.fetch;
+      globalThis.fetch = fetchMock as any;
+
+      try {
+        await expect(
+          createServer({ name: "test", locations: ["hel1", "fsn1"] })
+        ).rejects.toThrow(/keine Location verfuegbar/);
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+      } finally {
+        globalThis.fetch = origFetch;
+        if (origToken) process.env.HETZNER_API_TOKEN = origToken;
+        else delete process.env.HETZNER_API_TOKEN;
+      }
+    });
+
+    it("location fallback: non-capacity errors do NOT trigger fallback", async () => {
+      const origToken = process.env.HETZNER_API_TOKEN;
+      process.env.HETZNER_API_TOKEN = "test-token";
+      const fetchMock = vi.fn().mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        json: async () => ({ error: { code: "unauthorized", message: "bad token" } }),
+      });
+      const origFetch = globalThis.fetch;
+      globalThis.fetch = fetchMock as any;
+
+      try {
+        await expect(
+          createServer({ name: "test", locations: ["hel1", "fsn1"] })
+        ).rejects.toThrow(/401/);
+        // Must stop after the first non-capacity error.
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+      } finally {
+        globalThis.fetch = origFetch;
+        if (origToken) process.env.HETZNER_API_TOKEN = origToken;
+        else delete process.env.HETZNER_API_TOKEN;
+      }
     });
 
     it("tears down VPN tunnel before self-cleanup curl", () => {

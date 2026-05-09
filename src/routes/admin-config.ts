@@ -35,6 +35,7 @@ import {
   deleteVpnProvider,
 } from "../lib/vpn-provider-service.js";
 import { getActiveVpsCounts, getVpsLimits } from "../lib/vps-config.js";
+import { listLocations as listHetznerLocations, isHetznerConfigured } from "../lib/hetzner.js";
 
 const router = Router();
 
@@ -195,6 +196,26 @@ router.get("/profiles", requireAuth, requireAdmin, async (_req: AuthRequest, res
   } catch (err) {
     console.error("[admin-config] List profiles error:", err);
     res.status(500).json({ error: "Failed to list profiles." });
+  }
+});
+
+// ─── Hetzner Locations (live datacenter list) ────────────────────────
+
+/**
+ * GET /admin/config/hetzner-locations — proxies the Hetzner Cloud API location list.
+ * Used by the admin UI to populate the location preference dropdowns.
+ */
+router.get("/hetzner-locations", requireAuth, requireAdmin, async (_req: AuthRequest, res: Response) => {
+  try {
+    if (!isHetznerConfigured()) {
+      res.status(503).json({ error: "Hetzner API token not configured." });
+      return;
+    }
+    const locations = await listHetznerLocations();
+    res.json({ locations });
+  } catch (err) {
+    console.error("[admin-config] Hetzner locations error:", err);
+    res.status(502).json({ error: (err as Error).message || "Failed to fetch Hetzner locations." });
   }
 });
 

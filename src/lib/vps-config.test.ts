@@ -25,7 +25,14 @@ vi.mock("./vpn-config.js", () => ({
 
 import prisma from "./prisma.js";
 import { getEntry } from "./config-service.js";
-import { getVpsLimits, getActiveVpsCounts, canProvision } from "./vps-config.js";
+import {
+  getVpsLimits,
+  getActiveVpsCounts,
+  canProvision,
+  getDownloadVpsLocations,
+  getUploadVpsLocations,
+  DEFAULT_VPS_LOCATIONS,
+} from "./vps-config.js";
 
 const mockGetEntry = vi.mocked(getEntry);
 const mockDownloadCount = vi.mocked(prisma.downloadJob.count);
@@ -185,5 +192,61 @@ describe("VPS Limits (Concurrency Gate)", () => {
       expect(result.allowed).toBe(false);
       expect(result.reason).toContain("Download VPS limit");
     });
+  });
+});
+
+describe("VPS Location Preferences", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns the default list when no DB entry exists", async () => {
+    mockGetEntry.mockResolvedValue(null as any);
+    expect(await getDownloadVpsLocations()).toEqual([...DEFAULT_VPS_LOCATIONS]);
+    expect(await getUploadVpsLocations()).toEqual([...DEFAULT_VPS_LOCATIONS]);
+  });
+
+  it("reads ordered location list from DB for download and upload separately", async () => {
+    mockGetEntry.mockImplementation(async (_cat: string, key: string) => {
+      if (key === "downloadLocations") {
+        return { value: JSON.stringify(["fsn1", "hel1"]) } as any;
+      }
+      if (key === "uploadLocations") {
+        return { value: JSON.stringify(["nbg1", "fsn1", "hel1"]) } as any;
+      }
+      return null;
+    });
+
+    expect(await getDownloadVpsLocations()).toEqual(["fsn1", "hel1"]);
+    expect(await getUploadVpsLocations()).toEqual(["nbg1", "fsn1", "hel1"]);
+  });
+
+  it("falls back to defaults on malformed JSON", async () => {
+    mockGetEntry.mockResolvedValue({ value: "not json" } as any);
+    expect(await getDownloadVpsLocations()).toEqual([...DEFAULT_VPS_LOCATIONS]);
+  });
+
+  it("falls back to defaults on empty array", async () => {
+    mockGetEntry.mockResolvedValue({ value: "[]" } as any);
+    expect(await getDownloadVpsLocations()).toEqual([...DEFAULT_VPS_LOCATIONS]);
+  });
+
+  it("filters out non-string and empty entries", async () => {
+    mockGetEntry.mockResolvedValue({
+      value: JSON.stringify(["hel1", "", null, 42, "fsn1"]),
+    } as any);
+    expect(await getDownloadVpsLocations()).toEqual(["hel1", "fsn1"]);
+  });
+
+  it("falls back to defaults when filter empties the list", async () => {
+    mockGetEntry.mockResolvedValue({
+      value: JSON.stringify([null, 42, ""]),
+    } as any);
+    expect(await getDownloadVpsLocations()).toEqual([...DEFAULT_VPS_LOCATIONS]);
+  });
+
+  it("falls back to defaults on DB error", async () => {
+    mockGetEntry.mockRejectedValue(new Error("boom"));
+    expect(await getDownloadVpsLocations()).toEqual([...DEFAULT_VPS_LOCATIONS]);
   });
 });
