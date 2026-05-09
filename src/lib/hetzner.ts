@@ -47,7 +47,8 @@ export interface HetznerCreateServerOptions {
   name: string;
   serverType?: string;     // default: cax21 (4 vCPU ARM, 8GB RAM)
   image?: string;          // default: docker-ce (Docker pre-installed)
-  location?: string;       // default: hel1
+  location?: string;       // single preferred location; ignored if `locations` is set
+  locations?: string[];    // ordered preference; tries each on placement failure (412)
   userData?: string;       // Cloud-Init script
   sshKeys?: string[];      // SSH key names
   labels?: Record<string, string>;
@@ -126,13 +127,16 @@ function mapServer(raw: any): HetznerServer {
 export async function createServer(
   options: HetznerCreateServerOptions,
 ): Promise<HetznerCreateServerResult> {
-  const start = Date.now();
+  // Resolve ordered location preferences. `locations` wins if set; otherwise
+  // fall back to single `location`, otherwise the historical default.
+  const locationCandidates: string[] = options.locations && options.locations.length > 0
+    ? options.locations
+    : [options.location || "hel1"];
 
-  const body: Record<string, any> = {
+  const baseBody: Record<string, any> = {
     name: options.name,
     server_type: options.serverType || "cax21",
     image: options.image || "docker-ce",
-    location: options.location || "hel1",
     labels: {
       purpose: "openmedia-download",
       ...options.labels,
@@ -141,39 +145,101 @@ export async function createServer(
   };
 
   if (options.userData) {
-    body.user_data = options.userData;
+    baseBody.user_data = options.userData;
   }
 
   if (options.sshKeys && options.sshKeys.length > 0) {
-    body.ssh_keys = options.sshKeys;
+    baseBody.ssh_keys = options.sshKeys;
   }
 
   if (options.networks && options.networks.length > 0) {
-    body.networks = options.networks;
+    baseBody.networks = options.networks;
   }
 
-  const res = await hetznerFetch("/servers", {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
+  let lastErr: { status: number; message: string; location: string } | null = null;
+
+  for (const location of locationCandidates) {
+    const start = Date.now();
+    const body = { ...baseBody, location };
+
+    const res = await hetznerFetch("/servers", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+
+    if (res.ok) {
+      const data: any = await res.json();
+      const durationMs = Date.now() - start;
+      const server = mapServer(data.server);
+      console.log(`[hetzner] Server created: ${server.name} (id: ${server.id}, type: ${server.serverType}, location: ${server.location}) in ${durationMs}ms`);
+      return {
+        server,
+        rootPassword: data.root_password || null,
+      };
+    }
+
+    const err = (await res.json().catch(() => ({}))) as any;
+    const message = err?.error?.message || "unknown";
+    const code = err?.error?.code || "";
+    const durationMs = Date.now() - start;
+    lastErr = { status: res.status, message, location };
+
+    // 412 = placement_error or resource_unavailable_in_location → try next location.
+    // All other errors are non-recoverable (auth, validation, quota) — fail fast.
+    const isCapacityError =
+      res.status === 412 ||
+      code === "placement_error" ||
+      code === "resource_unavailable_region" ||
+      code === "resource_unavailable_in_location";
+
+    if (!isCapacityError || locationCandidates.length === 1) {
+      console.error(`[hetzner] Create server failed in ${location} (${durationMs}ms): ${res.status} — ${message}`);
+      throw new Error(`Hetzner API: ${res.status} — ${message || "Server konnte nicht erstellt werden."}`);
+    }
+
+    console.warn(`[hetzner] Location ${location} unavailable (${durationMs}ms): ${res.status} — ${message}. Trying next location.`);
+  }
+
+  // Exhausted all candidate locations.
+  const detail = lastErr ? `${lastErr.status} — ${lastErr.message} (last tried: ${lastErr.location})` : "no locations available";
+  throw new Error(`Hetzner API: keine Location verfuegbar — ${detail}`);
+}
+
+// ---------------------------------------------------------------------------
+// Locations
+// ---------------------------------------------------------------------------
+
+export interface HetznerLocation {
+  id: number;
+  name: string;          // e.g. "hel1"
+  description: string;   // e.g. "Helsinki DC Park 1"
+  country: string;       // ISO code, e.g. "FI"
+  city: string;          // e.g. "Helsinki"
+  network_zone: string;  // e.g. "eu-central"
+}
+
+/**
+ * List all Hetzner Cloud datacenter locations.
+ * Used by the admin UI to populate the location preference dropdown.
+ */
+export async function listLocations(): Promise<HetznerLocation[]> {
+  const res = await hetznerFetch("/locations");
 
   if (!res.ok) {
     const err = (await res.json().catch(() => ({}))) as any;
-    const durationMs = Date.now() - start;
-    console.error(`[hetzner] Create server failed (${durationMs}ms): ${res.status} — ${err?.error?.message || "unknown"}`);
-    throw new Error(`Hetzner API: ${res.status} — ${err?.error?.message || "Server konnte nicht erstellt werden."}`);
+    throw new Error(`Hetzner API: ${res.status} — ${err?.error?.message || "Locations nicht abrufbar."}`);
   }
 
   const data: any = await res.json();
-  const durationMs = Date.now() - start;
-
-  const server = mapServer(data.server);
-  console.log(`[hetzner] Server created: ${server.name} (id: ${server.id}, type: ${server.serverType}, location: ${server.location}) in ${durationMs}ms`);
-
-  return {
-    server,
-    rootPassword: data.root_password || null,
-  };
+  const raw = Array.isArray(data.locations) ? data.locations : [];
+  return raw.map((l: any) => ({
+    id: l.id,
+    name: l.name,
+    description: l.description || "",
+    country: l.country || "",
+    city: l.city || "",
+    network_zone: l.network_zone || "",
+  }));
 }
 
 /**
@@ -1378,10 +1444,14 @@ export async function provisionUploadVps(
     console.warn(`[hetzner] HETZNER_NETWORK_ID is not a valid number: "${rawNetworkId}" — upload VPS will not be attached to private network`);
   }
 
+  // Lazy import to avoid a circular dep (vps-config -> usenet-provider-service -> ...).
+  const { getUploadVpsLocations } = await import("./vps-config.js");
+  const locations = await getUploadVpsLocations();
+
   const result = await createServer({
     name: params.serverName,
     serverType: "cpx42",  // 8 vCPU x86, 16GB RAM — more power for PAR2 + Nyuu
-    location: "hel1",     // Helsinki — close to Hetzner S3 and EU Usenet providers
+    locations,            // ordered preference; first available location wins
     userData: cloudInit,
     ...(process.env.HETZNER_SSH_KEY_NAME ? { sshKeys: [process.env.HETZNER_SSH_KEY_NAME] } : {}),
     networks: networkId ? [networkId] : undefined,

@@ -410,3 +410,54 @@ function buildRoutingPolicy(
     mustDirect: excludedCIDRs,
   };
 }
+
+// ─── Location Preferences (Datacenter Fallback) ──────────────────────
+
+/**
+ * Default ordered list of Hetzner locations to try when provisioning a VPS.
+ * Helsinki first because the S3 bucket lives there; Falkenstein and Nuremberg
+ * are EU-Central fallbacks with broad capacity.
+ */
+export const DEFAULT_VPS_LOCATIONS: readonly string[] = ["hel1", "fsn1", "nbg1"];
+
+/**
+ * Read an ordered location list from a vps/<key> JSON-array config entry.
+ * Returns the default list if the entry is missing, malformed, or empty.
+ */
+async function getVpsLocationsFromKey(key: string): Promise<string[]> {
+  try {
+    const entry = await getEntry("vps", key, false);
+    if (!entry?.value) return [...DEFAULT_VPS_LOCATIONS];
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(entry.value);
+    } catch {
+      console.warn(`[vps-config] vps/${key} is not valid JSON — using defaults`);
+      return [...DEFAULT_VPS_LOCATIONS];
+    }
+
+    if (!Array.isArray(parsed) || parsed.length === 0) {
+      return [...DEFAULT_VPS_LOCATIONS];
+    }
+
+    const cleaned = parsed
+      .filter((v): v is string => typeof v === "string" && v.trim().length > 0)
+      .map((v) => v.trim());
+
+    return cleaned.length > 0 ? cleaned : [...DEFAULT_VPS_LOCATIONS];
+  } catch (err) {
+    console.warn(`[vps-config] Failed to read vps/${key}: ${(err as Error).message}`);
+    return [...DEFAULT_VPS_LOCATIONS];
+  }
+}
+
+/** Ordered location preferences for download VPS provisioning. */
+export async function getDownloadVpsLocations(): Promise<string[]> {
+  return getVpsLocationsFromKey("downloadLocations");
+}
+
+/** Ordered location preferences for upload VPS provisioning. */
+export async function getUploadVpsLocations(): Promise<string[]> {
+  return getVpsLocationsFromKey("uploadLocations");
+}

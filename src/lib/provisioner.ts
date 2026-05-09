@@ -14,7 +14,7 @@ import prisma from "./prisma.js";
 import { isHetznerConfigured, createServer, generateCloudInit } from "./hetzner.js";
 import { markJobFailed } from "./job-failure.js";
 import { addMapping } from "./caddy-mapping.js";
-import { getDownloadVpsConfig, canProvision } from "./vps-config.js";
+import { getDownloadVpsConfig, canProvision, getDownloadVpsLocations } from "./vps-config.js";
 import { generateServiceToken, storeServiceToken, deleteServiceTokens } from "./service-token.js";
 
 type ProvisionMode = "hetzner" | "local" | "false";
@@ -139,6 +139,8 @@ async function provisionHetznerVPS(job: any): Promise<void> {
     console.warn(`[provision] HETZNER_NETWORK_ID is not a valid number: "${rawNetworkId}" — VPS will not be attached to private network`);
   }
 
+  const locations = await getDownloadVpsLocations();
+
   try {
     const result = await createServer({
       name: serverName,
@@ -146,6 +148,7 @@ async function provisionHetznerVPS(job: any): Promise<void> {
       sshKeys: process.env.HETZNER_SSH_KEY_NAME ? [process.env.HETZNER_SSH_KEY_NAME] : undefined,
       labels: { "job-id": job.id, purpose: "openmedia-download" },
       networks: networkId ? [networkId] : undefined,
+      locations,
     });
 
     // Update job with server info (prefer private IP for internal routing, keep public for reference)
