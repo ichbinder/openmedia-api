@@ -31,7 +31,11 @@ import {
   canProvision,
   getDownloadVpsLocations,
   getUploadVpsLocations,
+  getDownloadVpsServerTypes,
+  getUploadVpsServerTypes,
   DEFAULT_VPS_LOCATIONS,
+  DEFAULT_DOWNLOAD_SERVER_TYPES,
+  DEFAULT_UPLOAD_SERVER_TYPES,
 } from "./vps-config.js";
 
 const mockGetEntry = vi.mocked(getEntry);
@@ -248,5 +252,64 @@ describe("VPS Location Preferences", () => {
   it("falls back to defaults on DB error", async () => {
     mockGetEntry.mockRejectedValue(new Error("boom"));
     expect(await getDownloadVpsLocations()).toEqual([...DEFAULT_VPS_LOCATIONS]);
+  });
+});
+
+describe("VPS Server-Type Preferences", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns the default server-type list when no DB entry exists", async () => {
+    mockGetEntry.mockResolvedValue(null as any);
+    expect(await getDownloadVpsServerTypes()).toEqual([...DEFAULT_DOWNLOAD_SERVER_TYPES]);
+    expect(await getUploadVpsServerTypes()).toEqual([...DEFAULT_UPLOAD_SERVER_TYPES]);
+  });
+
+  it("reads ordered server-type list from DB for download and upload separately", async () => {
+    mockGetEntry.mockImplementation(async (_cat: string, key: string) => {
+      if (key === "downloadServerTypes") {
+        return { value: JSON.stringify(["cax11", "cax21", "cpx21"]) } as any;
+      }
+      if (key === "uploadServerTypes") {
+        return { value: JSON.stringify(["cpx42", "cpx41", "cpx31"]) } as any;
+      }
+      return null;
+    });
+
+    expect(await getDownloadVpsServerTypes()).toEqual(["cax11", "cax21", "cpx21"]);
+    expect(await getUploadVpsServerTypes()).toEqual(["cpx42", "cpx41", "cpx31"]);
+  });
+
+  it("falls back to defaults on malformed JSON", async () => {
+    mockGetEntry.mockResolvedValue({ value: "not json" } as any);
+    expect(await getDownloadVpsServerTypes()).toEqual([...DEFAULT_DOWNLOAD_SERVER_TYPES]);
+    expect(await getUploadVpsServerTypes()).toEqual([...DEFAULT_UPLOAD_SERVER_TYPES]);
+  });
+
+  it("falls back to defaults on empty array", async () => {
+    mockGetEntry.mockResolvedValue({ value: "[]" } as any);
+    expect(await getDownloadVpsServerTypes()).toEqual([...DEFAULT_DOWNLOAD_SERVER_TYPES]);
+    expect(await getUploadVpsServerTypes()).toEqual([...DEFAULT_UPLOAD_SERVER_TYPES]);
+  });
+
+  it("filters out non-string and empty entries", async () => {
+    mockGetEntry.mockResolvedValue({
+      value: JSON.stringify(["cax21", "", null, 42, "cpx21"]),
+    } as any);
+    expect(await getDownloadVpsServerTypes()).toEqual(["cax21", "cpx21"]);
+  });
+
+  it("falls back to defaults when filter empties the list", async () => {
+    mockGetEntry.mockResolvedValue({
+      value: JSON.stringify([null, 42, ""]),
+    } as any);
+    expect(await getDownloadVpsServerTypes()).toEqual([...DEFAULT_DOWNLOAD_SERVER_TYPES]);
+  });
+
+  it("falls back to defaults on DB error", async () => {
+    mockGetEntry.mockRejectedValue(new Error("boom"));
+    expect(await getDownloadVpsServerTypes()).toEqual([...DEFAULT_DOWNLOAD_SERVER_TYPES]);
+    expect(await getUploadVpsServerTypes()).toEqual([...DEFAULT_UPLOAD_SERVER_TYPES]);
   });
 });

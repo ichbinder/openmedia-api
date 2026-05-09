@@ -411,7 +411,7 @@ function buildRoutingPolicy(
   };
 }
 
-// ─── Location Preferences (Datacenter Fallback) ──────────────────────
+// ─── Location & Server-Type Preferences (Provisioning Fallback) ──────
 
 /**
  * Default ordered list of Hetzner locations to try when provisioning a VPS.
@@ -421,43 +421,70 @@ function buildRoutingPolicy(
 export const DEFAULT_VPS_LOCATIONS: readonly string[] = ["hel1", "fsn1", "nbg1"];
 
 /**
- * Read an ordered location list from a vps/<key> JSON-array config entry.
- * Returns the default list if the entry is missing, malformed, or empty.
+ * Default ordered list of Hetzner server types to try when provisioning a download VPS.
+ * cax21 (4 vCPU ARM, 8GB RAM) is the historical default; cax11 and cpx21 are
+ * smaller fallbacks for capacity-constrained periods.
  */
-async function getVpsLocationsFromKey(key: string): Promise<string[]> {
+export const DEFAULT_DOWNLOAD_SERVER_TYPES: readonly string[] = ["cax21"];
+
+/**
+ * Default ordered list of Hetzner server types to try when provisioning an upload VPS.
+ * cpx42 (8 vCPU x86, 16GB RAM) is the historical default; cpx41 and cpx31 are
+ * smaller fallbacks for capacity-constrained periods.
+ */
+export const DEFAULT_UPLOAD_SERVER_TYPES: readonly string[] = ["cpx42"];
+
+/**
+ * Read an ordered string-list from a vps/<key> JSON-array config entry.
+ * Returns the supplied defaults if the entry is missing, malformed, or empty.
+ */
+async function getVpsListFromKey(
+  key: string,
+  defaults: readonly string[],
+): Promise<string[]> {
   try {
     const entry = await getEntry("vps", key, false);
-    if (!entry?.value) return [...DEFAULT_VPS_LOCATIONS];
+    if (!entry?.value) return [...defaults];
 
     let parsed: unknown;
     try {
       parsed = JSON.parse(entry.value);
     } catch {
       console.warn(`[vps-config] vps/${key} is not valid JSON — using defaults`);
-      return [...DEFAULT_VPS_LOCATIONS];
+      return [...defaults];
     }
 
     if (!Array.isArray(parsed) || parsed.length === 0) {
-      return [...DEFAULT_VPS_LOCATIONS];
+      return [...defaults];
     }
 
     const cleaned = parsed
       .filter((v): v is string => typeof v === "string" && v.trim().length > 0)
       .map((v) => v.trim());
 
-    return cleaned.length > 0 ? cleaned : [...DEFAULT_VPS_LOCATIONS];
+    return cleaned.length > 0 ? cleaned : [...defaults];
   } catch (err) {
     console.warn(`[vps-config] Failed to read vps/${key}: ${(err as Error).message}`);
-    return [...DEFAULT_VPS_LOCATIONS];
+    return [...defaults];
   }
 }
 
 /** Ordered location preferences for download VPS provisioning. */
 export async function getDownloadVpsLocations(): Promise<string[]> {
-  return getVpsLocationsFromKey("downloadLocations");
+  return getVpsListFromKey("downloadLocations", DEFAULT_VPS_LOCATIONS);
 }
 
 /** Ordered location preferences for upload VPS provisioning. */
 export async function getUploadVpsLocations(): Promise<string[]> {
-  return getVpsLocationsFromKey("uploadLocations");
+  return getVpsListFromKey("uploadLocations", DEFAULT_VPS_LOCATIONS);
+}
+
+/** Ordered server-type preferences for download VPS provisioning. */
+export async function getDownloadVpsServerTypes(): Promise<string[]> {
+  return getVpsListFromKey("downloadServerTypes", DEFAULT_DOWNLOAD_SERVER_TYPES);
+}
+
+/** Ordered server-type preferences for upload VPS provisioning. */
+export async function getUploadVpsServerTypes(): Promise<string[]> {
+  return getVpsListFromKey("uploadServerTypes", DEFAULT_UPLOAD_SERVER_TYPES);
 }

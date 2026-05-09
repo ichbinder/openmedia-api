@@ -35,7 +35,11 @@ import {
   deleteVpnProvider,
 } from "../lib/vpn-provider-service.js";
 import { getActiveVpsCounts, getVpsLimits } from "../lib/vps-config.js";
-import { listLocations as listHetznerLocations, isHetznerConfigured } from "../lib/hetzner.js";
+import {
+  listLocations as listHetznerLocations,
+  listServerTypes as listHetznerServerTypes,
+  isHetznerConfigured,
+} from "../lib/hetzner.js";
 
 const router = Router();
 
@@ -216,6 +220,24 @@ router.get("/hetzner-locations", requireAuth, requireAdmin, async (_req: AuthReq
   } catch (err) {
     console.error("[admin-config] Hetzner locations error:", err);
     res.status(502).json({ error: (err as Error).message || "Failed to fetch Hetzner locations." });
+  }
+});
+
+/**
+ * GET /admin/config/hetzner-server-types — proxies the Hetzner Cloud API server-type list.
+ * Used by the admin UI to populate the server-type preference lists.
+ */
+router.get("/hetzner-server-types", requireAuth, requireAdmin, async (_req: AuthRequest, res: Response) => {
+  try {
+    if (!isHetznerConfigured()) {
+      res.status(503).json({ error: "Hetzner API token not configured." });
+      return;
+    }
+    const serverTypes = await listHetznerServerTypes();
+    res.json({ serverTypes });
+  } catch (err) {
+    console.error("[admin-config] Hetzner server-types error:", err);
+    res.status(502).json({ error: (err as Error).message || "Failed to fetch Hetzner server types." });
   }
 });
 

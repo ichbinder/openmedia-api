@@ -45,7 +45,8 @@ export interface HetznerServer {
 
 export interface HetznerCreateServerOptions {
   name: string;
-  serverType?: string;     // default: cax21 (4 vCPU ARM, 8GB RAM)
+  serverType?: string;     // single preferred type; ignored if `serverTypes` is set
+  serverTypes?: string[];  // ordered preference; tries each on capacity failure
   image?: string;          // default: docker-ce (Docker pre-installed)
   location?: string;       // single preferred location; ignored if `locations` is set
   locations?: string[];    // ordered preference; tries each on placement failure (412)
@@ -127,6 +128,12 @@ function mapServer(raw: any): HetznerServer {
 export async function createServer(
   options: HetznerCreateServerOptions,
 ): Promise<HetznerCreateServerResult> {
+  // Resolve ordered server-type preferences. `serverTypes` wins if set;
+  // otherwise fall back to single `serverType`, otherwise the historical default.
+  const serverTypeCandidates: string[] = options.serverTypes && options.serverTypes.length > 0
+    ? options.serverTypes
+    : [options.serverType || "cax21"];
+
   // Resolve ordered location preferences. `locations` wins if set; otherwise
   // fall back to single `location`, otherwise the historical default.
   const locationCandidates: string[] = options.locations && options.locations.length > 0
@@ -135,7 +142,6 @@ export async function createServer(
 
   const baseBody: Record<string, any> = {
     name: options.name,
-    server_type: options.serverType || "cax21",
     image: options.image || "docker-ce",
     labels: {
       purpose: "openmedia-download",
@@ -156,53 +162,64 @@ export async function createServer(
     baseBody.networks = options.networks;
   }
 
-  let lastErr: { status: number; message: string; location: string } | null = null;
+  const totalCombinations = serverTypeCandidates.length * locationCandidates.length;
+  let lastErr: { status: number; message: string; serverType: string; location: string } | null = null;
 
-  for (const location of locationCandidates) {
-    const start = Date.now();
-    const body = { ...baseBody, location };
+  // Outer loop: server types (admin-prioritized fallback).
+  // Inner loop: locations (capacity fallback within a chosen type).
+  for (const serverType of serverTypeCandidates) {
+    for (const location of locationCandidates) {
+      const start = Date.now();
+      const body = { ...baseBody, server_type: serverType, location };
 
-    const res = await hetznerFetch("/servers", {
-      method: "POST",
-      body: JSON.stringify(body),
-    });
+      const res = await hetznerFetch("/servers", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
 
-    if (res.ok) {
-      const data: any = await res.json();
+      if (res.ok) {
+        const data: any = await res.json();
+        const durationMs = Date.now() - start;
+        const server = mapServer(data.server);
+        console.log(`[hetzner] Server created: ${server.name} (id: ${server.id}, type: ${server.serverType}, location: ${server.location}) in ${durationMs}ms`);
+        return {
+          server,
+          rootPassword: data.root_password || null,
+        };
+      }
+
+      const err = (await res.json().catch(() => ({}))) as any;
+      const message = err?.error?.message || "unknown";
+      const code = err?.error?.code || "";
       const durationMs = Date.now() - start;
-      const server = mapServer(data.server);
-      console.log(`[hetzner] Server created: ${server.name} (id: ${server.id}, type: ${server.serverType}, location: ${server.location}) in ${durationMs}ms`);
-      return {
-        server,
-        rootPassword: data.root_password || null,
-      };
+      lastErr = { status: res.status, message, serverType, location };
+
+      // Capacity errors → try next combination.
+      // 412 = placement_error or resource_unavailable_in_location.
+      // unsupported_error / invalid_input on server_type → operator typed an
+      // unknown type; we still fall through to the next admin-listed type
+      // instead of aborting the whole provision.
+      const isCapacityError =
+        res.status === 412 ||
+        code === "placement_error" ||
+        code === "resource_unavailable_region" ||
+        code === "resource_unavailable_in_location" ||
+        code === "unsupported_error";
+
+      if (!isCapacityError || totalCombinations === 1) {
+        console.error(`[hetzner] Create server failed (${serverType} in ${location}, ${durationMs}ms): ${res.status} — ${message}`);
+        throw new Error(`Hetzner API: ${res.status} — ${message || "Server konnte nicht erstellt werden."}`);
+      }
+
+      console.warn(`[hetzner] ${serverType} in ${location} unavailable (${durationMs}ms): ${res.status} — ${message}. Trying next combination.`);
     }
-
-    const err = (await res.json().catch(() => ({}))) as any;
-    const message = err?.error?.message || "unknown";
-    const code = err?.error?.code || "";
-    const durationMs = Date.now() - start;
-    lastErr = { status: res.status, message, location };
-
-    // 412 = placement_error or resource_unavailable_in_location → try next location.
-    // All other errors are non-recoverable (auth, validation, quota) — fail fast.
-    const isCapacityError =
-      res.status === 412 ||
-      code === "placement_error" ||
-      code === "resource_unavailable_region" ||
-      code === "resource_unavailable_in_location";
-
-    if (!isCapacityError || locationCandidates.length === 1) {
-      console.error(`[hetzner] Create server failed in ${location} (${durationMs}ms): ${res.status} — ${message}`);
-      throw new Error(`Hetzner API: ${res.status} — ${message || "Server konnte nicht erstellt werden."}`);
-    }
-
-    console.warn(`[hetzner] Location ${location} unavailable (${durationMs}ms): ${res.status} — ${message}. Trying next location.`);
   }
 
-  // Exhausted all candidate locations.
-  const detail = lastErr ? `${lastErr.status} — ${lastErr.message} (last tried: ${lastErr.location})` : "no locations available";
-  throw new Error(`Hetzner API: keine Location verfuegbar — ${detail}`);
+  // Exhausted every (server-type × location) combination.
+  const detail = lastErr
+    ? `${lastErr.status} — ${lastErr.message} (last tried: ${lastErr.serverType} in ${lastErr.location})`
+    : "no candidates available";
+  throw new Error(`Hetzner API: keine Server-Type/Location-Kombination verfuegbar — ${detail}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -240,6 +257,51 @@ export async function listLocations(): Promise<HetznerLocation[]> {
     city: l.city || "",
     network_zone: l.network_zone || "",
   }));
+}
+
+// ---------------------------------------------------------------------------
+// Server Types
+// ---------------------------------------------------------------------------
+
+export interface HetznerServerType {
+  id: number;
+  name: string;          // e.g. "cax21"
+  description: string;   // e.g. "CAX21"
+  cores: number;
+  memory: number;        // GB
+  disk: number;          // GB
+  cpuType: string;       // "shared" | "dedicated"
+  architecture: string;  // "arm" | "x86"
+  deprecated: boolean;
+}
+
+/**
+ * List all available Hetzner Cloud server types (excluding deprecated ones by default).
+ * Used by the admin UI to populate the server-type preference list.
+ */
+export async function listServerTypes(includeDeprecated = false): Promise<HetznerServerType[]> {
+  const res = await hetznerFetch("/server_types?per_page=50");
+
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as any;
+    throw new Error(`Hetzner API: ${res.status} — ${err?.error?.message || "Server-Types nicht abrufbar."}`);
+  }
+
+  const data: any = await res.json();
+  const raw = Array.isArray(data.server_types) ? data.server_types : [];
+  const mapped: HetznerServerType[] = raw.map((t: any) => ({
+    id: t.id,
+    name: t.name,
+    description: t.description || "",
+    cores: typeof t.cores === "number" ? t.cores : 0,
+    memory: typeof t.memory === "number" ? t.memory : 0,
+    disk: typeof t.disk === "number" ? t.disk : 0,
+    cpuType: t.cpu_type || "",
+    architecture: t.architecture || "",
+    deprecated: !!t.deprecated,
+  }));
+
+  return includeDeprecated ? mapped : mapped.filter((t) => !t.deprecated);
 }
 
 /**
@@ -1445,12 +1507,15 @@ export async function provisionUploadVps(
   }
 
   // Lazy import to avoid a circular dep (vps-config -> usenet-provider-service -> ...).
-  const { getUploadVpsLocations } = await import("./vps-config.js");
-  const locations = await getUploadVpsLocations();
+  const { getUploadVpsLocations, getUploadVpsServerTypes } = await import("./vps-config.js");
+  const [locations, serverTypes] = await Promise.all([
+    getUploadVpsLocations(),
+    getUploadVpsServerTypes(),
+  ]);
 
   const result = await createServer({
     name: params.serverName,
-    serverType: "cpx42",  // 8 vCPU x86, 16GB RAM — more power for PAR2 + Nyuu
+    serverTypes,          // ordered preference; first available type wins (default: cpx42 — 8 vCPU x86, 16GB RAM for PAR2+Nyuu)
     locations,            // ordered preference; first available location wins
     userData: cloudInit,
     ...(process.env.HETZNER_SSH_KEY_NAME ? { sshKeys: [process.env.HETZNER_SSH_KEY_NAME] } : {}),

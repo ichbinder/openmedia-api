@@ -142,8 +142,156 @@ describe("Hetzner Service", () => {
       try {
         await expect(
           createServer({ name: "test", locations: ["hel1", "fsn1"] })
-        ).rejects.toThrow(/keine Location verfuegbar/);
+        ).rejects.toThrow(/keine Server-Type\/Location-Kombination verfuegbar/);
         expect(fetchMock).toHaveBeenCalledTimes(2);
+      } finally {
+        globalThis.fetch = origFetch;
+        if (origToken) process.env.HETZNER_API_TOKEN = origToken;
+        else delete process.env.HETZNER_API_TOKEN;
+      }
+    });
+
+    it("server-type fallback: tries next type when first is unavailable", async () => {
+      const origToken = process.env.HETZNER_API_TOKEN;
+      process.env.HETZNER_API_TOKEN = "test-token";
+      const fetchMock = vi.fn();
+      const origFetch = globalThis.fetch;
+      globalThis.fetch = fetchMock as any;
+
+      // First server-type fails in the (only) location, second succeeds.
+      fetchMock.mockResolvedValueOnce({
+        ok: false,
+        status: 412,
+        json: async () => ({ error: { code: "resource_unavailable_in_location", message: "no capacity" } }),
+      } as any);
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          server: { id: 99, name: "x", status: "initializing", server_type: { name: "cax21" }, datacenter: { location: { name: "hel1" } }, public_net: {}, labels: {}, created: new Date().toISOString() },
+          root_password: null,
+        }),
+      } as any);
+
+      try {
+        const result = await createServer({
+          name: "test",
+          serverTypes: ["cax11", "cax21"],
+          locations: ["hel1"],
+        });
+
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        expect(result.server.id).toBe(99);
+        const bodies = fetchMock.mock.calls.map(([, init]: any) => JSON.parse(init.body));
+        expect(bodies[0].server_type).toBe("cax11");
+        expect(bodies[0].location).toBe("hel1");
+        expect(bodies[1].server_type).toBe("cax21");
+        expect(bodies[1].location).toBe("hel1");
+      } finally {
+        globalThis.fetch = origFetch;
+        if (origToken) process.env.HETZNER_API_TOKEN = origToken;
+        else delete process.env.HETZNER_API_TOKEN;
+      }
+    });
+
+    it("server-type x location loop: outer = type, inner = location", async () => {
+      const origToken = process.env.HETZNER_API_TOKEN;
+      process.env.HETZNER_API_TOKEN = "test-token";
+      const fetchMock = vi.fn();
+      const origFetch = globalThis.fetch;
+      globalThis.fetch = fetchMock as any;
+
+      // 3 failures (cax11 x [hel1, fsn1, nbg1]), 4th succeeds (cax21 x hel1).
+      const failure = {
+        ok: false,
+        status: 412,
+        json: async () => ({ error: { code: "placement_error", message: "no capacity" } }),
+      };
+      fetchMock.mockResolvedValueOnce(failure as any);
+      fetchMock.mockResolvedValueOnce(failure as any);
+      fetchMock.mockResolvedValueOnce(failure as any);
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          server: { id: 7, name: "x", status: "initializing", server_type: { name: "cax21" }, datacenter: { location: { name: "hel1" } }, public_net: {}, labels: {}, created: new Date().toISOString() },
+          root_password: null,
+        }),
+      } as any);
+
+      try {
+        const result = await createServer({
+          name: "test",
+          serverTypes: ["cax11", "cax21"],
+          locations: ["hel1", "fsn1", "nbg1"],
+        });
+
+        expect(fetchMock).toHaveBeenCalledTimes(4);
+        expect(result.server.id).toBe(7);
+        const bodies = fetchMock.mock.calls.map(([, init]: any) => JSON.parse(init.body));
+        // Outer: cax11 first → all 3 locations tried for cax11 before moving on.
+        expect(bodies[0]).toMatchObject({ server_type: "cax11", location: "hel1" });
+        expect(bodies[1]).toMatchObject({ server_type: "cax11", location: "fsn1" });
+        expect(bodies[2]).toMatchObject({ server_type: "cax11", location: "nbg1" });
+        expect(bodies[3]).toMatchObject({ server_type: "cax21", location: "hel1" });
+      } finally {
+        globalThis.fetch = origFetch;
+        if (origToken) process.env.HETZNER_API_TOKEN = origToken;
+        else delete process.env.HETZNER_API_TOKEN;
+      }
+    });
+
+    it("server-type fallback: unsupported_error counts as capacity error", async () => {
+      const origToken = process.env.HETZNER_API_TOKEN;
+      process.env.HETZNER_API_TOKEN = "test-token";
+      const fetchMock = vi.fn();
+      const origFetch = globalThis.fetch;
+      globalThis.fetch = fetchMock as any;
+
+      // First type triggers unsupported_error (e.g. typo), second succeeds.
+      fetchMock.mockResolvedValueOnce({
+        ok: false,
+        status: 422,
+        json: async () => ({ error: { code: "unsupported_error", message: "server type not supported" } }),
+      } as any);
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          server: { id: 5, name: "x", status: "initializing", server_type: { name: "cax21" }, datacenter: { location: { name: "hel1" } }, public_net: {}, labels: {}, created: new Date().toISOString() },
+          root_password: null,
+        }),
+      } as any);
+
+      try {
+        const result = await createServer({
+          name: "test",
+          serverTypes: ["typo-type", "cax21"],
+          locations: ["hel1"],
+        });
+        expect(result.server.id).toBe(5);
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+      } finally {
+        globalThis.fetch = origFetch;
+        if (origToken) process.env.HETZNER_API_TOKEN = origToken;
+        else delete process.env.HETZNER_API_TOKEN;
+      }
+    });
+
+    it("single-combination capacity error throws immediately (no infinite retry)", async () => {
+      const origToken = process.env.HETZNER_API_TOKEN;
+      process.env.HETZNER_API_TOKEN = "test-token";
+      const fetchMock = vi.fn().mockResolvedValueOnce({
+        ok: false,
+        status: 412,
+        json: async () => ({ error: { code: "placement_error", message: "no capacity" } }),
+      });
+      const origFetch = globalThis.fetch;
+      globalThis.fetch = fetchMock as any;
+
+      try {
+        await expect(
+          createServer({ name: "test", serverTypes: ["cax21"], locations: ["hel1"] })
+        ).rejects.toThrow(/Hetzner API: 412/);
+        // totalCombinations === 1 → must NOT loop, must throw on first failure.
+        expect(fetchMock).toHaveBeenCalledTimes(1);
       } finally {
         globalThis.fetch = origFetch;
         if (origToken) process.env.HETZNER_API_TOKEN = origToken;
