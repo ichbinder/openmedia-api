@@ -12,6 +12,16 @@ vi.mock("../lib/s3.js", async (importOriginal) => {
   };
 });
 
+// Mock the NZB service: default to success so the route proceeds to DB writes.
+// 503 / fail-fast tests override per-test with mockRejectedValueOnce.
+vi.mock("../lib/nzb-service.js", async (importOriginal) => {
+  const original = await importOriginal() as Record<string, unknown>;
+  return {
+    ...original,
+    storeNzbInService: vi.fn().mockResolvedValue(undefined),
+  };
+});
+
 // Mock TMDB — default to a generic "found" result so existing tests get a normal
 // queued job. Tests that need needs_review can override the mock with not_found
 // or error per-test using vi.mocked(...).mockResolvedValueOnce(...).
@@ -569,5 +579,76 @@ describe("POST /downloads/request", () => {
     expect(res2.status).toBe(409);
     expect(res2.body.existingJobId).toBe(res1.body.job.id);
     expect(res2.body.existingStatus).toBe("needs_review");
+  });
+
+  it("gibt 503 zurück und erstellt keine DB-Rows wenn der NZB-Service unerreichbar ist (Neu-Pfad)", async () => {
+    const nzbServiceModule = await import("../lib/nzb-service.js");
+    const { NzbServiceUnavailableError } = await vi.importActual<typeof import("../lib/nzb-service.js")>(
+      "../lib/nzb-service.js",
+    );
+    vi.mocked(nzbServiceModule.storeNzbInService)
+      .mockRejectedValueOnce(new NzbServiceUnavailableError("HEAD failed: HTTP 502"));
+
+    const NZB = `<?xml version="1.0"?><nzb xmlns="http://www.newzbin.com/DTD/2003/nzb"><file poster="503@x.com" date="1" subject="Service.Down.New.Path [1/1] &quot;sd.rar&quot; yEnc"><groups><group>g</group></groups><segments><segment bytes="1" number="1">sd@b.com</segment></segments></file></nzb>`;
+
+    const before = {
+      movies: await prisma.nzbMovie.count(),
+      files: await prisma.nzbFile.count(),
+      jobs: await prisma.downloadJob.count(),
+    };
+
+    const res = await request(app)
+      .post("/downloads/request")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ nzbContent: NZB, title: "Service Down New Path 2024" });
+
+    expect(res.status).toBe(503);
+    expect(res.body.reason).toBe("nzb_service_unavailable");
+    expect(res.body.error).toContain("NZB-Service nicht erreichbar");
+
+    // No DB rows must have been created — fail-fast guarantee.
+    expect(await prisma.nzbMovie.count()).toBe(before.movies);
+    expect(await prisma.nzbFile.count()).toBe(before.files);
+    expect(await prisma.downloadJob.count()).toBe(before.jobs);
+  });
+
+  it("gibt 503 zurück und erstellt keinen neuen Job wenn der NZB-Service beim Reuse unerreichbar ist", async () => {
+    const NZB = `<?xml version="1.0"?><nzb xmlns="http://www.newzbin.com/DTD/2003/nzb"><file poster="reuse503@x.com" date="1" subject="Reuse.Service.Down [1/1] &quot;rsd.rar&quot; yEnc"><groups><group>g</group></groups><segments><segment bytes="1" number="1">rsd@b.com</segment></segments></file></nzb>`;
+
+    // First request: service is up, normal create path runs to completion.
+    const first = await request(app)
+      .post("/downloads/request")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ nzbContent: NZB, title: "Reuse Service Down" });
+    expect(first.status).toBe(201);
+    const firstJobId = first.body.job.id;
+
+    // Mark the existing job finished so the reuse path isn't blocked by the
+    // active-job conflict (409). 'completed' is a terminal status.
+    await prisma.downloadJob.update({
+      where: { id: firstJobId },
+      data: { status: "completed" },
+    });
+
+    // Second request (same hash): service goes down → 503, no new job row.
+    const nzbServiceModule = await import("../lib/nzb-service.js");
+    const { NzbServiceUnavailableError } = await vi.importActual<typeof import("../lib/nzb-service.js")>(
+      "../lib/nzb-service.js",
+    );
+    vi.mocked(nzbServiceModule.storeNzbInService)
+      .mockRejectedValueOnce(new NzbServiceUnavailableError("PUT failed: HTTP 502"));
+
+    const jobsBefore = await prisma.downloadJob.count();
+
+    const res = await request(app)
+      .post("/downloads/request")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ nzbContent: NZB, title: "Reuse Service Down" });
+
+    expect(res.status).toBe(503);
+    expect(res.body.reason).toBe("nzb_service_unavailable");
+
+    // Reuse path: no new DownloadJob row written.
+    expect(await prisma.downloadJob.count()).toBe(jobsBefore);
   });
 });

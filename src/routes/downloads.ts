@@ -7,7 +7,7 @@ import { sendToSabnzbd, getSabnzbdStatus, getSabnzbdConfigSummary } from "../lib
 import { searchTmdbMovie, searchTmdbMovieById, type TmdbMovieResult } from "../lib/tmdb.js";
 import { markJobFailed } from "../lib/job-failure.js";
 import { computeReviewExpiresAt, computeInitialTmdbRetryAfter } from "../lib/review-config.js";
-import { storeNzbInService } from "../lib/nzb-service.js";
+import { storeNzbInService, NzbServiceUnavailableError } from "../lib/nzb-service.js";
 import { getDownloadVpsConfig, getUploadVpsConfig } from "../lib/vps-config.js";
 import { generateServiceToken, storeServiceToken, deleteServiceTokens } from "../lib/service-token.js";
 import { drainQueue } from "../lib/queue-drain.js";
@@ -453,6 +453,22 @@ router.post("/request", requireAuth, async (req: AuthRequest, res: Response) => 
         return;
       }
 
+      // Ensure NZB exists on NZB service BEFORE creating any DB rows. If the
+      // service is down, fail fast with 503 so we don't leave an orphan
+      // DownloadJob pointing at an NZB the VPS can't fetch.
+      try {
+        await storeNzbInService(hash, nzbContent);
+      } catch (err) {
+        if (err instanceof NzbServiceUnavailableError) {
+          res.status(503).json({
+            error: "NZB-Service nicht erreichbar — Download abgebrochen.",
+            reason: "nzb_service_unavailable",
+          });
+          return;
+        }
+        throw err;
+      }
+
       // File already known — atomic check-and-create inside a transaction.
       // We re-read the NzbFile's movieId INSIDE the transaction so a concurrent
       // /assign-movie call (landing in S02) can't create a TOCTOU where we
@@ -554,11 +570,6 @@ router.post("/request", requireAuth, async (req: AuthRequest, res: Response) => 
         console.log(`[nzb-request] Reusing existing NzbFile ${hash.slice(0, 12)}... → new job ${reuseResult.job.id}`);
       }
 
-      // Ensure NZB exists on NZB service (may have been imported without it)
-      storeNzbInService(hash, nzbContent).catch((err) => {
-        console.error(`[nzb-request] Unexpected error storing NZB: ${err}`);
-      });
-
       res.status(201).json({
         job: serializeJob(reuseResult.job),
         reused: true,
@@ -598,6 +609,22 @@ router.post("/request", requireAuth, async (req: AuthRequest, res: Response) => 
     }
 
     const isNeedsReview = movieResolution.source === "needs-review";
+
+    // Ensure NZB exists on NZB service BEFORE writing any DB rows. If the
+    // service is down, fail fast with 503 so we don't leave orphan
+    // NzbMovie/NzbFile/DownloadJob rows pointing at an NZB the VPS can't fetch.
+    try {
+      await storeNzbInService(hash, nzbContent);
+    } catch (err) {
+      if (err instanceof NzbServiceUnavailableError) {
+        res.status(503).json({
+          error: "NZB-Service nicht erreichbar — Download abgebrochen.",
+          reason: "nzb_service_unavailable",
+        });
+        return;
+      }
+      throw err;
+    }
 
     // --- Create NzbMovie (or reuse existing) + NzbFile + DownloadJob in one transaction ---
     // For needs-review uploads, NzbMovie is skipped entirely and NzbFile is created
@@ -698,13 +725,6 @@ router.post("/request", requireAuth, async (req: AuthRequest, res: Response) => 
         `"${title}" (${parsed.resolution || "unknown"})`
       );
     }
-
-    // --- Store NZB in NZB service (non-blocking) ---
-    // We always store the file, even for needs_review uploads — the assignment
-    // step doesn't re-upload it, it just links it to a movie.
-    storeNzbInService(hash, nzbContent).catch((err) => {
-      console.error(`[nzb-request] Unexpected error storing NZB: ${err}`);
-    });
 
     // Reload job with relations for response
     const fullJob = await prisma.downloadJob.findUnique({
