@@ -11,6 +11,17 @@ vi.mock("../lib/provisioner.js", () => ({
   provisionDownload: vi.fn().mockResolvedValue(undefined),
 }));
 
+// Mock the NZB service: default to success so /downloads/request proceeds.
+// The new fail-fast 503 guard (M037) calls storeNzbInService() before any
+// DB writes; without this mock every needs_review setup would 503.
+vi.mock("../lib/nzb-service.js", async (importOriginal) => {
+  const original = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...original,
+    storeNzbInService: vi.fn().mockResolvedValue(undefined),
+  };
+});
+
 // Mock TMDB — the assign flow hits searchTmdbMovieById with the user-picked
 // tmdbId. Default response is "found" so most tests just work; individual
 // tests override with mockResolvedValueOnce for not_found/error/disabled.

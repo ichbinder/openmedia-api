@@ -4,6 +4,17 @@ import { createApp } from "../app.js";
 import { prisma } from "../test/setup.js";
 import { hashToken, TOKEN_PREFIX } from "../lib/api-token.js";
 
+// Mock the NZB service: default to success so /downloads/request proceeds.
+// The new fail-fast 503 guard (M037) calls storeNzbInService() before any
+// DB writes; without this mock the integration test would 503.
+vi.mock("../lib/nzb-service.js", async (importOriginal) => {
+  const original = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...original,
+    storeNzbInService: vi.fn().mockResolvedValue(undefined),
+  };
+});
+
 // Mock TMDB so the /downloads/request integration test below doesn't hit
 // the real client (which returns "disabled" without a TMDB_API_KEY).
 vi.mock("../lib/tmdb.js", () => ({

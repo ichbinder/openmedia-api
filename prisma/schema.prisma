@@ -414,3 +414,23 @@ model VpnProvider {
 
   @@map("vpn_providers")
 }
+
+// ─── Service Incident Tracking ──────────────────────────────────────
+// Records dependency failures (e.g. NZB-Service unreachable) so the admin UI
+// can show a banner. Recorded reactively when an outbound service call fails;
+// resolved on the next successful call. No background polling.
+
+model ServiceIncident {
+  id          String    @id @default(cuid())
+  service     String                                   // "nzb-service"
+  operation   String                                   // "store" | "fetch"
+  status      String    @default("open")               // "open" | "resolved"
+  message     String    @db.Text
+  firstSeenAt DateTime  @default(now()) @map("first_seen_at")
+  lastSeenAt  DateTime  @default(now()) @map("last_seen_at")
+  resolvedAt  DateTime? @map("resolved_at")
+  occurrences Int       @default(1)
+
+  @@index([service, status])
+  @@map("service_incidents")
+}
