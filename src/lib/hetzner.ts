@@ -1245,8 +1245,19 @@ runcmd:
     # Run dynamic VPN bootstrap (fetches config from API, sets up VPN + kill-switch)
     /opt/bootstrap.sh || exit 1
 
-    if ! docker pull "${params.dockerImage}"; then
-      fail_job "Docker pull failed: ${params.dockerImage}"
+    # Docker pull with retry (GHCR / network can hiccup on fresh VPS boot)
+    PULL_OK=0
+    for attempt in 1 2 3 4 5; do
+      if docker pull "${params.dockerImage}"; then
+        PULL_OK=1
+        break
+      fi
+      RETRY_DELAY=$((attempt * 10))
+      echo "[cloud-init] Docker pull attempt $attempt failed, retrying in $RETRY_DELAY s..."
+      sleep "$RETRY_DELAY"
+    done
+    if [ "$PULL_OK" = "0" ]; then
+      fail_job "Docker pull failed after 5 attempts: ${params.dockerImage}"
       exit 1
     fi
 
@@ -1453,8 +1464,19 @@ runcmd:
     # Run dynamic VPN bootstrap (fetches config from API, sets up VPN + kill-switch)
     /opt/bootstrap.sh || exit 1
 
-    if ! docker pull "${dockerImage}"; then
-      fail_job "Docker pull failed: ${dockerImage}"
+    # Docker pull with retry (GHCR / network can hiccup on fresh VPS boot)
+    PULL_OK=0
+    for attempt in 1 2 3 4 5; do
+      if docker pull "${dockerImage}"; then
+        PULL_OK=1
+        break
+      fi
+      RETRY_DELAY=$((attempt * 10))
+      echo "[cloud-init] Docker pull attempt $attempt failed, retrying in $RETRY_DELAY s..."
+      sleep "$RETRY_DELAY"
+    done
+    if [ "$PULL_OK" = "0" ]; then
+      fail_job "Docker pull failed after 5 attempts: ${dockerImage}"
       exit 1
     fi
 

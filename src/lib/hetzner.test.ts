@@ -62,6 +62,15 @@ describe("Hetzner Service", () => {
       expect(cloudInit).toContain("--env-file");
     });
 
+    it("docker pull is wrapped in a retry loop (5 attempts)", () => {
+      const cloudInit = generateCloudInit(defaultParams);
+
+      expect(cloudInit).toContain("PULL_OK=0");
+      expect(cloudInit).toContain("for attempt in 1 2 3 4 5");
+      expect(cloudInit).toContain("RETRY_DELAY=$((attempt * 10))");
+      expect(cloudInit).toContain('Docker pull failed after 5 attempts');
+    });
+
     it("env file contains only JOB_ID, API_BASE_URL, SERVICE_TOKEN", () => {
       const cloudInit = generateCloudInit(defaultParams);
       const envContent = decodeEnvFromCloudInit(cloudInit);
