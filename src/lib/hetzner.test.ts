@@ -193,14 +193,17 @@ describe("Hetzner Service", () => {
       }
     });
 
-    it("server-type x location loop: outer = type, inner = location", async () => {
+    it("server-type x location loop: outer = location, inner = type (Helsinki-first)", async () => {
       const origToken = process.env.HETZNER_API_TOKEN;
       process.env.HETZNER_API_TOKEN = "test-token";
       const fetchMock = vi.fn();
       const origFetch = globalThis.fetch;
       globalThis.fetch = fetchMock as any;
 
-      // 3 failures (cax11 x [hel1, fsn1, nbg1]), 4th succeeds (cax21 x hel1).
+      // 3 failures exhausting hel1 (cax11, cax21) and first fsn1 attempt
+      // (cax11), 4th succeeds (cax21 x fsn1). Demonstrates that ALL server
+      // types are exhausted in the preferred location before falling over
+      // to the next location.
       const failure = {
         ok: false,
         status: 412,
@@ -212,7 +215,7 @@ describe("Hetzner Service", () => {
       fetchMock.mockResolvedValueOnce({
         ok: true,
         json: async () => ({
-          server: { id: 7, name: "x", status: "initializing", server_type: { name: "cax21" }, datacenter: { location: { name: "hel1" } }, public_net: {}, labels: {}, created: new Date().toISOString() },
+          server: { id: 7, name: "x", status: "initializing", server_type: { name: "cax21" }, datacenter: { location: { name: "fsn1" } }, public_net: {}, labels: {}, created: new Date().toISOString() },
           root_password: null,
         }),
       } as any);
@@ -227,11 +230,11 @@ describe("Hetzner Service", () => {
         expect(fetchMock).toHaveBeenCalledTimes(4);
         expect(result.server.id).toBe(7);
         const bodies = fetchMock.mock.calls.map(([, init]: any) => JSON.parse(init.body));
-        // Outer: cax11 first → all 3 locations tried for cax11 before moving on.
+        // Outer: hel1 first → both server types tried in hel1 before fsn1.
         expect(bodies[0]).toMatchObject({ server_type: "cax11", location: "hel1" });
-        expect(bodies[1]).toMatchObject({ server_type: "cax11", location: "fsn1" });
-        expect(bodies[2]).toMatchObject({ server_type: "cax11", location: "nbg1" });
-        expect(bodies[3]).toMatchObject({ server_type: "cax21", location: "hel1" });
+        expect(bodies[1]).toMatchObject({ server_type: "cax21", location: "hel1" });
+        expect(bodies[2]).toMatchObject({ server_type: "cax11", location: "fsn1" });
+        expect(bodies[3]).toMatchObject({ server_type: "cax21", location: "fsn1" });
       } finally {
         globalThis.fetch = origFetch;
         if (origToken) process.env.HETZNER_API_TOKEN = origToken;

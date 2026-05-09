@@ -165,10 +165,16 @@ export async function createServer(
   const totalCombinations = serverTypeCandidates.length * locationCandidates.length;
   let lastErr: { status: number; message: string; serverType: string; location: string } | null = null;
 
-  // Outer loop: server types (admin-prioritized fallback).
-  // Inner loop: locations (capacity fallback within a chosen type).
-  for (const serverType of serverTypeCandidates) {
-    for (const location of locationCandidates) {
+  // Outer loop: locations (region-prioritized — keep VPS close to S3 bucket).
+  // Inner loop: server types (admin-prioritized fallback within a region).
+  //
+  // Rationale: the S3 bucket lives in HEL1, so a VPS in HEL1 has the lowest
+  // S3 latency. We exhaust ALL admin-listed server types in the preferred
+  // region before falling over to the next region. Reverse order would
+  // silently drift to FSN1/NBG1 (Germany) when the first server type is
+  // briefly unavailable in HEL1, even when other types are available there.
+  for (const location of locationCandidates) {
+    for (const serverType of serverTypeCandidates) {
       const start = Date.now();
       const body = { ...baseBody, server_type: serverType, location };
 
@@ -1033,10 +1039,18 @@ cat > /opt/vpn-watchdog.sh << 'WATCHDOG_EOF'
 set -euo pipefail
 
 # VPN Watchdog — reconnect with backoff (R018), fail after 3 attempts (R019)
+#
+# Hysteresis: a single failed health check is NOT sufficient to trigger a
+# reconnect. We require FAIL_THRESHOLD consecutive failures to debounce
+# transient ipify timeouts, DNS hiccups, and provider micro-outages. Without
+# this, downloads were aborted dozens of times per hour by the watchdog
+# itself even though the tunnel was healthy.
 
 BACKOFF_DELAYS=(5 15 30)
 MAX_RETRIES=3
 CHECK_INTERVAL=10
+FAIL_THRESHOLD=2     # consecutive failures before declaring VPN down
+HEALTH_TIMEOUT=15    # seconds — tolerant of transient slowness
 
 watchdog_fail_job() {
   local msg="\$1"
@@ -1073,13 +1087,22 @@ reconnect_vpn() {
 }
 
 health_check() {
-  # Only check VPN connectivity — API reachability is a separate concern (K111)
-  curl -sf --interface "\$VPN_INTERFACE" --connect-timeout 5 --max-time 10 "https://api.ipify.org" > /dev/null 2>&1
+  # Two-stage probe to keep DNS hiccups from triggering false reconnects:
+  #  1. DNS-dependent HTTPS probe against api.ipify.org (cheap, common path).
+  #  2. DNS-free fallback HEAD request against the 1.1.1.1 IP literal.
+  # Tunnel is only declared "down" when BOTH probes fail — catches the case
+  # where systemd-resolved blips while the actual VPN tunnel is healthy.
+  # 15s max-time per probe tolerates transient slowness on either endpoint.
+  if curl -sf --interface "\$VPN_INTERFACE" --connect-timeout 5 --max-time \$HEALTH_TIMEOUT "https://api.ipify.org" > /dev/null 2>&1; then
+    return 0
+  fi
+  curl -sfI --interface "\$VPN_INTERFACE" --connect-timeout 5 --max-time \$HEALTH_TIMEOUT "http://1.1.1.1" > /dev/null 2>&1
 }
 
-echo "[vpn-watchdog] Started — monitoring \$VPN_INTERFACE every \${CHECK_INTERVAL}s"
+echo "[vpn-watchdog] Started — monitoring \$VPN_INTERFACE every \${CHECK_INTERVAL}s (threshold: \${FAIL_THRESHOLD} consecutive fails)"
 
 SEEN_WORKLOAD=0
+FAIL_STREAK=0
 
 while true; do
   sleep "\$CHECK_INTERVAL"
@@ -1092,11 +1115,21 @@ while true; do
   fi
 
   if health_check; then
+    if [ "\$FAIL_STREAK" -gt 0 ]; then
+      echo "[vpn-watchdog] Health recovered after \${FAIL_STREAK} transient fail(s) — no reconnect needed"
+      FAIL_STREAK=0
+    fi
     continue
   fi
 
-  echo "[vpn-watchdog] Health check failed — starting reconnect sequence"
-  watchdog_report_event "vpn_down" "warning" "{\\"protocol\\":\\"\$VPN_PROTOCOL\\",\\"interface\\":\\"\$VPN_INTERFACE\\"}"
+  FAIL_STREAK=$((FAIL_STREAK + 1))
+  if [ "\$FAIL_STREAK" -lt "\$FAIL_THRESHOLD" ]; then
+    echo "[vpn-watchdog] Transient health-check failure (\${FAIL_STREAK}/\${FAIL_THRESHOLD}) — waiting for confirmation"
+    continue
+  fi
+
+  echo "[vpn-watchdog] Health check failed \${FAIL_STREAK}x consecutively — starting reconnect sequence"
+  watchdog_report_event "vpn_down" "warning" "{\\"protocol\\":\\"\$VPN_PROTOCOL\\",\\"interface\\":\\"\$VPN_INTERFACE\\",\\"failStreak\\":\$FAIL_STREAK}"
 
   RECONNECTED=0
   for attempt in $(seq 0 $((MAX_RETRIES - 1))); do
@@ -1111,6 +1144,7 @@ while true; do
       echo "[vpn-watchdog] Reconnected successfully on attempt $((attempt + 1))"
       watchdog_report_event "vpn_reconnect" "info" "{\\"protocol\\":\\"\$VPN_PROTOCOL\\",\\"interface\\":\\"\$VPN_INTERFACE\\",\\"attempt\\":$((attempt + 1))}"
       RECONNECTED=1
+      FAIL_STREAK=0
       break
     fi
   done
