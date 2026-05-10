@@ -287,7 +287,7 @@ describe("generateBootstrapScript", () => {
     // Hysteresis: a single failed health check must NOT trigger reconnect.
     // We require FAIL_THRESHOLD consecutive failures to debounce transient
     // ipify timeouts and provider micro-outages.
-    expect(script).toContain("FAIL_THRESHOLD=2");
+    expect(script).toContain("FAIL_THRESHOLD=3");
     expect(script).toContain("FAIL_STREAK=0");
     expect(script).toContain('FAIL_STREAK=$((FAIL_STREAK + 1))');
     expect(script).toContain('Transient health-check failure');
@@ -320,25 +320,54 @@ describe("generateBootstrapScript", () => {
     expect(script).toContain('--max-time $HEALTH_TIMEOUT');
   });
 
-  it("watchdog uses dual probes (api.ipify.org + 1.1.1.1) so DNS hiccups don't trigger reconnects", () => {
+  it("watchdog probes tunnel-internal signals before external endpoints (avoids ipify rate-limit storm)", () => {
     const script = generateBootstrapScript({
       ...BASE_PARAMS,
       jobType: "download",
     });
-    // Both probes must be present; the 1.1.1.1 fallback is DNS-free so a
-    // resolver hiccup alone can no longer mark the tunnel as down.
-    expect(script).toContain("api.ipify.org");
-    expect(script).toContain("http://1.1.1.1");
-    // The fallback runs only when the primary probe failed — verify ordering
-    // inside health_check() by scoping to the watchdog block (between the
-    // health_check definition and the next function/loop boundary).
-    const healthFnStart = script.indexOf("health_check()");
-    expect(healthFnStart).toBeGreaterThan(-1);
-    const watchdogBlock = script.slice(healthFnStart, healthFnStart + 1500);
-    const ipifyPos = watchdogBlock.indexOf("api.ipify.org");
-    const fallbackPos = watchdogBlock.indexOf("http://1.1.1.1");
-    expect(ipifyPos).toBeGreaterThan(-1);
-    expect(fallbackPos).toBeGreaterThan(ipifyPos);
+    // Primary probe must be the WireGuard handshake age — a tunnel-internal
+    // signal that produces no external traffic and cannot be rate-limited.
+    // Multiple VPS sharing a single VPN exit IP previously hammered ipify
+    // and triggered false-positive reconnects (see L008/M035 hotfix history).
+    expect(script).toContain("HANDSHAKE_MAX_AGE=180");
+    expect(script).toContain('wg show "$VPN_INTERFACE" latest-handshakes');
+    // Secondary probe is ICMP through the tunnel — also free of HTTPS rate
+    // limits and tolerant of upstream filtering on a shared exit IP.
+    expect(script).toContain('ping -I "$VPN_INTERFACE"');
+    expect(script).toContain("1.1.1.1");
+    expect(script).toContain("9.9.9.9");
+    // Tertiary HTTP HEAD fallback remains for environments where ICMP is
+    // filtered. ipify must NOT be used as a probe inside the watchdog.
+    const watchdogStart = script.indexOf("WATCHDOG_EOF");
+    const watchdogEnd = script.indexOf("WATCHDOG_EOF", watchdogStart + 1);
+    expect(watchdogStart).toBeGreaterThan(-1);
+    expect(watchdogEnd).toBeGreaterThan(watchdogStart);
+    const watchdogBlock = script.slice(watchdogStart, watchdogEnd);
+    // No curl against ipify inside the watchdog (a comment explaining the
+    // historic ipify problem is allowed; an actual probe call is not).
+    expect(watchdogBlock).not.toMatch(/curl[^\n]*api\.ipify\.org/);
+    // Ordering: handshake → icmp → http inside health_check
+    const handshakePos = watchdogBlock.indexOf("latest-handshakes");
+    const pingPos = watchdogBlock.indexOf("ping -I");
+    const httpPos = watchdogBlock.indexOf("http://1.1.1.1");
+    expect(handshakePos).toBeGreaterThan(-1);
+    expect(pingPos).toBeGreaterThan(handshakePos);
+    expect(httpPos).toBeGreaterThan(pingPos);
+  });
+
+  it("watchdog adds jitter so VPS fleets do not probe in lockstep", () => {
+    const script = generateBootstrapScript({
+      ...BASE_PARAMS,
+      jobType: "download",
+    });
+    // A shared VPN exit IP plus synchronous probing turns into a periodic
+    // self-DoS against external endpoints. RANDOM-based jitter spreads the
+    // probe windows across the fleet.
+    const watchdogStart = script.indexOf("WATCHDOG_EOF");
+    const watchdogEnd = script.indexOf("WATCHDOG_EOF", watchdogStart + 1);
+    const watchdogBlock = script.slice(watchdogStart, watchdogEnd);
+    expect(watchdogBlock).toMatch(/JITTER=\$\(\(RANDOM % 5\)\)/);
+    expect(watchdogBlock).toMatch(/sleep \$\(\(CHECK_INTERVAL \+ JITTER\)\)/);
   });
 
   it("watchdog contains WireGuard reconnect commands", () => {

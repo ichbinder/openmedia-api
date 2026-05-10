@@ -1049,8 +1049,9 @@ set -euo pipefail
 BACKOFF_DELAYS=(5 15 30)
 MAX_RETRIES=3
 CHECK_INTERVAL=10
-FAIL_THRESHOLD=2     # consecutive failures before declaring VPN down
+FAIL_THRESHOLD=3     # consecutive failures before declaring VPN down
 HEALTH_TIMEOUT=15    # seconds — tolerant of transient slowness
+HANDSHAKE_MAX_AGE=180  # WireGuard rehandshakes ~every 120s; 180s = stale tunnel
 
 watchdog_fail_job() {
   local msg="\$1"
@@ -1087,16 +1088,49 @@ reconnect_vpn() {
 }
 
 health_check() {
-  # Two-stage probe to keep DNS hiccups from triggering false reconnects:
-  #  1. DNS-dependent HTTPS probe against api.ipify.org (cheap, common path).
-  #  2. DNS-free fallback HEAD request against the 1.1.1.1 IP literal.
-  # Tunnel is only declared "down" when BOTH probes fail — catches the case
-  # where systemd-resolved blips while the actual VPN tunnel is healthy.
-  # 15s max-time per probe tolerates transient slowness on either endpoint.
-  if curl -sf --interface "\$VPN_INTERFACE" --connect-timeout 5 --max-time \$HEALTH_TIMEOUT "https://api.ipify.org" > /dev/null 2>&1; then
+  # Tunnel-first liveness ladder. We deliberately do NOT use api.ipify.org
+  # as a primary probe: when many VPS share a single VPN exit IP, ipify
+  # rate-limits aggressively and yields false negatives. Each stage probes
+  # progressively more expensive paths and is only reached when the cheaper
+  # ones fail. Any single passing stage is sufficient.
+  #
+  # Stage 1 — WireGuard handshake freshness (no traffic generated, no DNS,
+  # no external dependency). WireGuard re-handshakes ~every 120s when the
+  # peer is reachable, so an age below HANDSHAKE_MAX_AGE proves the tunnel
+  # endpoint is alive at the cryptographic layer.
+  if [ "\$VPN_PROTOCOL" = "wireguard" ]; then
+    HS_TS=\$(wg show "\$VPN_INTERFACE" latest-handshakes 2>/dev/null | awk 'NR==1{print \$2}')
+    if [ -n "\$HS_TS" ] && [ "\$HS_TS" != "0" ]; then
+      NOW=\$(date +%s)
+      AGE=\$((NOW - HS_TS))
+      if [ "\$AGE" -lt "\$HANDSHAKE_MAX_AGE" ]; then
+        return 0
+      fi
+      echo "[vpn-watchdog] handshake stale (age=\${AGE}s, max=\${HANDSHAKE_MAX_AGE}s)"
+    else
+      echo "[vpn-watchdog] no handshake timestamp available"
+    fi
+  fi
+
+  # Stage 2 — ICMP echo through the tunnel against well-known anycast IPs.
+  # Pinning the source interface ensures we measure tunnel liveness, not the
+  # underlying egress link. ICMP is not rate-limited the way HTTPS APIs are
+  # and does not stress shared exit IPs.
+  if ping -I "\$VPN_INTERFACE" -c 1 -W 3 -n 1.1.1.1 > /dev/null 2>&1; then
     return 0
   fi
-  curl -sfI --interface "\$VPN_INTERFACE" --connect-timeout 5 --max-time \$HEALTH_TIMEOUT "http://1.1.1.1" > /dev/null 2>&1
+  if ping -I "\$VPN_INTERFACE" -c 1 -W 3 -n 9.9.9.9 > /dev/null 2>&1; then
+    return 0
+  fi
+
+  # Stage 3 — HTTP HEAD fallback in case the upstream filters ICMP. We hit
+  # 1.1.1.1 directly (no DNS) so a resolver hiccup alone cannot fail this.
+  HTTP_RC=\$(curl -sI --interface "\$VPN_INTERFACE" --connect-timeout 5 --max-time \$HEALTH_TIMEOUT -o /dev/null -w '%{http_code}' "http://1.1.1.1" 2>/dev/null || echo "000")
+  if [ "\$HTTP_RC" != "000" ]; then
+    return 0
+  fi
+  echo "[vpn-watchdog] all probes failed (handshake/icmp/http=\$HTTP_RC)"
+  return 1
 }
 
 echo "[vpn-watchdog] Started — monitoring \$VPN_INTERFACE every \${CHECK_INTERVAL}s (threshold: \${FAIL_THRESHOLD} consecutive fails)"
@@ -1105,7 +1139,11 @@ SEEN_WORKLOAD=0
 FAIL_STREAK=0
 
 while true; do
-  sleep "\$CHECK_INTERVAL"
+  # Jitter (0-4s) so a fleet of VPS sharing a VPN exit IP does not probe
+  # external endpoints in lockstep — desynchronization avoids self-induced
+  # rate-limit windows on shared upstreams.
+  JITTER=\$((RANDOM % 5))
+  sleep \$((CHECK_INTERVAL + JITTER))
 
   if docker ps --format '{{.Names}}' 2>/dev/null | grep -q .; then
     SEEN_WORKLOAD=1
