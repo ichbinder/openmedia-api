@@ -5,8 +5,10 @@ import request from "supertest";
 // but vi.mock hoists so the dynamic import resolves to the mock.
 vi.mock("../lib/s3.js", () => ({
   isS3Configured: vi.fn(() => true),
-  generatePresignedUrl: vi.fn(async (key: string, ttl?: number) =>
-    `https://s3.example/${key}?expires=${ttl ?? 0}`),
+  generatePresignedUrl: vi.fn(
+    async (key: string, ttl?: number, opts?: { bucket?: string; responseContentType?: string }) =>
+      `https://s3.example/${opts?.bucket ?? "default"}/${key}?expires=${ttl ?? 0}`,
+  ),
   getFileMetadata: vi.fn(async (key: string) => ({
     key,
     size: 1234,
@@ -77,7 +79,8 @@ async function createMovieAndNzb(opts: {
 beforeEach(() => {
   vi.mocked(s3Mock.isS3Configured).mockReturnValue(true);
   vi.mocked(s3Mock.generatePresignedUrl).mockImplementation(
-    async (key: string, ttl?: number) => `https://s3.example/${key}?expires=${ttl ?? 0}`,
+    async (key: string, ttl?: number, opts?: { bucket?: string; responseContentType?: string }) =>
+      `https://s3.example/${opts?.bucket ?? "default"}/${key}?expires=${ttl ?? 0}`,
   );
   vi.mocked(s3Mock.getFileMetadata).mockImplementation(async (key: string) => ({
     key,
@@ -228,7 +231,7 @@ describe("Jellyfin Routes", () => {
       expect(res.status).toBe(422);
     });
 
-    it("liefert frische Presigned-URL mit mime=video/x-matroska bei MKV-Original", async () => {
+    it("302 redirect zur Presigned-URL bei MKV-Original (mime=video/x-matroska)", async () => {
       const { user, token } = await createUserAndToken();
       const { nzbFile } = await createMovieAndNzb({
         s3Key: "mkv/mkv.mkv",
@@ -238,17 +241,22 @@ describe("Jellyfin Routes", () => {
 
       const res = await request(app)
         .get(`/jellyfin/stream/${nzbFile.hash}`)
-        .set("Authorization", `Bearer ${token}`);
+        .set("Authorization", `Bearer ${token}`)
+        .redirects(0);
 
-      expect(res.status).toBe(200);
-      expect(res.body.url).toMatch(/^https:\/\/s3\.example\/mkv\/mkv\.mkv/);
-      expect(res.body.mimeType).toBe("video/x-matroska");
-      expect(res.body.expiresAt).toBeTypeOf("string");
-      // 1h TTL → expiresAt is in the future
-      expect(new Date(res.body.expiresAt).getTime()).toBeGreaterThan(Date.now());
+      expect(res.status).toBe(302);
+      expect(res.headers.location).toMatch(/^https:\/\/s3\.example\/openmedia-files\/mkv\/mkv\.mkv/);
+      expect(res.headers["cache-control"]).toBe("no-store");
+      // generatePresignedUrl wurde mit dem Persisted-Bucket und MIME aufgerufen
+      const lastCall = vi.mocked(s3Mock.generatePresignedUrl).mock.calls.at(-1);
+      expect(lastCall?.[0]).toBe("mkv/mkv.mkv");
+      expect(lastCall?.[2]).toMatchObject({
+        bucket: "openmedia-files",
+        responseContentType: "video/x-matroska",
+      });
     });
 
-    it("bevorzugt s3StreamKey über s3Key und meldet mime=video/mp4", async () => {
+    it("bevorzugt s3StreamKey über s3Key und nutzt mime=video/mp4", async () => {
       const { user, token } = await createUserAndToken();
       const { nzbFile } = await createMovieAndNzb({
         s3Key: "orig/orig.mkv",
@@ -259,12 +267,14 @@ describe("Jellyfin Routes", () => {
 
       const res = await request(app)
         .get(`/jellyfin/stream/${nzbFile.hash}`)
-        .set("Authorization", `Bearer ${token}`);
+        .set("Authorization", `Bearer ${token}`)
+        .redirects(0);
 
-      expect(res.status).toBe(200);
-      expect(res.body.url).toMatch(/^https:\/\/s3\.example\/stream\/stream\.mp4/);
-      expect(res.body.mimeType).toBe("video/mp4");
+      expect(res.status).toBe(302);
+      expect(res.headers.location).toMatch(/^https:\/\/s3\.example\/openmedia-files\/stream\/stream\.mp4/);
       expect(vi.mocked(s3Mock.getFileMetadata).mock.calls.at(-1)?.[0]).toBe("stream/stream.mp4");
+      const lastCall = vi.mocked(s3Mock.generatePresignedUrl).mock.calls.at(-1);
+      expect(lastCall?.[2]?.responseContentType).toBe("video/mp4");
     });
 
     it("FILE_GONE: S3 404 resettet DB und antwortet mit 410", async () => {

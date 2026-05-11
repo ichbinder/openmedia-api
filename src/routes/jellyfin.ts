@@ -71,16 +71,19 @@ router.get("/library", async (req: AuthRequest, res: Response) => {
   }
 });
 
-// GET /jellyfin/stream/:hash — fresh presigned URL for one library item.
+// GET /jellyfin/stream/:hash — 302 redirect to a fresh S3 presigned URL.
 //
-// The plugin's IMediaSourceProvider calls this just before play. We:
+// Architecture decision: STRM → API → 302 → S3-Presigned (D-jellyfin-strm-302).
+// The plugin/Swiftfin follows the redirect and Direct-Plays from S3.
+//
+// We:
 //   1. Resolve NzbFile by hash
 //   2. Confirm the caller has this hash in their active library (otherwise 404 —
 //      never leak whether the hash exists for other users)
 //   3. Pick s3StreamKey if present (browser-friendly MP4 stereo), else s3Key
 //   4. HEAD-check S3 (FILE_GONE pattern — reset DB on 404, 502 on transient)
 //   5. Bump lastAccessedAt (LRU tracking) fire-and-forget
-//   6. Return fresh 1h presigned URL + ISO expiresAt + mimeType
+//   6. 302 Redirect to fresh 1h presigned URL (Cache-Control: no-store)
 router.get("/stream/:hash", async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.user!.userId;
@@ -165,15 +168,21 @@ router.get("/stream/:hash", async (req: AuthRequest, res: Response) => {
       .update({ where: { id: nzbFile.id }, data: { lastAccessedAt: new Date() } })
       .catch((err) => console.error(`[jellyfin] lastAccessedAt update failed: ${err?.message || err}`));
 
-    const url = await generatePresignedUrl(streamKey, STREAM_URL_TTL_SECONDS);
-    const expiresAt = new Date(Date.now() + STREAM_URL_TTL_SECONDS * 1000).toISOString();
     const mimeType = mimeTypeFor({
       hasStreamKey: !!nzbFile.s3StreamKey,
       fileExtension: nzbFile.fileExtension,
     });
+    const url = await generatePresignedUrl(streamKey, STREAM_URL_TTL_SECONDS, {
+      bucket: nzbFile.s3Bucket || undefined,
+      responseContentType: mimeType,
+    });
 
-    console.log(`[jellyfin] stream: user=${userId.slice(0, 8)}... hash=${hash.slice(0, 12)}... mime=${mimeType}`);
-    res.json({ url, expiresAt, mimeType });
+    console.log(`[jellyfin] stream: user=${userId.slice(0, 8)}... hash=${hash.slice(0, 12)}... mime=${mimeType} → 302`);
+
+    // 302 redirect — clients (Swiftfin/Jellyfin plugin) follow to S3 for Direct-Play.
+    // no-store: each play resolves a fresh URL so TTL stays honest.
+    res.setHeader("Cache-Control", "no-store");
+    res.redirect(302, url);
   } catch (err) {
     console.error("[jellyfin] stream error:", err);
     res.status(500).json({ error: "Fehler beim Erzeugen des Stream-Links." });

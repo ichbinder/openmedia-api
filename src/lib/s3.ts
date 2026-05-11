@@ -196,22 +196,24 @@ export async function deleteFile(key: string): Promise<void> {
  *
  * @param key        S3 object key
  * @param expiresIn  Expiry in seconds (default 7 days, max 7 days)
+ * @param opts       Optional bucket override and responseContentType
  * @returns          Presigned URL string
  */
 export async function generatePresignedUrl(
   key: string,
   expiresIn: number = MAX_PRESIGNED_EXPIRY_SECONDS,
-  responseContentType?: string,
+  opts?: { bucket?: string; responseContentType?: string },
 ): Promise<string> {
   const effectiveExpiry = Math.min(expiresIn, MAX_PRESIGNED_EXPIRY_SECONDS);
+  const bucket = opts?.bucket || getBucket();
 
   const commandInput: { Bucket: string; Key: string; ResponseContentType?: string } = {
-    Bucket: getBucket(),
+    Bucket: bucket,
     Key: key,
   };
 
-  if (responseContentType) {
-    commandInput.ResponseContentType = responseContentType;
+  if (opts?.responseContentType) {
+    commandInput.ResponseContentType = opts.responseContentType;
   }
 
   const url = await getSignedUrl(
@@ -220,7 +222,7 @@ export async function generatePresignedUrl(
     { expiresIn: effectiveExpiry },
   );
 
-  console.log(`[s3] Presigned URL: ${key} (expires in ${effectiveExpiry}s)`);
+  console.log(`[s3] Presigned URL: ${key} from ${bucket} (expires in ${effectiveExpiry}s)`);
   return url;
 }
 
