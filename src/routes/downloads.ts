@@ -1337,7 +1337,9 @@ router.get("/jobs/:id/link", requireAuth, async (req: AuthRequest, res: Response
     }
 
     const cappedExpires = Math.min(expiresIn, MAX_PRESIGNED_EXPIRY_SECONDS);
-    const url = await generatePresignedUrl(job.nzbFile.s3Key, cappedExpires);
+    const url = await generatePresignedUrl(job.nzbFile.s3Key, cappedExpires, {
+      bucket: job.nzbFile.s3Bucket || undefined,
+    });
     const expiresAt = new Date(Date.now() + cappedExpires * 1000).toISOString();
 
     console.log(`[download-job] Link generated: job ${job.id} → ${job.nzbFile.hash.slice(0, 12)}... (expires: ${expiresParam})`);

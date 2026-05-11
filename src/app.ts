@@ -11,6 +11,7 @@ import configRoutes from "./routes/config.js";
 import adminConfigRoutes from "./routes/admin-config.js";
 import serviceApiRoutes from "./routes/service-api.js";
 import libraryRoutes from "./routes/library.js";
+import jellyfinRoutes from "./routes/jellyfin.js";
 import searchHistoryRoutes from "./routes/search-history.js";
 import testRoutes from "./routes/test.js";
 import { errorHandler } from "./middleware/error-handler.js";
@@ -37,6 +38,7 @@ export function createApp() {
   app.use("/admin/config", adminConfigRoutes);
   app.use("/service", serviceApiRoutes);
   app.use("/library", libraryRoutes);
+  app.use("/jellyfin", jellyfinRoutes);
   app.use("/search-history", searchHistoryRoutes);
 
   // Test-only routes are mounted ONLY when NODE_ENV === "test". This keeps
