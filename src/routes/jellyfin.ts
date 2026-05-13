@@ -1,8 +1,59 @@
-import { Router, type Response } from "express";
+import { Router, type Request, type Response, type NextFunction } from "express";
 import { requireAuth, type AuthRequest } from "../middleware/auth.js";
 import prisma from "../lib/prisma.js";
 
 const router = Router();
+
+// Token-via-query fallback for /stream/:hash only.
+//
+// STRM files (which Jellyfin/Swiftfin opens as plain URLs) cannot send custom
+// Authorization headers, so we accept ?token=<JWT|om_apiToken> as a fallback.
+// We promote the query token into the Authorization header and *delete* the
+// query param so downstream logging and error rendering can never reflect it.
+//
+// Scope-limited to /stream/:hash on purpose — /library has no STRM use case
+// and a smaller token-leak surface is better.
+export const STREAM_PATH_RE = /^\/stream\/[^/]+\/?$/;
+export const MIN_TOKEN_LEN = 20; // shortest plausible JWT or om_-token
+export const MAX_TOKEN_LEN = 4096; // generous JWT upper bound; protects logs/headers
+
+// Exported for direct unit testing — the named export ensures regression tests
+// can assert token redaction independently of the surrounding route.
+export function streamTokenFallback(req: Request, _res: Response, next: NextFunction): void {
+  if (!STREAM_PATH_RE.test(req.path)) return next();
+
+  const raw = req.query.token;
+
+  // ALWAYS strip the token from req.query AND req.url FIRST — before any early
+  // return AND regardless of whether `raw` is a string, an array (multi-value
+  // query like `?token=a&token=b`), or some other shape. Otherwise a request
+  // that already has an Authorization header, a multi-value token, or a token
+  // outside the acceptable length range would leave `token=<value>` in req.url
+  // where downstream access loggers and error handlers can see it.
+  delete (req.query as Record<string, unknown>).token;
+  if (req.url.includes("token=")) {
+    const [pathPart, queryPart] = req.url.split("?", 2);
+    if (queryPart) {
+      const params = new URLSearchParams(queryPart);
+      params.delete("token");
+      const filtered = params.toString();
+      req.url = filtered ? `${pathPart}?${filtered}` : pathPart;
+    }
+  }
+
+  if (req.headers.authorization) return next();
+  if (typeof raw !== "string") return next();
+  if (raw.length < MIN_TOKEN_LEN || raw.length > MAX_TOKEN_LEN) return next();
+
+  req.headers.authorization = `Bearer ${raw}`;
+
+  // Mark how this request was authenticated for the stream-handler log line.
+  (req as AuthRequest & { authSource?: "query" | "header" }).authSource = "query";
+  next();
+}
+
+router.use(streamTokenFallback);
+
 router.use(requireAuth);
 
 // Presigned-URL TTL for Jellyfin stream requests. Short on purpose — the plugin
@@ -177,7 +228,10 @@ router.get("/stream/:hash", async (req: AuthRequest, res: Response) => {
       responseContentType: mimeType,
     });
 
-    console.log(`[jellyfin] stream: user=${userId.slice(0, 8)}... hash=${hash.slice(0, 12)}... mime=${mimeType} → 302`);
+    const authSource = (req as AuthRequest & { authSource?: "query" | "header" }).authSource || "header";
+    console.log(
+      `[jellyfin] stream: user=${userId.slice(0, 8)}... hash=${hash.slice(0, 12)}... mime=${mimeType} auth=${authSource} → 302`,
+    );
 
     // 302 redirect — clients (Swiftfin/Jellyfin plugin) follow to S3 for Direct-Play.
     // no-store: each play resolves a fresh URL so TTL stays honest.

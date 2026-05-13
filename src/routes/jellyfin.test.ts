@@ -308,6 +308,174 @@ describe("Jellyfin Routes", () => {
       expect(refreshed?.downloadedAt).toBeNull();
     });
 
+    describe("?token Query-Fallback (M040/S01)", () => {
+      it("akzeptiert ?token=<jwt> ohne Authorization-Header (302)", async () => {
+        const { user, token } = await createUserAndToken();
+        const { nzbFile } = await createMovieAndNzb({
+          s3Key: "qt/qt.mkv",
+          fileExtension: ".mkv",
+        });
+        await prisma.userLibrary.create({ data: { userId: user.id, nzbFileId: nzbFile.id } });
+
+        const res = await request(app)
+          .get(`/jellyfin/stream/${nzbFile.hash}`)
+          .query({ token })
+          .redirects(0);
+
+        expect(res.status).toBe(302);
+        expect(res.headers.location).toMatch(/^https:\/\/s3\.example\/openmedia-files\/qt\/qt\.mkv/);
+      });
+
+      it("lehnt malformed ?token mit 401 ab — Token-Wert taucht NICHT in der Response auf", async () => {
+        const { nzbFile } = await createMovieAndNzb({ s3Key: "mf/mf.mkv" });
+        const badToken = "this-is-not-a-valid-jwt-but-long-enough-12345";
+
+        const res = await request(app)
+          .get(`/jellyfin/stream/${nzbFile.hash}`)
+          .query({ token: badToken })
+          .redirects(0);
+
+        expect(res.status).toBe(401);
+        expect(JSON.stringify(res.body)).not.toContain(badToken);
+      });
+
+      it("lehnt zu kurze ?token mit 401 ab (laenge < MIN_TOKEN_LEN)", async () => {
+        const { nzbFile } = await createMovieAndNzb({ s3Key: "sh/sh.mkv" });
+        const res = await request(app)
+          .get(`/jellyfin/stream/${nzbFile.hash}`)
+          .query({ token: "kurz" })
+          .redirects(0);
+
+        expect(res.status).toBe(401);
+      });
+
+      it("Header gewinnt ueber ?token wenn beide gesetzt sind (gueltiger Header → 302)", async () => {
+        const { user, token } = await createUserAndToken();
+        const { nzbFile } = await createMovieAndNzb({
+          s3Key: "both/both.mkv",
+          fileExtension: ".mkv",
+        });
+        await prisma.userLibrary.create({ data: { userId: user.id, nzbFileId: nzbFile.id } });
+
+        const res = await request(app)
+          .get(`/jellyfin/stream/${nzbFile.hash}`)
+          .query({ token: "invalid-query-token-value-12345" })
+          .set("Authorization", `Bearer ${token}`)
+          .redirects(0);
+
+        expect(res.status).toBe(302);
+      });
+
+      it("/jellyfin/library akzeptiert KEIN ?token-Fallback → 401", async () => {
+        const { token } = await createUserAndToken();
+        const res = await request(app).get("/jellyfin/library").query({ token });
+        expect(res.status).toBe(401);
+      });
+
+      it("strippt ?token aus req.query und req.url AUCH wenn Authorization-Header gewinnt", async () => {
+        const { streamTokenFallback } = await import("../routes/jellyfin.js");
+        const leaky = "leaky-token-value-that-must-not-survive-1234567890";
+        const req = {
+          path: "/stream/abc123",
+          url: `/stream/abc123?token=${leaky}&foo=bar`,
+          query: { token: leaky, foo: "bar" } as Record<string, unknown>,
+          headers: { authorization: "Bearer some-other-header-token" },
+        };
+        const next = vi.fn();
+        streamTokenFallback(req as never, {} as never, next as never);
+        expect(next).toHaveBeenCalledOnce();
+        expect(req.query.token).toBeUndefined();
+        expect(req.url).not.toContain("token=");
+        expect(req.url).not.toContain(leaky);
+        // Foo-Param bleibt erhalten
+        expect(req.url).toContain("foo=bar");
+        // Header bleibt unangetastet
+        expect(req.headers.authorization).toBe("Bearer some-other-header-token");
+      });
+
+      it("strippt ?token aus req.query und req.url bei MULTI-VALUE Query (?token=a&token=b)", async () => {
+        const { streamTokenFallback } = await import("../routes/jellyfin.js");
+        const t1 = "first-leaky-token-that-must-not-survive-aaa";
+        const t2 = "second-leaky-token-that-must-not-survive-bbb";
+        // Express parsed multi-value: req.query.token wird zu Array
+        const req = {
+          path: "/stream/multi",
+          url: `/stream/multi?token=${t1}&token=${t2}&foo=bar`,
+          query: { token: [t1, t2], foo: "bar" } as Record<string, unknown>,
+          headers: {} as Record<string, string>,
+        };
+        const next = vi.fn();
+        streamTokenFallback(req as never, {} as never, next as never);
+        expect(next).toHaveBeenCalledOnce();
+        expect(req.query.token).toBeUndefined();
+        expect(req.url).not.toContain("token=");
+        expect(req.url).not.toContain(t1);
+        expect(req.url).not.toContain(t2);
+        // foo bleibt erhalten
+        expect(req.url).toContain("foo=bar");
+        // Kein Promote — Array ist kein String
+        expect(req.headers.authorization).toBeUndefined();
+      });
+
+      it("strippt ?token aus req.query und req.url AUCH bei zu kurzem/zu langem Token", async () => {
+        const { streamTokenFallback } = await import("../routes/jellyfin.js");
+        // Zu kurz: < MIN_TOKEN_LEN (20)
+        const shortTok = "abc";
+        const reqShort = {
+          path: "/stream/hash1",
+          url: `/stream/hash1?token=${shortTok}`,
+          query: { token: shortTok } as Record<string, unknown>,
+          headers: {} as Record<string, string>,
+        };
+        const next1 = vi.fn();
+        streamTokenFallback(reqShort as never, {} as never, next1 as never);
+        expect(next1).toHaveBeenCalledOnce();
+        expect(reqShort.query.token).toBeUndefined();
+        expect(reqShort.url).not.toContain("token=");
+        expect(reqShort.headers.authorization).toBeUndefined();
+
+        // Zu lang: > MAX_TOKEN_LEN (4096)
+        const longTok = "z".repeat(5000);
+        const reqLong = {
+          path: "/stream/hash2",
+          url: `/stream/hash2?token=${longTok}`,
+          query: { token: longTok } as Record<string, unknown>,
+          headers: {} as Record<string, string>,
+        };
+        const next2 = vi.fn();
+        streamTokenFallback(reqLong as never, {} as never, next2 as never);
+        expect(next2).toHaveBeenCalledOnce();
+        expect(reqLong.query.token).toBeUndefined();
+        expect(reqLong.url).not.toContain("token=");
+        expect(reqLong.url).not.toContain(longTok);
+        expect(reqLong.headers.authorization).toBeUndefined();
+      });
+
+      it("loggt den Token-Wert nicht (console.log enthaelt das Token nirgendwo)", async () => {
+        const { user, token } = await createUserAndToken();
+        const { nzbFile } = await createMovieAndNzb({
+          s3Key: "log/log.mkv",
+          fileExtension: ".mkv",
+        });
+        await prisma.userLibrary.create({ data: { userId: user.id, nzbFileId: nzbFile.id } });
+
+        const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+        try {
+          const res = await request(app)
+            .get(`/jellyfin/stream/${nzbFile.hash}`)
+            .query({ token })
+            .redirects(0);
+          expect(res.status).toBe(302);
+          for (const call of logSpy.mock.calls) {
+            const line = call.map(String).join(" ");
+            expect(line).not.toContain(token);
+          }
+        } finally {
+          logSpy.mockRestore();
+        }
+      });
+    });
+
     it("502 bei transienten S3-Fehlern, ohne DB-Reset", async () => {
       const { user, token } = await createUserAndToken();
       const { nzbFile } = await createMovieAndNzb({
