@@ -25,20 +25,19 @@ export function streamTokenFallback(req: Request, _res: Response, next: NextFunc
   const raw = req.query.token;
 
   // ALWAYS strip the token from req.query AND req.url FIRST — before any early
-  // return. Otherwise a request that already has an Authorization header, or a
-  // token outside the acceptable length range, would leave `token=<value>` in
-  // req.url where downstream access loggers and error handlers can see it.
-  if (typeof raw === "string") {
-    delete (req.query as Record<string, unknown>).token;
-    if (req.url.includes("token=")) {
-      const [pathPart, queryPart] = req.url.split("?", 2);
-      if (queryPart) {
-        const filtered = queryPart
-          .split("&")
-          .filter((p) => !p.startsWith("token="))
-          .join("&");
-        req.url = filtered ? `${pathPart}?${filtered}` : pathPart;
-      }
+  // return AND regardless of whether `raw` is a string, an array (multi-value
+  // query like `?token=a&token=b`), or some other shape. Otherwise a request
+  // that already has an Authorization header, a multi-value token, or a token
+  // outside the acceptable length range would leave `token=<value>` in req.url
+  // where downstream access loggers and error handlers can see it.
+  delete (req.query as Record<string, unknown>).token;
+  if (req.url.includes("token=")) {
+    const [pathPart, queryPart] = req.url.split("?", 2);
+    if (queryPart) {
+      const params = new URLSearchParams(queryPart);
+      params.delete("token");
+      const filtered = params.toString();
+      req.url = filtered ? `${pathPart}?${filtered}` : pathPart;
     }
   }
 

@@ -393,6 +393,30 @@ describe("Jellyfin Routes", () => {
         expect(req.headers.authorization).toBe("Bearer some-other-header-token");
       });
 
+      it("strippt ?token aus req.query und req.url bei MULTI-VALUE Query (?token=a&token=b)", async () => {
+        const { streamTokenFallback } = await import("../routes/jellyfin.js");
+        const t1 = "first-leaky-token-that-must-not-survive-aaa";
+        const t2 = "second-leaky-token-that-must-not-survive-bbb";
+        // Express parsed multi-value: req.query.token wird zu Array
+        const req = {
+          path: "/stream/multi",
+          url: `/stream/multi?token=${t1}&token=${t2}&foo=bar`,
+          query: { token: [t1, t2], foo: "bar" } as Record<string, unknown>,
+          headers: {} as Record<string, string>,
+        };
+        const next = vi.fn();
+        streamTokenFallback(req as never, {} as never, next as never);
+        expect(next).toHaveBeenCalledOnce();
+        expect(req.query.token).toBeUndefined();
+        expect(req.url).not.toContain("token=");
+        expect(req.url).not.toContain(t1);
+        expect(req.url).not.toContain(t2);
+        // foo bleibt erhalten
+        expect(req.url).toContain("foo=bar");
+        // Kein Promote — Array ist kein String
+        expect(req.headers.authorization).toBeUndefined();
+      });
+
       it("strippt ?token aus req.query und req.url AUCH bei zu kurzem/zu langem Token", async () => {
         const { streamTokenFallback } = await import("../routes/jellyfin.js");
         // Zu kurz: < MIN_TOKEN_LEN (20)
