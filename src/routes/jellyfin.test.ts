@@ -372,6 +372,61 @@ describe("Jellyfin Routes", () => {
         expect(res.status).toBe(401);
       });
 
+      it("strippt ?token aus req.query und req.url AUCH wenn Authorization-Header gewinnt", async () => {
+        const { streamTokenFallback } = await import("../routes/jellyfin.js");
+        const leaky = "leaky-token-value-that-must-not-survive-1234567890";
+        const req = {
+          path: "/stream/abc123",
+          url: `/stream/abc123?token=${leaky}&foo=bar`,
+          query: { token: leaky, foo: "bar" } as Record<string, unknown>,
+          headers: { authorization: "Bearer some-other-header-token" },
+        };
+        const next = vi.fn();
+        streamTokenFallback(req as never, {} as never, next as never);
+        expect(next).toHaveBeenCalledOnce();
+        expect(req.query.token).toBeUndefined();
+        expect(req.url).not.toContain("token=");
+        expect(req.url).not.toContain(leaky);
+        // Foo-Param bleibt erhalten
+        expect(req.url).toContain("foo=bar");
+        // Header bleibt unangetastet
+        expect(req.headers.authorization).toBe("Bearer some-other-header-token");
+      });
+
+      it("strippt ?token aus req.query und req.url AUCH bei zu kurzem/zu langem Token", async () => {
+        const { streamTokenFallback } = await import("../routes/jellyfin.js");
+        // Zu kurz: < MIN_TOKEN_LEN (20)
+        const shortTok = "abc";
+        const reqShort = {
+          path: "/stream/hash1",
+          url: `/stream/hash1?token=${shortTok}`,
+          query: { token: shortTok } as Record<string, unknown>,
+          headers: {} as Record<string, string>,
+        };
+        const next1 = vi.fn();
+        streamTokenFallback(reqShort as never, {} as never, next1 as never);
+        expect(next1).toHaveBeenCalledOnce();
+        expect(reqShort.query.token).toBeUndefined();
+        expect(reqShort.url).not.toContain("token=");
+        expect(reqShort.headers.authorization).toBeUndefined();
+
+        // Zu lang: > MAX_TOKEN_LEN (4096)
+        const longTok = "z".repeat(5000);
+        const reqLong = {
+          path: "/stream/hash2",
+          url: `/stream/hash2?token=${longTok}`,
+          query: { token: longTok } as Record<string, unknown>,
+          headers: {} as Record<string, string>,
+        };
+        const next2 = vi.fn();
+        streamTokenFallback(reqLong as never, {} as never, next2 as never);
+        expect(next2).toHaveBeenCalledOnce();
+        expect(reqLong.query.token).toBeUndefined();
+        expect(reqLong.url).not.toContain("token=");
+        expect(reqLong.url).not.toContain(longTok);
+        expect(reqLong.headers.authorization).toBeUndefined();
+      });
+
       it("loggt den Token-Wert nicht (console.log enthaelt das Token nirgendwo)", async () => {
         const { user, token } = await createUserAndToken();
         const { nzbFile } = await createMovieAndNzb({
