@@ -308,6 +308,95 @@ describe("Jellyfin Routes", () => {
       expect(refreshed?.downloadedAt).toBeNull();
     });
 
+    describe("?token Query-Fallback (M040/S01)", () => {
+      it("akzeptiert ?token=<jwt> ohne Authorization-Header (302)", async () => {
+        const { user, token } = await createUserAndToken();
+        const { nzbFile } = await createMovieAndNzb({
+          s3Key: "qt/qt.mkv",
+          fileExtension: ".mkv",
+        });
+        await prisma.userLibrary.create({ data: { userId: user.id, nzbFileId: nzbFile.id } });
+
+        const res = await request(app)
+          .get(`/jellyfin/stream/${nzbFile.hash}`)
+          .query({ token })
+          .redirects(0);
+
+        expect(res.status).toBe(302);
+        expect(res.headers.location).toMatch(/^https:\/\/s3\.example\/openmedia-files\/qt\/qt\.mkv/);
+      });
+
+      it("lehnt malformed ?token mit 401 ab — Token-Wert taucht NICHT in der Response auf", async () => {
+        const { nzbFile } = await createMovieAndNzb({ s3Key: "mf/mf.mkv" });
+        const badToken = "this-is-not-a-valid-jwt-but-long-enough-12345";
+
+        const res = await request(app)
+          .get(`/jellyfin/stream/${nzbFile.hash}`)
+          .query({ token: badToken })
+          .redirects(0);
+
+        expect(res.status).toBe(401);
+        expect(JSON.stringify(res.body)).not.toContain(badToken);
+      });
+
+      it("lehnt zu kurze ?token mit 401 ab (laenge < MIN_TOKEN_LEN)", async () => {
+        const { nzbFile } = await createMovieAndNzb({ s3Key: "sh/sh.mkv" });
+        const res = await request(app)
+          .get(`/jellyfin/stream/${nzbFile.hash}`)
+          .query({ token: "kurz" })
+          .redirects(0);
+
+        expect(res.status).toBe(401);
+      });
+
+      it("Header gewinnt ueber ?token wenn beide gesetzt sind (gueltiger Header → 302)", async () => {
+        const { user, token } = await createUserAndToken();
+        const { nzbFile } = await createMovieAndNzb({
+          s3Key: "both/both.mkv",
+          fileExtension: ".mkv",
+        });
+        await prisma.userLibrary.create({ data: { userId: user.id, nzbFileId: nzbFile.id } });
+
+        const res = await request(app)
+          .get(`/jellyfin/stream/${nzbFile.hash}`)
+          .query({ token: "invalid-query-token-value-12345" })
+          .set("Authorization", `Bearer ${token}`)
+          .redirects(0);
+
+        expect(res.status).toBe(302);
+      });
+
+      it("/jellyfin/library akzeptiert KEIN ?token-Fallback → 401", async () => {
+        const { token } = await createUserAndToken();
+        const res = await request(app).get("/jellyfin/library").query({ token });
+        expect(res.status).toBe(401);
+      });
+
+      it("loggt den Token-Wert nicht (console.log enthaelt das Token nirgendwo)", async () => {
+        const { user, token } = await createUserAndToken();
+        const { nzbFile } = await createMovieAndNzb({
+          s3Key: "log/log.mkv",
+          fileExtension: ".mkv",
+        });
+        await prisma.userLibrary.create({ data: { userId: user.id, nzbFileId: nzbFile.id } });
+
+        const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+        try {
+          const res = await request(app)
+            .get(`/jellyfin/stream/${nzbFile.hash}`)
+            .query({ token })
+            .redirects(0);
+          expect(res.status).toBe(302);
+          for (const call of logSpy.mock.calls) {
+            const line = call.map(String).join(" ");
+            expect(line).not.toContain(token);
+          }
+        } finally {
+          logSpy.mockRestore();
+        }
+      });
+    });
+
     it("502 bei transienten S3-Fehlern, ohne DB-Reset", async () => {
       const { user, token } = await createUserAndToken();
       const { nzbFile } = await createMovieAndNzb({
