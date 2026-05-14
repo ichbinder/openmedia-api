@@ -1,4 +1,5 @@
 import { Router, type Request, type Response, type NextFunction } from "express";
+import { createHash } from "node:crypto";
 import { requireAuth, type AuthRequest } from "../middleware/auth.js";
 import prisma from "../lib/prisma.js";
 
@@ -67,6 +68,47 @@ function mimeTypeFor(opts: { hasStreamKey: boolean; fileExtension: string | null
   if (ext === ".mkv" || ext === "mkv") return "video/x-matroska";
   return "application/octet-stream";
 }
+
+// GET /jellyfin/library/version — lightweight change-detection endpoint.
+//
+// Returns a stable ETag derived from (hash, s3-presence) of all UserLibrary
+// rows for the caller. The Jellyfin plugin polls this every ~15s and only
+// triggers a full /library fetch + sync when the ETag changes.
+//
+// Cheap on purpose: only `hash` + `s3Key` are selected, sorted in-DB by hash
+// for stable input order, then sha256-hashed in-process. No JSON serialization
+// of full items, no joins beyond what's strictly needed.
+//
+// Cache-Control: no-store — the plugin must always see the freshest value.
+router.get("/library/version", async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+
+    const rows = await prisma.userLibrary.findMany({
+      where: {
+        userId,
+        removedAt: null,
+        nzbFile: { s3Key: { not: null } },
+      },
+      select: {
+        nzbFile: { select: { hash: true, s3Key: true } },
+      },
+      orderBy: { nzbFile: { hash: "asc" } },
+    });
+
+    // Filter mirrors /library (s3Key presence already enforced via where).
+    // s3-flag included so a re-download (s3Key going null → set) flips ETag
+    // even when the hash set is unchanged.
+    const fingerprint = rows.map((r) => `${r.nzbFile.hash}:${r.nzbFile.s3Key ? 1 : 0}`).join("\n");
+    const etag = createHash("sha256").update(fingerprint).digest("hex");
+
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ etag, count: rows.length });
+  } catch (err) {
+    console.error("[jellyfin] library/version error:", err);
+    res.status(500).json({ error: "Fehler beim Laden der Library-Version." });
+  }
+});
 
 // GET /jellyfin/library — flat list of the authenticated user's library items
 // that are actually downloaded (have s3Key). One row per UserLibrary entry.

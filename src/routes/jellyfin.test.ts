@@ -196,6 +196,124 @@ describe("Jellyfin Routes", () => {
     });
   });
 
+  describe("GET /jellyfin/library/version", () => {
+    it("lehnt ohne Token ab", async () => {
+      const res = await request(app).get("/jellyfin/library/version");
+      expect(res.status).toBe(401);
+    });
+
+    it("liefert count=0 und stabilen ETag für leere Library", async () => {
+      const { token } = await createUserAndToken();
+      const res = await request(app)
+        .get("/jellyfin/library/version")
+        .set("Authorization", `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.count).toBe(0);
+      expect(typeof res.body.etag).toBe("string");
+      expect(res.body.etag).toMatch(/^[0-9a-f]{64}$/);
+      expect(res.headers["cache-control"]).toBe("no-store");
+    });
+
+    it("ETag ist deterministisch bei wiederholter Abfrage", async () => {
+      const { user, token } = await createUserAndToken();
+      const { nzbFile } = await createMovieAndNzb({ s3Key: "v1/v1.mkv" });
+      await prisma.userLibrary.create({ data: { userId: user.id, nzbFileId: nzbFile.id } });
+
+      const first = await request(app)
+        .get("/jellyfin/library/version")
+        .set("Authorization", `Bearer ${token}`);
+      const second = await request(app)
+        .get("/jellyfin/library/version")
+        .set("Authorization", `Bearer ${token}`);
+
+      expect(first.body.etag).toBe(second.body.etag);
+      expect(first.body.count).toBe(1);
+    });
+
+    it("ETag aendert sich wenn ein Eintrag hinzukommt", async () => {
+      const { user, token } = await createUserAndToken();
+      const { nzbFile: a } = await createMovieAndNzb({ s3Key: "v2a/v2a.mkv" });
+      await prisma.userLibrary.create({ data: { userId: user.id, nzbFileId: a.id } });
+
+      const before = await request(app)
+        .get("/jellyfin/library/version")
+        .set("Authorization", `Bearer ${token}`);
+
+      const { nzbFile: b } = await createMovieAndNzb({ s3Key: "v2b/v2b.mkv" });
+      await prisma.userLibrary.create({ data: { userId: user.id, nzbFileId: b.id } });
+
+      const after = await request(app)
+        .get("/jellyfin/library/version")
+        .set("Authorization", `Bearer ${token}`);
+
+      expect(after.body.etag).not.toBe(before.body.etag);
+      expect(after.body.count).toBe(2);
+    });
+
+    it("ETag aendert sich wenn ein Eintrag entfernt wird (removedAt gesetzt)", async () => {
+      const { user, token } = await createUserAndToken();
+      const { nzbFile } = await createMovieAndNzb({ s3Key: "v3/v3.mkv" });
+      const entry = await prisma.userLibrary.create({
+        data: { userId: user.id, nzbFileId: nzbFile.id },
+      });
+
+      const before = await request(app)
+        .get("/jellyfin/library/version")
+        .set("Authorization", `Bearer ${token}`);
+      expect(before.body.count).toBe(1);
+
+      await prisma.userLibrary.update({
+        where: { id: entry.id },
+        data: { removedAt: new Date() },
+      });
+
+      const after = await request(app)
+        .get("/jellyfin/library/version")
+        .set("Authorization", `Bearer ${token}`);
+      expect(after.body.count).toBe(0);
+      expect(after.body.etag).not.toBe(before.body.etag);
+    });
+
+    it("isoliert User — fremde Library beeinflusst ETag nicht", async () => {
+      const { user: userA } = await createUserAndToken();
+      const { token: tokenB } = await createUserAndToken();
+      const { nzbFile } = await createMovieAndNzb({ s3Key: "vIso/vIso.mkv" });
+      await prisma.userLibrary.create({ data: { userId: userA.id, nzbFileId: nzbFile.id } });
+
+      const res = await request(app)
+        .get("/jellyfin/library/version")
+        .set("Authorization", `Bearer ${tokenB}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.count).toBe(0);
+    });
+
+    it("ignoriert UserLibrary-Eintraege ohne s3Key (nicht heruntergeladen)", async () => {
+      const { user, token } = await createUserAndToken();
+      const { nzbFile: ready } = await createMovieAndNzb({ s3Key: "vReady/vReady.mkv" });
+      const { nzbFile: notReady } = await createMovieAndNzb({}); // ohne s3Key
+      await prisma.userLibrary.createMany({
+        data: [
+          { userId: user.id, nzbFileId: ready.id },
+          { userId: user.id, nzbFileId: notReady.id },
+        ],
+      });
+
+      const res = await request(app)
+        .get("/jellyfin/library/version")
+        .set("Authorization", `Bearer ${token}`);
+
+      expect(res.body.count).toBe(1);
+    });
+
+    it("akzeptiert KEIN ?token-Fallback → 401", async () => {
+      const { token } = await createUserAndToken();
+      const res = await request(app).get("/jellyfin/library/version").query({ token });
+      expect(res.status).toBe(401);
+    });
+  });
+
   describe("GET /jellyfin/stream/:hash", () => {
     it("liefert 404 wenn Hash unbekannt", async () => {
       const { token } = await createUserAndToken();
