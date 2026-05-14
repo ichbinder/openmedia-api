@@ -2,6 +2,11 @@ import { Router, type Request, type Response, type NextFunction } from "express"
 import { createHash } from "node:crypto";
 import { requireAuth, type AuthRequest } from "../middleware/auth.js";
 import prisma from "../lib/prisma.js";
+import { generateApiToken, hashToken, MAX_TOKENS_PER_USER } from "../lib/api-token.js";
+import {
+  buildJellyfinManifest,
+  buildPersonalizedPluginZip,
+} from "../lib/jellyfin-manifest.js";
 
 const router = Router();
 
@@ -54,6 +59,257 @@ export function streamTokenFallback(req: Request, _res: Response, next: NextFunc
 }
 
 router.use(streamTokenFallback);
+
+// ---------------------------------------------------------------------------
+// Plugin Setup + Repository Manifest
+//
+// These endpoints sit BEFORE the global requireAuth middleware below so each
+// can manage its own auth:
+//   - POST /plugin/setup  → requireAuth (user JWT or om_-token)
+//   - GET  /repo/manifest.json → public, validates ?t=om_xxx itself
+// ---------------------------------------------------------------------------
+
+const TOKEN_EXPIRY_DAYS = 365; // Plugin-Tokens leben lange — User widerruft per Profil.
+const SETUP_RATE_LIMIT_MS = 60_000; // max 1 Setup pro User pro Minute
+
+// In-memory rate limit. Process-local is fine — accidental burst from one user
+// is the only concern; coordinated attacks across instances aren't realistic
+// for this auth-gated endpoint.
+const lastSetupAt = new Map<string, number>();
+
+/** Reset the in-memory rate-limit state. Test-only helper. */
+export function _resetJellyfinSetupRateLimit(): void {
+  lastSetupAt.clear();
+}
+
+function formatDateDDMMYYYY(date: Date): string {
+  const dd = String(date.getDate()).padStart(2, "0");
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const yyyy = date.getFullYear();
+  return `${dd}.${mm}.${yyyy}`;
+}
+
+function resolveApiBaseUrl(req: Request): string {
+  const explicit = process.env.API_BASE_URL?.trim();
+  return explicit
+    ? explicit.replace(/\/$/, "")
+    : `${req.protocol}://${req.get("host")}`;
+}
+
+function buildManifestUrl(req: Request, plaintextToken: string): string {
+  return `${resolveApiBaseUrl(req)}/jellyfin/repo/manifest.json?t=${encodeURIComponent(plaintextToken)}`;
+}
+
+/**
+ * Token-Validierung fuer die public Jellyfin-Endpoints (manifest + plugin.zip).
+ * Strippt den `t=`-Query-Parameter aus req.url damit er nicht in Access-Logs
+ * landet. Bei Fehler wird die Response selbst gesendet und `null` zurueck.
+ */
+async function validatePluginToken(
+  req: Request,
+  res: Response,
+): Promise<{ userId: string; tokenPrefix: string; tokenId: string; plaintext: string } | null> {
+  const rawToken = typeof req.query.t === "string" ? req.query.t : "";
+
+  if (req.url.includes("t=")) {
+    const [pathPart, queryPart] = req.url.split("?", 2);
+    if (queryPart) {
+      const params = new URLSearchParams(queryPart);
+      params.delete("t");
+      const filtered = params.toString();
+      req.url = filtered ? `${pathPart}?${filtered}` : pathPart;
+    }
+  }
+  delete (req.query as Record<string, unknown>).t;
+
+  if (!rawToken || !rawToken.startsWith("om_") || rawToken.length < 20 || rawToken.length > 4096) {
+    res.status(401).json({ error: "Token fehlt oder ungültig." });
+    return null;
+  }
+
+  const tokenHashValue = hashToken(rawToken);
+  const tokenRow = await prisma.apiToken.findUnique({
+    where: { tokenHash: tokenHashValue },
+    select: {
+      id: true,
+      userId: true,
+      tokenPrefix: true,
+      purpose: true,
+      revokedAt: true,
+      expiresAt: true,
+    },
+  });
+
+  if (!tokenRow) {
+    console.warn("[jellyfin] token: unknown");
+    res.status(401).json({ error: "Token ungültig." });
+    return null;
+  }
+  if (tokenRow.purpose !== "jellyfin-plugin") {
+    console.warn(`[jellyfin] token: wrong purpose token=${tokenRow.tokenPrefix}...`);
+    res.status(401).json({ error: "Token nicht für Jellyfin-Plugin freigegeben." });
+    return null;
+  }
+  if (tokenRow.revokedAt !== null) {
+    console.warn(`[jellyfin] token: revoked token=${tokenRow.tokenPrefix}...`);
+    res.status(401).json({ error: "Token wurde widerrufen." });
+    return null;
+  }
+  if (tokenRow.expiresAt.getTime() < Date.now()) {
+    console.warn(`[jellyfin] token: expired token=${tokenRow.tokenPrefix}...`);
+    res.status(401).json({ error: "Token ist abgelaufen." });
+    return null;
+  }
+
+  // Fire-and-forget lastUsedAt — never blocks the response.
+  prisma.apiToken
+    .update({ where: { id: tokenRow.id }, data: { lastUsedAt: new Date() } })
+    .catch((err) => console.error(`[jellyfin] lastUsedAt update failed: ${err?.message || err}`));
+
+  return {
+    userId: tokenRow.userId,
+    tokenPrefix: tokenRow.tokenPrefix,
+    tokenId: tokenRow.id,
+    plaintext: rawToken,
+  };
+}
+
+/**
+ * POST /jellyfin/plugin/setup
+ *
+ * Creates a long-lived om_-token with purpose='jellyfin-plugin' and returns a
+ * personalised Jellyfin repository URL. The plaintext token is shown ONCE in
+ * the manifestUrl query param — it is not stored anywhere else in the response.
+ */
+router.post("/plugin/setup", requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+
+    // Rate limit: 1 setup per user per minute.
+    const now = Date.now();
+    const last = lastSetupAt.get(userId) ?? 0;
+    if (now - last < SETUP_RATE_LIMIT_MS) {
+      const retryAfter = Math.ceil((SETUP_RATE_LIMIT_MS - (now - last)) / 1000);
+      res.setHeader("Retry-After", String(retryAfter));
+      res.status(429).json({ error: "Bitte warte kurz vor dem nächsten Setup." });
+      return;
+    }
+
+    // Per-user active token cap also applies to plugin tokens.
+    const activeCount = await prisma.apiToken.count({
+      where: { userId, revokedAt: null },
+    });
+    if (activeCount >= MAX_TOKENS_PER_USER) {
+      res.status(400).json({
+        error: `Maximal ${MAX_TOKENS_PER_USER} aktive Tokens erlaubt. Bitte einen bestehenden widerrufen.`,
+      });
+      return;
+    }
+
+    const { plaintext, hash, prefix } = generateApiToken();
+    const expiresAt = new Date(Date.now() + TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
+    const name = `Jellyfin Plugin (${formatDateDDMMYYYY(new Date())})`;
+
+    const created = await prisma.apiToken.create({
+      data: {
+        userId,
+        tokenHash: hash,
+        tokenPrefix: prefix,
+        name,
+        purpose: "jellyfin-plugin",
+        expiresAt,
+      },
+    });
+
+    lastSetupAt.set(userId, now);
+
+    console.log(
+      `[jellyfin] plugin setup: user=${userId.slice(0, 8)}... token=${prefix}... expires=${expiresAt.toISOString().slice(0, 10)}`,
+    );
+
+    res.status(201).json({
+      manifestUrl: buildManifestUrl(req, plaintext),
+      tokenId: created.id,
+      name: created.name,
+      prefix: created.tokenPrefix,
+      expiresAt: created.expiresAt,
+    });
+  } catch (err) {
+    console.error("[jellyfin] plugin setup error:", err);
+    res.status(500).json({ error: "Plugin-Setup fehlgeschlagen." });
+  }
+});
+
+/**
+ * GET /jellyfin/repo/manifest.json?t=om_xxx
+ *
+ * Public endpoint. Validates the token (must be active, not revoked, not
+ * expired, purpose='jellyfin-plugin') and returns a Jellyfin-conformant
+ * repository manifest. Manifest fields kommen aus der `meta.json` im upstream
+ * Plugin-ZIP (dist-Branch). `sourceUrl` zeigt auf `/jellyfin/plugin.zip?t=om_xxx`,
+ * `checksum` ist der MD5 der User-spezifischen ZIP.
+ */
+router.get("/repo/manifest.json", async (req: Request, res: Response) => {
+  try {
+    const auth = await validatePluginToken(req, res);
+    if (!auth) return;
+
+    const manifest = await buildJellyfinManifest({
+      apiBaseUrl: resolveApiBaseUrl(req),
+      apiToken: auth.plaintext,
+    });
+
+    console.log(
+      `[jellyfin] manifest: user=${auth.userId.slice(0, 8)}... token=${auth.tokenPrefix}... entries=${manifest.length} version=${manifest[0]?.versions[0]?.version || "none"}`,
+    );
+
+    // Jellyfin checks the URL on every refresh; tell caches to leave it alone.
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.json(manifest);
+  } catch (err) {
+    console.error("[jellyfin] manifest error:", err);
+    res.status(500).json({ error: "Manifest konnte nicht erzeugt werden." });
+  }
+});
+
+/**
+ * GET /jellyfin/plugin.zip?t=om_xxx
+ *
+ * Liefert das User-spezifische Plugin-ZIP aus: upstream-ZIP (cached, vom
+ * dist-Branch des Plugin-Repos) + injizierte `bootstrap.json` mit
+ * `{apiUrl, apiToken}`. Jellyfin verifiziert den MD5 gegen den im Manifest
+ * deklarierten Wert — Build muss deterministisch sein (siehe
+ * jellyfin-manifest.ts buildPersonalizedPluginZip).
+ */
+router.get("/plugin.zip", async (req: Request, res: Response) => {
+  try {
+    const auth = await validatePluginToken(req, res);
+    if (!auth) return;
+
+    const { buffer, md5, version } = await buildPersonalizedPluginZip({
+      apiBaseUrl: resolveApiBaseUrl(req),
+      apiToken: auth.plaintext,
+    });
+
+    console.log(
+      `[jellyfin] plugin.zip: user=${auth.userId.slice(0, 8)}... token=${auth.tokenPrefix}... version=${version} md5=${md5} bytes=${buffer.length}`,
+    );
+
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader("Content-Length", String(buffer.length));
+    res.setHeader("Content-Disposition", "attachment; filename=\"openmedia.zip\"");
+    // Schwacher ETag — Jellyfin re-fetcht ohnehin per Manifest-Polling.
+    res.setHeader("ETag", `"${md5}"`);
+    res.status(200).end(buffer);
+  } catch (err) {
+    console.error("[jellyfin] plugin.zip error:", err);
+    if (!res.headersSent) {
+      res.status(502).json({ error: "Plugin-ZIP konnte nicht ausgeliefert werden." });
+    }
+  }
+});
 
 router.use(requireAuth);
 
