@@ -28,6 +28,7 @@ model ApiToken {
   tokenHash   String    @unique @map("token_hash")   // SHA-256 hash — plaintext never stored
   tokenPrefix String    @map("token_prefix")          // "om_aBcDeFgH" — first 11 chars for display
   name        String                                   // user-given label: "Meine Extension"
+  purpose     String?                                  // null = web-session (default); e.g. 'jellyfin-plugin'
   expiresAt   DateTime  @map("expires_at")
   lastUsedAt  DateTime? @map("last_used_at")
   revokedAt   DateTime? @map("revoked_at")            // null = active, set = revoked
@@ -37,6 +38,7 @@ model ApiToken {
   userId String @map("user_id")
 
   @@index([userId])
+  @@index([purpose])
   @@map("api_tokens")
 }
 
