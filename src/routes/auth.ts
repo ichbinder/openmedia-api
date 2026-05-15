@@ -204,6 +204,7 @@ router.get("/api-tokens", requireAuth, async (req: AuthRequest, res: Response) =
         id: true,
         tokenPrefix: true,
         name: true,
+        purpose: true,
         expiresAt: true,
         lastUsedAt: true,
         revokedAt: true,

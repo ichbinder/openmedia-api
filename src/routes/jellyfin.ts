@@ -7,6 +7,9 @@ import {
   buildJellyfinManifest,
   buildPersonalizedPluginZip,
 } from "../lib/jellyfin-manifest.js";
+import { getPluginSourceZip, _resetPluginSourceCache, _setGithubFetcher } from "../lib/jellyfin-plugin-source.js";
+import { repackPluginWithBootstrap } from "../lib/jellyfin-plugin-repack.js";
+import JSZip from "jszip";
 
 const router = Router();
 
@@ -76,6 +79,196 @@ const SETUP_RATE_LIMIT_MS = 60_000; // max 1 Setup pro User pro Minute
 // is the only concern; coordinated attacks across instances aren't realistic
 // for this auth-gated endpoint.
 const lastSetupAt = new Map<string, number>();
+
+// Rate-limit for plugin download endpoint (same pattern as setup).
+const DOWNLOAD_RATE_LIMIT_MS = 10_000; // max 1 download per user per 10s
+const lastDownloadAt = new Map<string, number>();
+
+// ---------------------------------------------------------------------------
+// MD5 cache per token-hash (same TTL as source cache: 1h success, 5min error)
+// ---------------------------------------------------------------------------
+const MD5_CACHE_SUCCESS_TTL_MS = 60 * 60 * 1000; // 1 hour
+const MD5_CACHE_ERROR_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+interface CachedDelivery {
+  md5: string;
+  version: string;
+  size: number;
+  meta: Record<string, unknown>;
+  fetchedAt: number;
+  /** Wenn gesetzt, ist dieser Eintrag ein Error-Cache. */
+  error?: string;
+}
+
+const deliveryCache = new Map<string, CachedDelivery>();
+
+/** Reset delivery cache + rate limit. Test-only helper. */
+export function _resetJellyfinDeliveryState(): void {
+  deliveryCache.clear();
+  lastDownloadAt.clear();
+}
+
+// ---------------------------------------------------------------------------
+// Helper: read meta.json from source ZIP
+// ---------------------------------------------------------------------------
+async function readMetaFromSourceZip(sourceZipBuffer: Buffer): Promise<Record<string, unknown>> {
+  try {
+    const zip = await JSZip.loadAsync(sourceZipBuffer);
+    const metaFile = zip.file("meta.json");
+    if (!metaFile) return {};
+    const text = await metaFile.async("string");
+    const parsed = JSON.parse(text);
+    if (parsed && typeof parsed === "object") return parsed as Record<string, unknown>;
+  } catch {
+    // Defekt — fallen wir auf Defaults zurueck statt die Pipeline zu killen.
+  }
+  return {};
+}
+
+// ---------------------------------------------------------------------------
+// Helper: build personalized plugin delivery (T03 source + T04 repack)
+// ---------------------------------------------------------------------------
+const DEFAULT_TARGET_ABI = "10.10.0.0";
+const DEFAULT_GUID = "8cfc3c6a-c39f-467f-8ebe-9f3218724aa1";
+const DEFAULT_NAME = "openmedia";
+const DEFAULT_DESCRIPTION = "Streamt deine openmedia-Bibliothek direkt nach Jellyfin.";
+const DEFAULT_OVERVIEW = "Verbindet Jellyfin mit deinem openmedia-Server.";
+const DEFAULT_OWNER = "ichbinder";
+const DEFAULT_CATEGORY = "General";
+
+async function buildDeliveryFromReleases(opts: {
+  apiBaseUrl: string;
+  apiToken: string;
+}): Promise<{ buffer: Buffer; md5: string; version: string; size: number; meta: Record<string, unknown> }> {
+  const source = await getPluginSourceZip();
+  const meta = await readMetaFromSourceZip(source.buffer);
+  const repack = await repackPluginWithBootstrap(source.buffer, {
+    apiUrl: opts.apiBaseUrl,
+    apiToken: opts.apiToken,
+  });
+  return {
+    buffer: repack.buffer,
+    md5: repack.md5,
+    version: source.version,
+    size: repack.size,
+    meta,
+  };
+}
+
+/**
+ * Get cached delivery metadata (MD5-only path for manifest).
+ * Returns {md5, version, meta} without repacking if cache hit.
+ */
+async function getCachedDeliveryMeta(opts: {
+  apiBaseUrl: string;
+  apiToken: string;
+}): Promise<{ md5: string; version: string; meta: Record<string, unknown> }> {
+  const tokenHash = hashToken(opts.apiToken);
+  const now = Date.now();
+
+  const cached = deliveryCache.get(tokenHash);
+  if (cached) {
+    const ttl = cached.error ? MD5_CACHE_ERROR_TTL_MS : MD5_CACHE_SUCCESS_TTL_MS;
+    if (now - cached.fetchedAt < ttl) {
+      if (cached.error) {
+        throw new Error(`cached delivery error: ${cached.error}`);
+      }
+      console.log(
+        `[jellyfin-delivery] cache-hit: version=${cached.version} md5=${cached.md5}`,
+      );
+      return { md5: cached.md5, version: cached.version, meta: cached.meta };
+    }
+  }
+
+  console.log("[jellyfin-delivery] cache-miss: computing delivery");
+  try {
+    const delivery = await buildDeliveryFromReleases(opts);
+    deliveryCache.set(tokenHash, {
+      md5: delivery.md5,
+      version: delivery.version,
+      size: delivery.size,
+      meta: delivery.meta,
+      fetchedAt: Date.now(),
+    });
+    return { md5: delivery.md5, version: delivery.version, meta: delivery.meta };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[jellyfin-delivery] error: ${message}`);
+    deliveryCache.set(tokenHash, {
+      md5: "",
+      version: "unknown",
+      size: 0,
+      meta: {},
+      fetchedAt: Date.now(),
+      error: message,
+    });
+    throw err;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Helper: build Jellyfin manifest from T03/T04 delivery pipeline
+// ---------------------------------------------------------------------------
+function buildManifestFromDelivery(opts: {
+  apiBaseUrl: string;
+  apiToken: string;
+  delivery: { md5: string; version: string; meta: Record<string, unknown> };
+}): Array<{
+  guid: string;
+  name: string;
+  description: string;
+  overview: string;
+  owner: string;
+  category: string;
+  imageUrl?: string;
+  versions: Array<{
+    version: string;
+    changelog: string;
+    targetAbi: string;
+    sourceUrl: string;
+    checksum: string;
+    timestamp: string;
+  }>;
+}> {
+  const { apiBaseUrl, apiToken, delivery } = opts;
+  const { md5, version, meta } = delivery;
+  const safeBase = apiBaseUrl.replace(/\/$/, "");
+  const sourceUrl = `${safeBase}/jellyfin/plugin/download?t=${encodeURIComponent(apiToken)}`;
+  const m = meta as Record<string, string>;
+
+  const entry = {
+    guid: m.guid?.trim() || DEFAULT_GUID,
+    name: m.name?.trim() || DEFAULT_NAME,
+    description: m.description?.trim() || DEFAULT_DESCRIPTION,
+    overview: m.overview?.trim() || DEFAULT_OVERVIEW,
+    owner: m.owner?.trim() || DEFAULT_OWNER,
+    category: m.category?.trim() || DEFAULT_CATEGORY,
+    versions: [] as Array<{
+      version: string;
+      changelog: string;
+      targetAbi: string;
+      sourceUrl: string;
+      checksum: string;
+      timestamp: string;
+    }>,
+  };
+
+  if (version) {
+    entry.versions.push({
+      version,
+      changelog: m.changelog?.trim() || `${version} — Release`,
+      targetAbi: m.targetAbi?.trim() || DEFAULT_TARGET_ABI,
+      sourceUrl,
+      checksum: md5,
+      timestamp: m.timestamp?.trim() || new Date().toISOString(),
+    });
+  }
+
+  const imageUrl = m.imageUrl?.trim();
+  if (imageUrl) (entry as Record<string, unknown>).imageUrl = imageUrl;
+
+  return [entry];
+}
 
 /** Reset the in-memory rate-limit state. Test-only helper. */
 export function _resetJellyfinSetupRateLimit(): void {
@@ -245,18 +438,26 @@ router.post("/plugin/setup", requireAuth, async (req: AuthRequest, res: Response
  *
  * Public endpoint. Validates the token (must be active, not revoked, not
  * expired, purpose='jellyfin-plugin') and returns a Jellyfin-conformant
- * repository manifest. Manifest fields kommen aus der `meta.json` im upstream
- * Plugin-ZIP (dist-Branch). `sourceUrl` zeigt auf `/jellyfin/plugin.zip?t=om_xxx`,
- * `checksum` ist der MD5 der User-spezifischen ZIP.
+ * repository manifest.
+ *
+ * S02: Manifest is built from GitHub Release source (T03) + repack (T04).
+ * `sourceUrl` points to `/jellyfin/plugin/download?t=om_xxx`,
+ * `checksum` is the per-user MD5 of the repacked ZIP, cached by token-hash.
  */
 router.get("/repo/manifest.json", async (req: Request, res: Response) => {
   try {
     const auth = await validatePluginToken(req, res);
     if (!auth) return;
 
-    const manifest = await buildJellyfinManifest({
+    const deliveryMeta = await getCachedDeliveryMeta({
       apiBaseUrl: resolveApiBaseUrl(req),
       apiToken: auth.plaintext,
+    });
+
+    const manifest = buildManifestFromDelivery({
+      apiBaseUrl: resolveApiBaseUrl(req),
+      apiToken: auth.plaintext,
+      delivery: deliveryMeta,
     });
 
     console.log(
@@ -269,6 +470,18 @@ router.get("/repo/manifest.json", async (req: Request, res: Response) => {
     res.json(manifest);
   } catch (err) {
     console.error("[jellyfin] manifest error:", err);
+    const msg = err instanceof Error ? err.message : "";
+    // Both cached errors (prefixed) and fresh upstream errors → 503
+    if (
+      msg.startsWith("cached upstream error:") ||
+      msg.startsWith("cached delivery error:") ||
+      msg.includes("upstream") ||
+      msg.includes("fetch failed") ||
+      msg.includes("GitHub")
+    ) {
+      res.status(503).json({ error: "Plugin-Quelle momentan nicht verfügbar." });
+      return;
+    }
     res.status(500).json({ error: "Manifest konnte nicht erzeugt werden." });
   }
 });
@@ -306,6 +519,74 @@ router.get("/plugin.zip", async (req: Request, res: Response) => {
   } catch (err) {
     console.error("[jellyfin] plugin.zip error:", err);
     if (!res.headersSent) {
+      res.status(502).json({ error: "Plugin-ZIP konnte nicht ausgeliefert werden." });
+    }
+  }
+});
+
+/**
+ * GET /jellyfin/plugin/download?t=om_xxx
+ *
+ * S02/T05: Neuer Download-Endpoint. Validiert Token (purpose='jellyfin-plugin'),
+ * holt Source-ZIP von GitHub Releases (T03), repacked mit User-Daten (T04),
+ * streamt ZIP an Client. MD5 stimmt mit Manifest-MD5 ueberein (beide nutzen
+ * denselben Delivery-Cache). Rate-limit: max 1 Download pro User pro 10s.
+ */
+router.get("/plugin/download", async (req: Request, res: Response) => {
+  try {
+    const auth = await validatePluginToken(req, res);
+    if (!auth) return;
+
+    // Rate limit: 1 download per user per 10s.
+    const now = Date.now();
+    const last = lastDownloadAt.get(auth.userId) ?? 0;
+    if (now - last < DOWNLOAD_RATE_LIMIT_MS) {
+      const retryAfter = Math.ceil((DOWNLOAD_RATE_LIMIT_MS - (now - last)) / 1000);
+      res.setHeader("Retry-After", String(retryAfter));
+      res.status(429).json({ error: "Bitte warte kurz vor dem nächsten Download." });
+      return;
+    }
+    lastDownloadAt.set(auth.userId, now);
+
+    const delivery = await buildDeliveryFromReleases({
+      apiBaseUrl: resolveApiBaseUrl(req),
+      apiToken: auth.plaintext,
+    });
+
+    // Also update the delivery cache so manifest MD5 stays consistent.
+    const tokenHash = hashToken(auth.plaintext);
+    deliveryCache.set(tokenHash, {
+      md5: delivery.md5,
+      version: delivery.version,
+      size: delivery.size,
+      meta: delivery.meta,
+      fetchedAt: Date.now(),
+    });
+
+    console.log(
+      `[jellyfin] plugin/download: user=${auth.userId.slice(0, 8)}... token=${auth.tokenPrefix}... version=${delivery.version} md5=${delivery.md5} bytes=${delivery.buffer.length}`,
+    );
+
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader("Content-Length", String(delivery.buffer.length));
+    res.setHeader("Content-Disposition", "attachment; filename=\"openmedia-jellyfin-plugin.zip\"");
+    res.setHeader("ETag", `"${delivery.md5}"`);
+    res.status(200).end(delivery.buffer);
+  } catch (err) {
+    console.error("[jellyfin] plugin/download error:", err);
+    if (!res.headersSent) {
+      const msg = err instanceof Error ? err.message : "";
+      if (
+        msg.startsWith("cached upstream error:") ||
+        msg.startsWith("cached delivery error:") ||
+        msg.includes("upstream") ||
+        msg.includes("fetch failed") ||
+        msg.includes("GitHub")
+      ) {
+        res.status(503).json({ error: "Plugin-Quelle momentan nicht verfügbar." });
+        return;
+      }
       res.status(502).json({ error: "Plugin-ZIP konnte nicht ausgeliefert werden." });
     }
   }

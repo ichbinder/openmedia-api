@@ -11,6 +11,13 @@ import {
   _resetJellyfinManifestCache,
   _setJellyfinUpstreamFetcher,
 } from "../lib/jellyfin-manifest.js";
+import {
+  _resetPluginSourceCache,
+  _setGithubFetcher,
+} from "../lib/jellyfin-plugin-source.js";
+import {
+  _resetJellyfinDeliveryState,
+} from "../routes/jellyfin.js";
 
 const app = createApp();
 
@@ -89,11 +96,22 @@ beforeEach(async () => {
     if (path === "version.txt") return UPSTREAM_VERSION;
     return fakeZip;
   });
+
+  // T03 GitHub Release fetcher (used by S02 manifest/download endpoints)
+  _resetPluginSourceCache();
+  _setGithubFetcher(async () => ({
+    buffer: fakeZip,
+    version: UPSTREAM_VERSION,
+  }));
+  _resetJellyfinDeliveryState();
 });
 
 afterEach(() => {
   _setJellyfinUpstreamFetcher(null);
   _resetJellyfinManifestCache();
+  _setGithubFetcher(null);
+  _resetPluginSourceCache();
+  _resetJellyfinDeliveryState();
   for (const k of envKeys) {
     if (envBackup[k] === undefined) delete process.env[k];
     else process.env[k] = envBackup[k];
@@ -176,7 +194,7 @@ describe("GET /jellyfin/repo/manifest.json", () => {
     expect(Array.isArray(res.body)).toBe(true);
     expect(res.body[0].guid).toBeDefined();
     expect(res.body[0].versions[0].version).toBe(UPSTREAM_VERSION);
-    expect(res.body[0].versions[0].sourceUrl).toContain(`/jellyfin/plugin.zip?t=${plaintext}`);
+    expect(res.body[0].versions[0].sourceUrl).toContain(`/jellyfin/plugin/download?t=${plaintext}`);
     expect(res.body[0].versions[0].checksum).toMatch(/^[0-9a-f]{32}$/);
   });
 
