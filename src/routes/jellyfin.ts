@@ -233,7 +233,7 @@ function buildManifestFromDelivery(opts: {
   const { apiBaseUrl, apiToken, delivery } = opts;
   const { md5, version, meta } = delivery;
   const safeBase = apiBaseUrl.replace(/\/$/, "");
-  const sourceUrl = `${safeBase}/jellyfin/plugin.zip?t=${encodeURIComponent(apiToken)}`;
+  const sourceUrl = `${safeBase}/jellyfin/t/${encodeURIComponent(apiToken)}/plugin.zip`;
   const m = meta as Record<string, string>;
 
   const entry = {
@@ -295,14 +295,23 @@ function buildManifestUrl(req: Request, plaintextToken: string): string {
 
 /**
  * Token-Validierung fuer die public Jellyfin-Endpoints (manifest + plugin.zip).
- * Strippt den `t=`-Query-Parameter aus req.url damit er nicht in Access-Logs
- * landet. Bei Fehler wird die Response selbst gesendet und `null` zurueck.
+ * Liesst den Token aus:
+ *   1. Pfad-Parameter `/t/:token/...` (bevorzugt, URL endet auf .zip)
+ *   2. Query-Parameter `?t=om_xxx` (Fallback fuer Manifest-Endpoint)
+ * Strippt den Token aus req.url damit er nicht in Access-Logs landet.
+ * Bei Fehler wird die Response selbst gesendet und `null` zurueck.
  */
 async function validatePluginToken(
   req: Request,
   res: Response,
 ): Promise<{ userId: string; tokenPrefix: string; tokenId: string; plaintext: string } | null> {
-  const rawToken = typeof req.query.t === "string" ? req.query.t : "";
+  // Try path parameter first: /jellyfin/t/om_xxx/plugin.zip
+  let rawToken = typeof req.params.token === "string" ? req.params.token : "";
+
+  // Fallback: query parameter ?t=om_xxx
+  if (!rawToken) {
+    rawToken = typeof req.query.t === "string" ? req.query.t : "";
+  }
 
   if (req.url.includes("t=")) {
     const [pathPart, queryPart] = req.url.split("?", 2);
@@ -441,7 +450,7 @@ router.post("/plugin/setup", requireAuth, async (req: AuthRequest, res: Response
  * repository manifest.
  *
  * S02: Manifest is built from GitHub Release source (T03) + repack (T04).
- * `sourceUrl` points to `/jellyfin/plugin.zip?t=om_xxx`,
+ * `sourceUrl` points to `/jellyfin/t/om_xxx/plugin.zip`,
  * `checksum` is the per-user MD5 of the repacked ZIP, cached by token-hash.
  */
 router.get("/repo/manifest.json", async (req: Request, res: Response) => {
@@ -487,14 +496,14 @@ router.get("/repo/manifest.json", async (req: Request, res: Response) => {
 });
 
 /**
- * GET /jellyfin/plugin.zip?t=om_xxx
+ * GET /jellyfin/t/:token/plugin.zip
  *
- * S02/T05: Neuer Download-Endpoint. Validiert Token (purpose='jellyfin-plugin'),
- * holt Source-ZIP von GitHub Releases (T03), repacked mit User-Daten (T04),
- * streamt ZIP an Client. MD5 stimmt mit Manifest-MD5 ueberein (beide nutzen
- * denselben Delivery-Cache). Rate-limit: max 1 Download pro User pro 10s.
+ * Download-Endpoint mit Token im Pfad ( statt Query-Parameter).
+ * Jellyfin 10.11 prueft Path.GetExtension() auf die URL — der Token
+ * als Query-Parameter (?t=om_xxx) verhindert dass .zip erkannt wird.
+ * Pfad-Format: /jellyfin/t/om_xxx/plugin.zip → .zip ist die Extension.
  */
-router.get("/plugin.zip", async (req: Request, res: Response) => {
+router.get("/t/:token/plugin.zip", async (req: Request, res: Response) => {
   try {
     const auth = await validatePluginToken(req, res);
     if (!auth) return;
