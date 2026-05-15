@@ -233,7 +233,7 @@ function buildManifestFromDelivery(opts: {
   const { apiBaseUrl, apiToken, delivery } = opts;
   const { md5, version, meta } = delivery;
   const safeBase = apiBaseUrl.replace(/\/$/, "");
-  const sourceUrl = `${safeBase}/jellyfin/plugin/download?t=${encodeURIComponent(apiToken)}`;
+  const sourceUrl = `${safeBase}/jellyfin/plugin.zip?t=${encodeURIComponent(apiToken)}`;
   const m = meta as Record<string, string>;
 
   const entry = {
@@ -441,7 +441,7 @@ router.post("/plugin/setup", requireAuth, async (req: AuthRequest, res: Response
  * repository manifest.
  *
  * S02: Manifest is built from GitHub Release source (T03) + repack (T04).
- * `sourceUrl` points to `/jellyfin/plugin/download?t=om_xxx`,
+ * `sourceUrl` points to `/jellyfin/plugin.zip?t=om_xxx`,
  * `checksum` is the per-user MD5 of the repacked ZIP, cached by token-hash.
  */
 router.get("/repo/manifest.json", async (req: Request, res: Response) => {
@@ -489,50 +489,12 @@ router.get("/repo/manifest.json", async (req: Request, res: Response) => {
 /**
  * GET /jellyfin/plugin.zip?t=om_xxx
  *
- * Liefert das User-spezifische Plugin-ZIP aus: upstream-ZIP (cached, vom
- * dist-Branch des Plugin-Repos) + injizierte `bootstrap.json` mit
- * `{apiUrl, apiToken}`. Jellyfin verifiziert den MD5 gegen den im Manifest
- * deklarierten Wert — Build muss deterministisch sein (siehe
- * jellyfin-manifest.ts buildPersonalizedPluginZip).
- */
-router.get("/plugin.zip", async (req: Request, res: Response) => {
-  try {
-    const auth = await validatePluginToken(req, res);
-    if (!auth) return;
-
-    const { buffer, md5, version } = await buildPersonalizedPluginZip({
-      apiBaseUrl: resolveApiBaseUrl(req),
-      apiToken: auth.plaintext,
-    });
-
-    console.log(
-      `[jellyfin] plugin.zip: user=${auth.userId.slice(0, 8)}... token=${auth.tokenPrefix}... version=${version} md5=${md5} bytes=${buffer.length}`,
-    );
-
-    res.setHeader("Cache-Control", "no-store");
-    res.setHeader("Content-Type", "application/zip");
-    res.setHeader("Content-Length", String(buffer.length));
-    res.setHeader("Content-Disposition", "attachment; filename=\"openmedia.zip\"");
-    // Schwacher ETag — Jellyfin re-fetcht ohnehin per Manifest-Polling.
-    res.setHeader("ETag", `"${md5}"`);
-    res.status(200).end(buffer);
-  } catch (err) {
-    console.error("[jellyfin] plugin.zip error:", err);
-    if (!res.headersSent) {
-      res.status(502).json({ error: "Plugin-ZIP konnte nicht ausgeliefert werden." });
-    }
-  }
-});
-
-/**
- * GET /jellyfin/plugin/download?t=om_xxx
- *
  * S02/T05: Neuer Download-Endpoint. Validiert Token (purpose='jellyfin-plugin'),
  * holt Source-ZIP von GitHub Releases (T03), repacked mit User-Daten (T04),
  * streamt ZIP an Client. MD5 stimmt mit Manifest-MD5 ueberein (beide nutzen
  * denselben Delivery-Cache). Rate-limit: max 1 Download pro User pro 10s.
  */
-router.get("/plugin/download", async (req: Request, res: Response) => {
+router.get("/plugin.zip", async (req: Request, res: Response) => {
   try {
     const auth = await validatePluginToken(req, res);
     if (!auth) return;
@@ -564,7 +526,7 @@ router.get("/plugin/download", async (req: Request, res: Response) => {
     });
 
     console.log(
-      `[jellyfin] plugin/download: user=${auth.userId.slice(0, 8)}... token=${auth.tokenPrefix}... version=${delivery.version} md5=${delivery.md5} bytes=${delivery.buffer.length}`,
+      `[jellyfin] plugin.zip: user=${auth.userId.slice(0, 8)}... token=${auth.tokenPrefix}... version=${delivery.version} md5=${delivery.md5} bytes=${delivery.buffer.length}`,
     );
 
     res.setHeader("Cache-Control", "no-store");
@@ -574,7 +536,7 @@ router.get("/plugin/download", async (req: Request, res: Response) => {
     res.setHeader("ETag", `"${delivery.md5}"`);
     res.status(200).end(delivery.buffer);
   } catch (err) {
-    console.error("[jellyfin] plugin/download error:", err);
+    console.error("[jellyfin] plugin.zip error:", err);
     if (!res.headersSent) {
       const msg = err instanceof Error ? err.message : "";
       if (

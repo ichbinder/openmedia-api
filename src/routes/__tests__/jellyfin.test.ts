@@ -113,24 +113,24 @@ beforeEach(async () => {
 });
 
 // ---------------------------------------------------------------------------
-// Tests: GET /jellyfin/plugin/download
+// Tests: GET /jellyfin/plugin.zip
 // ---------------------------------------------------------------------------
 
-describe("GET /jellyfin/plugin/download", () => {
+describe("GET /jellyfin/plugin.zip", () => {
   it("liefert 401 wenn ?t= fehlt", async () => {
-    const res = await request(app).get("/jellyfin/plugin/download");
+    const res = await request(app).get("/jellyfin/plugin.zip");
     expect(res.status).toBe(401);
   });
 
   it("liefert 401 wenn Token kein om_-Prefix hat", async () => {
-    const res = await request(app).get("/jellyfin/plugin/download?t=invalidtoken1234567890");
+    const res = await request(app).get("/jellyfin/plugin.zip?t=invalidtoken1234567890");
     expect(res.status).toBe(401);
   });
 
   it("liefert 401 bei Token mit falschem purpose", async () => {
     const { user } = await createUser();
     const { plaintext } = await createPluginToken(user.id, { purpose: null });
-    const res = await request(app).get(`/jellyfin/plugin/download?t=${plaintext}`);
+    const res = await request(app).get(`/jellyfin/plugin.zip?t=${plaintext}`);
     expect(res.status).toBe(401);
     expect(res.body.error).toContain("Jellyfin-Plugin");
   });
@@ -138,14 +138,14 @@ describe("GET /jellyfin/plugin/download", () => {
   it("liefert 401 bei widerrufenem Token", async () => {
     const { user } = await createUser();
     const { plaintext } = await createPluginToken(user.id, { revoked: true });
-    const res = await request(app).get(`/jellyfin/plugin/download?t=${plaintext}`);
+    const res = await request(app).get(`/jellyfin/plugin.zip?t=${plaintext}`);
     expect(res.status).toBe(401);
   });
 
   it("liefert 401 bei abgelaufenem Token", async () => {
     const { user } = await createUser();
     const { plaintext } = await createPluginToken(user.id, { expiresInMs: -1000 });
-    const res = await request(app).get(`/jellyfin/plugin/download?t=${plaintext}`);
+    const res = await request(app).get(`/jellyfin/plugin.zip?t=${plaintext}`);
     expect(res.status).toBe(401);
     expect(res.body.error).toContain("abgelaufen");
   });
@@ -155,7 +155,7 @@ describe("GET /jellyfin/plugin/download", () => {
     const { plaintext } = await createPluginToken(user.id);
 
     const res = await request(app)
-      .get(`/jellyfin/plugin/download?t=${plaintext}`)
+      .get(`/jellyfin/plugin.zip?t=${plaintext}`)
       .buffer(true)
       .parse((response, cb) => {
         const chunks: Buffer[] = [];
@@ -187,7 +187,7 @@ describe("GET /jellyfin/plugin/download", () => {
     const { plaintext } = await createPluginToken(user.id);
 
     const res = await request(app)
-      .get(`/jellyfin/plugin/download?t=${plaintext}`)
+      .get(`/jellyfin/plugin.zip?t=${plaintext}`)
       .buffer(true)
       .parse((response, cb) => {
         const chunks: Buffer[] = [];
@@ -220,7 +220,7 @@ describe("GET /jellyfin/plugin/download", () => {
       _resetJellyfinDeliveryState();
 
       const dlRes = await request(app)
-        .get(`/jellyfin/plugin/download?t=${plaintext}`)
+        .get(`/jellyfin/plugin.zip?t=${plaintext}`)
         .buffer(true)
         .parse((response, cb) => {
           const chunks: Buffer[] = [];
@@ -243,10 +243,10 @@ describe("GET /jellyfin/plugin/download", () => {
     const { user } = await createUser();
     const { plaintext } = await createPluginToken(user.id);
 
-    const first = await request(app).get(`/jellyfin/plugin/download?t=${plaintext}`);
+    const first = await request(app).get(`/jellyfin/plugin.zip?t=${plaintext}`);
     expect(first.status).toBe(200);
 
-    const second = await request(app).get(`/jellyfin/plugin/download?t=${plaintext}`);
+    const second = await request(app).get(`/jellyfin/plugin.zip?t=${plaintext}`);
     expect(second.status).toBe(429);
     expect(second.headers["retry-after"]).toBeDefined();
   });
@@ -262,13 +262,13 @@ describe("GET /jellyfin/plugin/download", () => {
     const { plaintext } = await createPluginToken(user.id);
 
     // First request triggers fetch and caches the error
-    const res1 = await request(app).get(`/jellyfin/plugin/download?t=${plaintext}`);
+    const res1 = await request(app).get(`/jellyfin/plugin.zip?t=${plaintext}`);
     expect(res1.status).toBe(503); // fresh upstream error → 503
 
     // Reset delivery cache so it tries delivery again (source cache still has error)
     _resetJellyfinDeliveryState();
 
-    const res2 = await request(app).get(`/jellyfin/plugin/download?t=${plaintext}`);
+    const res2 = await request(app).get(`/jellyfin/plugin.zip?t=${plaintext}`);
     expect(res2.status).toBe(503); // cached upstream error → 503
   });
 });
@@ -293,14 +293,14 @@ describe("GET /jellyfin/repo/manifest.json (S02)", () => {
     expect(res.body[0].versions[0].checksum).toMatch(/^[0-9a-f]{32}$/);
   });
 
-  it("sourceUrl zeigt auf /jellyfin/plugin/download", async () => {
+  it("sourceUrl zeigt auf /jellyfin/plugin.zip", async () => {
     const { user } = await createUser();
     const { plaintext } = await createPluginToken(user.id);
 
     const res = await request(app).get(`/jellyfin/repo/manifest.json?t=${plaintext}`);
     expect(res.status).toBe(200);
     const sourceUrl = res.body[0].versions[0].sourceUrl as string;
-    expect(sourceUrl).toContain("/jellyfin/plugin/download?t=");
+    expect(sourceUrl).toContain("/jellyfin/plugin.zip?t=");
     expect(sourceUrl).toContain(encodeURIComponent(plaintext));
   });
 
