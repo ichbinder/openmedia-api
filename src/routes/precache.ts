@@ -117,9 +117,7 @@ router.get("/precache/queue", requirePluginToken, async (req: PluginAuthRequest,
       returnedCount: rows.length,
     });
 
-    res.json(rows);
-  } catch (err) {
-    console.error("[precache] queue error:", err);
+    res.json({ items: rows });
     res.status(500).json({ error: "Queue konnte nicht geladen werden." });
   }
 });
@@ -142,7 +140,7 @@ router.get("/precache/release-queue", requirePluginToken, async (req: PluginAuth
       returnedCount: rows.length,
     });
 
-    res.json(rows);
+    res.json({ items: rows });
   } catch (err) {
     console.error("[precache] release-queue error:", err);
     res.status(500).json({ error: "Release-Queue konnte nicht geladen werden." });
