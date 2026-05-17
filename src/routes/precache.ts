@@ -118,6 +118,8 @@ router.get("/precache/queue", requirePluginToken, async (req: PluginAuthRequest,
     });
 
     res.json({ items: rows });
+  } catch (err) {
+    console.error("[precache] queue error:", err);
     res.status(500).json({ error: "Queue konnte nicht geladen werden." });
   }
 });
