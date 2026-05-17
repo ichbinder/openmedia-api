@@ -15,10 +15,11 @@ model User {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  watchlist      WatchlistItem[]
-  library        UserLibrary[]
-  searchHistory  SearchHistory[]
-  apiTokens      ApiToken[]
+  watchlist        WatchlistItem[]
+  library          UserLibrary[]
+  searchHistory    SearchHistory[]
+  apiTokens        ApiToken[]
+  precacheRequests PrecacheRequest[]
 
   @@map("users")
 }
@@ -435,4 +436,31 @@ model ServiceIncident {
 
   @@index([service, status])
   @@map("service_incidents")
+}
+
+// ─── Pre-Cache Request Queue ─────────────────────────────────────────
+// User requests a movie to be pre-downloaded by the Jellyfin plugin.
+// State machine: queued → downloading → done | failed
+// Plugin polls /queue for pending items, reports state transitions via /status.
+
+model PrecacheRequest {
+  id              String   @id @default(cuid())
+  userId          String   @map("user_id")
+  hash            String                                       // NzbFile hash
+  requestedAt     DateTime @default(now()) @map("requested_at")
+  ttlSeconds      Int      @default(604800) @map("ttl_seconds") // 7d default
+  state           String   @default("queued")                  // queued | downloading | done | failed
+  reason          String?                                      // failure reason or transition note
+  lastEventAt     DateTime @default(now()) @map("last_event_at")
+  pluginInstallId String?  @map("plugin_install_id")           // which plugin install picked it up
+  sizeBytes       BigInt?  @map("size_bytes")
+  bytesDownloaded BigInt?  @map("bytes_downloaded")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, hash])
+  @@index([state, requestedAt])
+  @@map("precache_requests")
 }

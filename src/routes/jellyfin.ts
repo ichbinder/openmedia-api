@@ -2,11 +2,13 @@ import { Router, type Request, type Response, type NextFunction } from "express"
 import { createHash } from "node:crypto";
 import { requireAuth, type AuthRequest } from "../middleware/auth.js";
 import prisma from "../lib/prisma.js";
+import { verifyMediaUrl } from "../lib/media-url-signer.js";
 import { generateApiToken, hashToken, MAX_TOKENS_PER_USER } from "../lib/api-token.js";
 import {
   buildJellyfinManifest,
   buildPersonalizedPluginZip,
 } from "../lib/jellyfin-manifest.js";
+import precacheRouter from "./precache.js";
 import { getPluginSourceZip, _resetPluginSourceCache, _setGithubFetcher } from "../lib/jellyfin-plugin-source.js";
 import { repackPluginWithBootstrap } from "../lib/jellyfin-plugin-repack.js";
 import JSZip from "jszip";
@@ -57,11 +59,79 @@ export function streamTokenFallback(req: Request, _res: Response, next: NextFunc
   req.headers.authorization = `Bearer ${raw}`;
 
   // Mark how this request was authenticated for the stream-handler log line.
-  (req as AuthRequest & { authSource?: "query" | "header" }).authSource = "query";
+  (req as AuthRequest & { authSource?: string }).authSource = "query";
   next();
 }
 
 router.use(streamTokenFallback);
+
+// ---------------------------------------------------------------------------
+// Signed-URL Authentication for /stream/:hash
+//
+// When ?sig=&exp=&u= are all present, verify the HMAC signature statelessly
+// using MEDIA_SIGNING_SECRET. On success, set req.user (same shape as
+// requireAuth) and continue. On failure, respond 401 immediately.
+// If not all three params are present, fall through to the existing
+// ?token= (streamTokenFallback) → requireAuth path for backward compat.
+// ---------------------------------------------------------------------------
+
+function signedUrlAuth(req: Request, res: Response, next: NextFunction): void {
+  if (!STREAM_PATH_RE.test(req.path)) return next();
+
+  const { sig, exp, u } = req.query as Record<string, string | undefined>;
+
+  // If not all three signed-URL params are present, fall through to token path.
+  if (!sig || !exp || !u) return next();
+
+  // Signed params present — this is a signed-URL request.
+  // Extract hash from path: /stream/:hash → split on '/'
+  const pathParts = req.path.replace(/\/+$/, "").split("/");
+  const hash = pathParts[pathParts.length - 1] || "";
+  const secret = process.env.MEDIA_SIGNING_SECRET || "";
+
+  if (!secret || secret.length < 32) {
+    console.log("stream:auth_failed", { hash: hash.slice(0, 12), reason: "no_secret" });
+    res.status(500).json({ error: "Server-Konfiguration unvollständig." });
+    return;
+  }
+
+  const result = verifyMediaUrl({
+    hash,
+    sig: String(sig),
+    exp: Number(exp),
+    u: String(u),
+    secret,
+  });
+
+  if (!result.ok) {
+    const reason = result.reason || "unknown";
+    console.log("stream:auth_failed", {
+      hash: hash.slice(0, 12),
+      reason,
+    });
+    res.status(401).json({ error: "invalid_signature", reason });
+    return;
+  }
+
+  // Authenticated via signed URL — set req.user with the same shape as requireAuth.
+  // Only userId is needed for stream access (no email required).
+  (req as AuthRequest).user = { userId: String(u) };
+
+  const expInSec = Number(exp) - Math.floor(Date.now() / 1000);
+  console.log("stream:auth", {
+    hash: hash.slice(0, 12),
+    mode: "signed",
+    userId: String(u).slice(0, 8),
+    exp_in_sec: expInSec,
+  });
+
+  // Mark auth source for the stream-handler log line.
+  (req as AuthRequest & { authSource?: string }).authSource = "signed";
+
+  next();
+}
+
+router.use(signedUrlAuth);
 
 // ---------------------------------------------------------------------------
 // Plugin Setup + Repository Manifest
@@ -563,7 +633,15 @@ router.get("/t/:token/plugin.zip", async (req: Request, res: Response) => {
   }
 });
 
-router.use(requireAuth);
+// Mount precache endpoints (handles its own auth per-route)
+router.use(precacheRouter);
+
+// requireAuth — but skip when signed URL auth already set req.user
+// (signed URL requests have no Authorization header, so requireAuth would reject them)
+router.use((req: Request, res: Response, next: NextFunction) => {
+  if ((req as AuthRequest).user) return next();
+  requireAuth(req as AuthRequest, res, next);
+});
 
 // Presigned-URL TTL for Jellyfin stream requests. Short on purpose — the plugin
 // always fetches a fresh URL just before play, so a long TTL adds nothing.
@@ -778,7 +856,7 @@ router.get("/stream/:hash", async (req: AuthRequest, res: Response) => {
       responseContentType: mimeType,
     });
 
-    const authSource = (req as AuthRequest & { authSource?: "query" | "header" }).authSource || "header";
+    const authSource = (req as AuthRequest & { authSource?: string }).authSource || "header";
     console.log(
       `[jellyfin] stream: user=${userId.slice(0, 8)}... hash=${hash.slice(0, 12)}... mime=${mimeType} auth=${authSource} → 302`,
     );
