@@ -32,7 +32,7 @@ function makeRes(): { res: Response; json: ReturnType<typeof vi.fn>; status: Ret
 }
 
 function makeNext(): NextFunction & { called: boolean } {
-  const next = vi.fn() as NextFunction & { called: boolean };
+  const next = vi.fn() as unknown as NextFunction & { called: boolean };
   return next;
 }
 

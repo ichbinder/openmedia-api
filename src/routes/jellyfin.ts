@@ -1,6 +1,6 @@
 import { Router, type Request, type Response, type NextFunction } from "express";
 import { createHash } from "node:crypto";
-import { requireAuth, type AuthRequest } from "../middleware/auth.js";
+import { requireAuth, type AuthRequest, type JwtPayload } from "../middleware/auth.js";
 import prisma from "../lib/prisma.js";
 import { verifyMediaUrl } from "../lib/media-url-signer.js";
 import { generateApiToken, hashToken, MAX_TOKENS_PER_USER } from "../lib/api-token.js";
@@ -115,7 +115,7 @@ function signedUrlAuth(req: Request, res: Response, next: NextFunction): void {
 
   // Authenticated via signed URL — set req.user with the same shape as requireAuth.
   // Only userId is needed for stream access (no email required).
-  (req as AuthRequest).user = { userId: String(u) };
+  (req as AuthRequest).user = { userId: String(u) } as JwtPayload;
 
   const expInSec = Number(exp) - Math.floor(Date.now() / 1000);
   console.log("stream:auth", {
