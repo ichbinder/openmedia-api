@@ -237,9 +237,9 @@ describe("GET /jellyfin/precache/queue", () => {
 
     const res = await request(app).get("/jellyfin/precache/queue").set(authHeader(plaintext)).send();
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(2);
-    expect(res.body[0].hash).toBe("hash-older");
-    expect(res.body[1].hash).toBe("hash-newer");
+    expect(res.body.items).toHaveLength(2);
+    expect(res.body.items[0].hash).toBe("hash-older");
+    expect(res.body.items[1].hash).toBe("hash-newer");
   });
 
   it("excludes non-queued items", async () => {
@@ -258,8 +258,8 @@ describe("GET /jellyfin/precache/queue", () => {
 
     const res = await request(app).get("/jellyfin/precache/queue").set(authHeader(plaintext)).send();
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(1);
-    expect(res.body[0].hash).toBe("queued-hash");
+    expect(res.body.items).toHaveLength(1);
+    expect(res.body.items[0].hash).toBe("queued-hash");
   });
 
   it("returns 401 without auth", async () => {
@@ -539,9 +539,9 @@ describe("GET /jellyfin/precache/release-queue", () => {
 
     const res = await request(app).get("/jellyfin/precache/release-queue").set(authHeader(plaintext)).send();
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(2);
-    expect(res.body[0].hash).toBe("release-older");
-    expect(res.body[1].hash).toBe("release-newer");
+    expect(res.body.items).toHaveLength(2);
+    expect(res.body.items[0].hash).toBe("release-older");
+    expect(res.body.items[1].hash).toBe("release-newer");
   });
 
   it("excludes non-release_requested items", async () => {
@@ -560,8 +560,8 @@ describe("GET /jellyfin/precache/release-queue", () => {
 
     const res = await request(app).get("/jellyfin/precache/release-queue").set(authHeader(plaintext)).send();
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(1);
-    expect(res.body[0].hash).toBe("release-hash");
+    expect(res.body.items).toHaveLength(1);
+    expect(res.body.items[0].hash).toBe("release-hash");
   });
 
   it("returns 401 without auth", async () => {
