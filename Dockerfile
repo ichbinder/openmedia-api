@@ -4,6 +4,9 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 COPY prisma ./prisma/
+COPY prisma.config.ts ./
+ARG DATABASE_URL=postgresql://dummy:dummy@localhost:5432/dummy
+ENV DATABASE_URL=$DATABASE_URL
 RUN npx prisma generate
 COPY tsconfig.json ./
 COPY src ./src/
@@ -11,7 +14,6 @@ RUN npm run build
 
 FROM node:22-alpine AS runner
 
-# Docker CLI needed for caddy reload via docker exec
 RUN apk add --no-cache docker-cli
 
 WORKDIR /app
@@ -20,6 +22,7 @@ RUN npm ci --omit=dev
 COPY --from=builder /app/dist ./dist/
 COPY --from=builder /app/generated ./generated/
 COPY prisma ./prisma/
+COPY prisma.config.ts ./
 
 ENV NODE_ENV=production
 ENV PORT=4000
