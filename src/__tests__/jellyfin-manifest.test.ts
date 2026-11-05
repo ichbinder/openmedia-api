@@ -194,7 +194,7 @@ describe("GET /jellyfin/repo/manifest.json", () => {
     expect(Array.isArray(res.body)).toBe(true);
     expect(res.body[0].guid).toBeDefined();
     expect(res.body[0].versions[0].version).toBe(UPSTREAM_VERSION);
-    expect(res.body[0].versions[0].sourceUrl).toContain(`/jellyfin/plugin/download?t=${plaintext}`);
+    expect(res.body[0].versions[0].sourceUrl).toContain(`/jellyfin/t/${plaintext}/plugin.zip`);
     expect(res.body[0].versions[0].checksum).toMatch(/^[0-9a-f]{32}$/);
   });
 
@@ -241,7 +241,7 @@ describe("GET /jellyfin/repo/manifest.json", () => {
   });
 });
 
-describe("GET /jellyfin/plugin.zip", () => {
+describe("GET /jellyfin/t/:token/plugin.zip", () => {
   it("liefert 401 wenn ?t= fehlt", async () => {
     const res = await request(app).get("/jellyfin/plugin.zip");
     expect(res.status).toBe(401);
@@ -250,7 +250,7 @@ describe("GET /jellyfin/plugin.zip", () => {
   it("liefert 401 fuer Token mit falschem purpose", async () => {
     const user = await createUser();
     const { plaintext } = await createPluginToken(user.id, { purpose: null });
-    const res = await request(app).get(`/jellyfin/plugin.zip?t=${plaintext}`);
+    const res = await request(app).get(`/jellyfin/t/${plaintext}/plugin.zip`);
     expect(res.status).toBe(401);
   });
 
@@ -259,7 +259,7 @@ describe("GET /jellyfin/plugin.zip", () => {
     const { plaintext } = await createPluginToken(user.id);
 
     const res = await request(app)
-      .get(`/jellyfin/plugin.zip?t=${plaintext}`)
+      .get(`/jellyfin/t/${plaintext}/plugin.zip`)
       .buffer(true)
       .parse((response, cb) => {
         const chunks: Buffer[] = [];
@@ -288,7 +288,7 @@ describe("GET /jellyfin/plugin.zip", () => {
     const { plaintext } = await createPluginToken(user.id);
 
     const res = await request(app)
-      .get(`/jellyfin/plugin.zip?t=${plaintext}`)
+      .get(`/jellyfin/t/${plaintext}/plugin.zip`)
       .buffer(true)
       .parse((response, cb) => {
         const chunks: Buffer[] = [];
