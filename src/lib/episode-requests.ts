@@ -6,6 +6,7 @@ import { downloadNzb, getDownloadBudget, IndexerError, searchEpisode } from "./t
 import { getTargetBand, rankReleases, type RankedRelease } from "./release-ranking.js";
 import { ingestNzb, type IngestResult } from "./nzb-ingest.js";
 import { upsertEpisode } from "./episode-resolver.js";
+import { LANGUAGE_PATTERNS } from "./nzb-parser.js";
 
 export type RequestView = { season: number; episode: number; status: string; waitReason: string | null };
 
@@ -28,10 +29,10 @@ const TIER_PREFERENCE = ["1080p", "2160p", "720p", "480p"];
 
 type FullRequest = EpisodeRequest & { episode: NzbEpisode & { show: NzbShow } };
 
-function claimable(): Prisma.EpisodeRequestWhereInput {
+function claimable(statuses = ["waiting", "expired"]): Prisma.EpisodeRequestWhereInput {
   return {
     OR: [
-      { status: { in: ["waiting", "expired"] } },
+      { status: { in: statuses } },
       { status: "searching", updatedAt: { lt: new Date(Date.now() - STALE_SEARCH_MS) } },
     ],
   };
@@ -96,7 +97,12 @@ export async function rankEpisodeCandidates(tmdbId: number, season: number, epis
     select: { indexerGuid: true },
   });
   const brokenGuids = new Set(broken.map((f) => f.indexerGuid));
-  return ranked.filter((r) => !brokenGuids.has(r.guid));
+  return ranked.filter((r) => !brokenGuids.has(r.guid) && Number.isSafeInteger(r.size) && r.size > 0);
+}
+
+function toLanguageCodes(names: string[] | null): string[] {
+  const codes = (names ?? []).map((name) => LANGUAGE_PATTERNS.find(([p]) => p.test(name))?.[1] ?? name.toLowerCase());
+  return [...new Set(codes)];
 }
 
 async function ingestCandidate(
@@ -130,8 +136,8 @@ async function ingestCandidate(
         qualityTier: candidate.qualityTier,
         resolution: candidate.qualityTier,
         fileSize: BigInt(candidate.size),
-        audioLanguages: candidate.audioLanguages ?? [],
-        subtitleLanguages: candidate.subtitles ?? [],
+        audioLanguages: toLanguageCodes(candidate.audioLanguages),
+        subtitleLanguages: toLanguageCodes(candidate.subtitles),
         releaseType: candidate.releaseType,
       },
     });
@@ -171,7 +177,10 @@ export async function fulfillEpisodeRequest(requestId: string, claimToken?: Date
   }
 
   const activeJob = await prisma.downloadJob.findFirst({
-    where: { status: { in: ACTIVE_JOB_STATUSES }, nzbFile: { episodeId: episode.id } },
+    where: {
+      status: { in: ACTIVE_JOB_STATUSES },
+      nzbFile: { episodeId: episode.id, ...(request.manualGuid && { indexerGuid: request.manualGuid }) },
+    },
     select: { nzbFileId: true },
   });
   if (activeJob) {
@@ -181,7 +190,6 @@ export async function fulfillEpisodeRequest(requestId: string, claimToken?: Date
 
   try {
     let candidates = await rankEpisodeCandidates(episode.show.tmdbId, episode.season, episode.episode);
-    candidates = candidates.filter((c) => Number.isSafeInteger(c.size) && c.size > 0);
     if (request.manualGuid) candidates = candidates.filter((c) => c.guid === request.manualGuid);
     if (candidates.length === 0) {
       await markWaiting(request, "no_german");
@@ -270,15 +278,15 @@ export async function requestEpisodes(
   const requestIds: string[] = [];
   const claims: { id: string; token: Date }[] = [];
   for (const episodeId of episodeIds) {
-    // New rows start as "waiting" (without nextSearchAt) so the claim below
-    // treats new and restartable requests the same way.
+    // New rows start as "waiting" so the claim below treats new and restartable
+    // requests the same way; "done" is claimable so a lost version is searched again.
     const request = await prisma.episodeRequest.upsert({
       where: { userId_episodeId: { userId, episodeId } },
-      create: { userId, episodeId, manualGuid: manualGuid ?? null, status: "waiting" },
+      create: { userId, episodeId, manualGuid: manualGuid ?? null, status: "waiting", nextSearchAt: new Date() },
       update: { manualGuid: manualGuid ?? null },
     });
     requestIds.push(request.id);
-    const token = await claim(request.id, claimable(), {
+    const token = await claim(request.id, claimable(["waiting", "expired", "done"]), {
       createdAt: new Date(),
       waitReason: null,
       nextSearchAt: null,
@@ -317,7 +325,6 @@ export async function syncEpisodeRequests(): Promise<void> {
     },
   });
 
-  const requeued: string[] = [];
   for (const request of downloading) {
     try {
       if (request.nzbFileId && request.nzbFile?.s3Key) {
@@ -325,23 +332,20 @@ export async function syncEpisodeRequests(): Promise<void> {
       } else if (!request.nzbFile || request.nzbFile.downloadJobs.length === 0) {
         await prisma.episodeRequest.update({
           where: { id: request.id },
-          data: { status: "waiting", waitReason: null, nextSearchAt: new Date() },
+          data: { status: "waiting", waitReason: null, nextSearchAt: new Date(Date.now() + RETRY_MS) },
         });
-        requeued.push(request.id);
       }
     } catch (err) {
       console.error(`[episode-requests] Sync of downloading request ${request.id} failed:`, err);
     }
   }
 
-  // Requests requeued above are searched on the next run, not in this one.
   const due = await prisma.episodeRequest.findMany({
     where: {
       OR: [
         { status: "waiting", nextSearchAt: { lte: new Date() } },
         { status: "searching", updatedAt: { lt: new Date(Date.now() - STALE_SEARCH_MS) } },
       ],
-      id: { notIn: requeued },
     },
     orderBy: { createdAt: "asc" },
     take: SYNC_BATCH,

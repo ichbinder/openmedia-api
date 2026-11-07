@@ -32,7 +32,7 @@ export function createApp() {
   app.use("/auth", authRoutes);
   app.use("/watchlist", watchlistRoutes);
   app.use("/nzb", nzbRoutes);
-app.use("/series", seriesRoutes);
+  app.use("/series", seriesRoutes);
   app.use("/downloads", downloadsRoutes);
   app.use("/uploads", uploadRoutes);
   app.use("/storage", storageRoutes);

@@ -21,7 +21,7 @@ vi.mock("./treasure-maps.js", async (importOriginal) => {
 
 import { getTmdbEpisodeById, getTmdbSeasonById } from "./tmdb.js";
 import { downloadNzb, getDownloadBudget, IndexerError, searchEpisode, toRelease } from "./treasure-maps.js";
-import { fulfillEpisodeRequest, requestEpisodes, syncEpisodeRequests } from "./episode-requests.js";
+import { fulfillEpisodeRequest, rankEpisodeCandidates, requestEpisodes, syncEpisodeRequests } from "./episode-requests.js";
 
 const mockEpisode = vi.mocked(getTmdbEpisodeById);
 const mockSeason = vi.mocked(getTmdbSeasonById);
@@ -184,6 +184,92 @@ describe("requestEpisodes for one episode", () => {
   });
 });
 
+describe("manual picks and re-requests", () => {
+  it("downloads a manually picked release instead of adopting another user's job for a different one", async () => {
+    const [a, b] = [await createUser(), await createUser()];
+    await requestEpisodes(a.id, 95396, 2, 5);
+
+    const views = await requestEpisodes(b.id, 95396, 2, 5, SECOND);
+
+    expect(views[0].status).toBe("downloading");
+    const jobs = await prisma.downloadJob.findMany({ include: { nzbFile: true } });
+    expect(jobs.map((j) => j.nzbFile.indexerGuid).sort()).toEqual([BEST, SECOND].sort());
+    const reqB = await prisma.episodeRequest.findFirstOrThrow({ where: { userId: b.id }, include: { nzbFile: true } });
+    expect(reqB.nzbFile?.indexerGuid).toBe(SECOND);
+  });
+
+  it("searches again when a done request's file lost its s3Key", async () => {
+    const episode = await createEpisodeRow();
+    const user = await createUser();
+    const file = await prisma.nzbFile.create({
+      data: { hash: "h-evicted", originalFilename: "e.nzb", episodeId: episode.id, indexerGuid: BEST },
+    });
+    await createRequest(user.id, episode.id, { status: "done", nzbFileId: file.id });
+
+    const views = await requestEpisodes(user.id, 95396, 2, 5);
+
+    expect(mockSearch).toHaveBeenCalledTimes(1);
+    expect(views[0].status).toBe("downloading");
+  });
+
+  it("keeps a done request with a playable version done without searching", async () => {
+    const episode = await createEpisodeRow();
+    const user = await createUser();
+    const file = await prisma.nzbFile.create({
+      data: { hash: "h-ok", originalFilename: "ok.nzb", episodeId: episode.id, indexerGuid: BEST, s3Key: "media/x.mkv" },
+    });
+    await createRequest(user.id, episode.id, { status: "done", nzbFileId: file.id });
+    await prisma.userLibrary.create({ data: { userId: user.id, nzbFileId: file.id, removedAt: new Date() } });
+
+    const views = await requestEpisodes(user.id, 95396, 2, 5, BEST);
+
+    expect(views[0].status).toBe("done");
+    expect(mockSearch).not.toHaveBeenCalled();
+    const library = await prisma.userLibrary.findFirstOrThrow({ where: { userId: user.id } });
+    expect(library.removedAt).toBeNull();
+  });
+
+  it("searches for a manual pick on a done request whose playable version is a different release", async () => {
+    const episode = await createEpisodeRow();
+    const user = await createUser();
+    const file = await prisma.nzbFile.create({
+      data: { hash: "h-ok2", originalFilename: "ok.nzb", episodeId: episode.id, indexerGuid: BEST, s3Key: "media/x.mkv" },
+    });
+    await createRequest(user.id, episode.id, { status: "done", nzbFileId: file.id });
+
+    const views = await requestEpisodes(user.id, 95396, 2, 5, SECOND);
+
+    expect(mockDownload.mock.calls.map((c) => c[0])).toEqual([SECOND]);
+    expect(views[0].status).toBe("downloading");
+  });
+});
+
+describe("rankEpisodeCandidates", () => {
+  it("drops releases with an unusable size", async () => {
+    mockSearch.mockResolvedValue(releases.map((r) => (r.guid === BEST ? { ...r, size: 0 } : r)));
+
+    const ranked = await rankEpisodeCandidates(95396, 2, 5);
+
+    expect(ranked.map((r) => r.guid)).not.toContain(BEST);
+    expect(ranked.length).toBeGreaterThan(0);
+  });
+});
+
+describe("ingest file data", () => {
+  it("stores indexer language names as nzb-parser codes", async () => {
+    mockSearch.mockResolvedValue(
+      releases.map((r) => (r.guid === BEST ? { ...r, audioLanguages: ["German", "English"], subtitles: ["German", "Klingon"] } : r)),
+    );
+    const user = await createUser();
+
+    await requestEpisodes(user.id, 95396, 2, 5);
+
+    const file = await prisma.nzbFile.findFirstOrThrow({ where: { indexerGuid: BEST } });
+    expect(file.audioLanguages).toEqual(["de", "en"]);
+    expect(file.subtitleLanguages).toEqual(["de", "klingon"]);
+  });
+});
+
 describe("fulfillEpisodeRequest", () => {
   it("lets only one of two concurrent calls work on a waiting request", async () => {
     const episode = await createEpisodeRow();
@@ -295,6 +381,6 @@ describe("syncEpisodeRequests", () => {
 
     const req = await prisma.episodeRequest.findFirstOrThrow();
     expect(req.status).toBe("waiting");
-    expect(req.nextSearchAt!.getTime()).toBeLessThanOrEqual(Date.now());
+    expect(req.nextSearchAt!.getTime() - Date.now()).toBeGreaterThan(59 * 60 * 1000);
   });
 });

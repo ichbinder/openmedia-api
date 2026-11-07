@@ -166,9 +166,9 @@ model NzbFile {
   episode   NzbEpisode? @relation(fields: [episodeId], references: [id], onDelete: Cascade)
   episodeId String?     @map("episode_id")
 
-  downloadJobs DownloadJob[]
-  uploadJobs   UploadJob[]
-  libraryUsers UserLibrary[]
+  downloadJobs    DownloadJob[]
+  uploadJobs      UploadJob[]
+  libraryUsers    UserLibrary[]
   episodeRequests EpisodeRequest[]
 
   @@index([movieId])

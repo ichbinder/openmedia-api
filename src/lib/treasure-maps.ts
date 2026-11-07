@@ -74,7 +74,9 @@ async function send(url: URL, apiKey: string): Promise<Response> {
 }
 
 async function request(path: string): Promise<Response> {
-  const entry = await getEntry("indexer", "treasureMapsApiKey", true);
+  const entry = await getEntry("indexer", "treasureMapsApiKey", true).catch(() => {
+    throw new IndexerError("not_configured");
+  });
   if (!entry?.value) throw new IndexerError("not_configured");
   let url = new URL(`${BASE_URL}${path}`);
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
@@ -142,11 +144,11 @@ export function searchEpisode(tmdbId: number, season: number, episode: number): 
 export async function downloadNzb(guid: string): Promise<string> {
   if (!GUID_PATTERN.test(guid)) throw new IndexerError("http", 400);
   const res = await request(`/releases/${guid}/download`);
-  try {
-    return await res.text();
-  } catch {
+  const body = await res.text().catch(() => {
     throw new IndexerError("http");
-  }
+  });
+  if (body.length < 50 || !body.includes("<nzb")) throw new IndexerError("http");
+  return body;
 }
 
 export async function getDownloadBudget(): Promise<{ used: number; max: number }> {

@@ -7,6 +7,7 @@ vi.mock("./config-service.js", () => ({ getEntry: (...a: unknown[]) => getEntry(
 
 const KEY = "secret-api-key-123";
 const GUID = "41167b5c8fbfef7ffea529a9093284b6";
+const NZB = '<?xml version="1.0"?><nzb xmlns="http://www.newzbin.com/DTD/2003/nzb"></nzb>';
 
 function reply(status: number, body: unknown) {
   return {
@@ -120,10 +121,31 @@ describe("treasure-maps client", () => {
   });
 
   it("downloadNzb returns the NZB body", async () => {
-    fetchMock.mockResolvedValue(reply(200, "<nzb/>"));
+    fetchMock.mockResolvedValue(reply(200, NZB));
     const { downloadNzb } = await import("./treasure-maps.js");
-    expect(await downloadNzb(GUID)).toBe("<nzb/>");
+    expect(await downloadNzb(GUID)).toBe(NZB);
     expect(fetchMock.mock.calls[0][0]).toBe(`https://treasure-maps.com/api/v1/releases/${GUID}/download`);
+  });
+
+  it.each([["a short body", "<nzb/>"], ["a body without <nzb", `<html>${"x".repeat(100)}</html>`]])(
+    "downloadNzb rejects %s as IndexerError http",
+    async (_label, body) => {
+      fetchMock.mockResolvedValue(reply(200, body));
+      const { downloadNzb, IndexerError } = await import("./treasure-maps.js");
+      const err = await downloadNzb(GUID).catch((e) => e);
+      expect(err).toBeInstanceOf(IndexerError);
+      expect(err.reason).toBe("http");
+    },
+  );
+
+  it("maps a failing key decryption to not_configured without the original message", async () => {
+    getEntry.mockRejectedValue(new Error(`bad decrypt ${KEY}`));
+    const { searchEpisode, IndexerError } = await import("./treasure-maps.js");
+    const err = await searchEpisode(3, 3, 3).catch((e) => e);
+    expect(err).toBeInstanceOf(IndexerError);
+    expect(err.reason).toBe("not_configured");
+    expect(err.message).not.toContain("decrypt");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("downloadNzb rejects an invalid guid without fetching", async () => {
@@ -137,9 +159,9 @@ describe("treasure-maps client", () => {
   it("does not send the key to a cross-origin redirect target", async () => {
     fetchMock
       .mockResolvedValueOnce(reply(302, { location: "https://cdn.example.org/n.nzb" }))
-      .mockResolvedValueOnce(reply(200, "<nzb/>"));
+      .mockResolvedValueOnce(reply(200, NZB));
     const { downloadNzb } = await import("./treasure-maps.js");
-    expect(await downloadNzb(GUID)).toBe("<nzb/>");
+    expect(await downloadNzb(GUID)).toBe(NZB);
     const [url, init] = fetchMock.mock.calls[1];
     expect(String(url)).toBe("https://cdn.example.org/n.nzb");
     expect(init.headers["X-API-Key"]).toBeUndefined();
@@ -148,7 +170,7 @@ describe("treasure-maps client", () => {
   it("keeps the key on a same-origin redirect", async () => {
     fetchMock
       .mockResolvedValueOnce(reply(302, { location: "/api/v1/files/n.nzb" }))
-      .mockResolvedValueOnce(reply(200, "<nzb/>"));
+      .mockResolvedValueOnce(reply(200, NZB));
     const { downloadNzb } = await import("./treasure-maps.js");
     await downloadNzb(GUID);
     const [url, init] = fetchMock.mock.calls[1];
