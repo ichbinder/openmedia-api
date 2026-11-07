@@ -32,7 +32,8 @@ import prisma from "./prisma.js";
 import { getServer, deleteServer, listServers, isHetznerConfigured } from "./hetzner.js";
 import { removeMapping } from "./caddy-mapping.js";
 import { markJobFailed } from "./job-failure.js";
-import { searchTmdbMovie } from "./tmdb.js";
+import { searchTmdbMovie, searchTmdbShowEpisode, type TmdbShowResult, type TmdbEpisodeResult } from "./tmdb.js";
+import { upsertEpisode } from "./episode-resolver.js";
 import { parseNzbName } from "./nzb-parser.js";
 import { deleteNzbFromService } from "./nzb-service.js";
 import { provisionDownload } from "./provisioner.js";
@@ -126,7 +127,7 @@ export async function retryTmdbForPendingReviews(
       tmdbRetryCount: { lt: MAX_TMDB_RETRIES },
     },
     include: {
-      nzbFile: { select: { id: true, hash: true, originalFilename: true, movieId: true } },
+      nzbFile: { select: { id: true, hash: true, originalFilename: true, movieId: true, episodeId: true } },
     },
   });
 
@@ -144,7 +145,7 @@ export async function retryTmdbForPendingReviews(
     // Race: the NzbFile was already assigned between the query and this
     // iteration (manual assign-movie, or a concurrent retry tick). Just
     // flip this job to queued — the NzbFile already has a movieId.
-    if (job.nzbFile.movieId !== null) {
+    if (job.nzbFile.movieId !== null || job.nzbFile.episodeId !== null) {
       await flipNeedsReviewJobsToQueued(job.nzbFileId);
       const msg = `TMDB retry skipped: NzbFile ${hash}... already assigned — flipped sibling jobs`;
       result.details.push(msg);
@@ -153,6 +154,29 @@ export async function retryTmdbForPendingReviews(
     }
 
     const parsed = parseNzbName(job.nzbFile.originalFilename);
+
+    if (parsed.season !== null && parsed.episode !== null) {
+      const showResult = await searchTmdbShowEpisode(parsed.title, parsed.year, parsed.season, parsed.episode);
+      if (showResult.status === "found") {
+        const assigned = await assignEpisodeToNzbFile(
+          job.nzbFileId,
+          showResult.show,
+          parsed.season,
+          parsed.episode,
+          showResult.episode,
+        );
+        if (assigned) {
+          result.tmdbAutoAssigned++;
+          const msg = `TMDB retry success: hash ${hash}... → auto-assigned to ${showResult.show.titleEn} S${parsed.season}E${parsed.episode}`;
+          result.details.push(msg);
+          console.log(`[reconciler] ${msg}`);
+        }
+        continue;
+      }
+      await scheduleNextTmdbRetry(job, hash, result, now);
+      continue;
+    }
+
     const tmdbResult = await searchTmdbMovie(parsed.title, parsed.year);
 
     if (tmdbResult.status === "found") {
@@ -167,40 +191,99 @@ export async function retryTmdbForPendingReviews(
       continue;
     }
 
-    // Failure (not_found, error, disabled) — bump retry counter and schedule
-    // the next attempt. Apply to ALL jobs on this NzbFile that are still in
-    // needs_review and still under the retry cap.
-    const newCount = job.tmdbRetryCount + 1;
-    // BACKOFF[newCount - 1] = delay after this failure before the next attempt.
-    // Clamped defensively in case the schedule is ever shorter than MAX.
-    const backoffIndex = Math.min(Math.max(newCount - 1, 0), TMDB_RETRY_BACKOFF_MS.length - 1);
-    const newRetryAfter =
-      newCount >= MAX_TMDB_RETRIES
-        ? null
-        : new Date(now.getTime() + TMDB_RETRY_BACKOFF_MS[backoffIndex]);
-
-    await prisma.downloadJob.updateMany({
-      where: {
-        nzbFileId: job.nzbFileId,
-        status: "needs_review",
-        tmdbRetryCount: { lt: MAX_TMDB_RETRIES },
-      },
-      data: {
-        tmdbRetryCount: { increment: 1 },
-        tmdbRetryAfter: newRetryAfter,
-      },
-    });
-
-    if (newCount >= MAX_TMDB_RETRIES) {
-      const msg = `TMDB retry max reached: hash ${hash}... — waiting for manual assign`;
-      result.details.push(msg);
-      console.log(`[reconciler] ${msg}`);
-    } else {
-      const msg = `TMDB retry failed (attempt ${newCount}/${MAX_TMDB_RETRIES}): hash ${hash}... — next at ${newRetryAfter?.toISOString()}`;
-      result.details.push(msg);
-      console.log(`[reconciler] ${msg}`);
-    }
+    await scheduleNextTmdbRetry(job, hash, result, now);
   }
+}
+
+/**
+ * Failure path of a TMDB retry (not_found, error, disabled): bump the retry
+ * counter on all still-pending jobs of the NzbFile and schedule the next attempt.
+ */
+async function scheduleNextTmdbRetry(
+  job: { nzbFileId: string; tmdbRetryCount: number },
+  hash: string,
+  result: ReconcileResult,
+  now: Date,
+): Promise<void> {
+  const newCount = job.tmdbRetryCount + 1;
+  // BACKOFF[newCount - 1] = delay after this failure before the next attempt.
+  // Clamped defensively in case the schedule is ever shorter than MAX.
+  const backoffIndex = Math.min(Math.max(newCount - 1, 0), TMDB_RETRY_BACKOFF_MS.length - 1);
+  const newRetryAfter =
+    newCount >= MAX_TMDB_RETRIES
+      ? null
+      : new Date(now.getTime() + TMDB_RETRY_BACKOFF_MS[backoffIndex]);
+
+  await prisma.downloadJob.updateMany({
+    where: {
+      nzbFileId: job.nzbFileId,
+      status: "needs_review",
+      tmdbRetryCount: { lt: MAX_TMDB_RETRIES },
+    },
+    data: {
+      tmdbRetryCount: { increment: 1 },
+      tmdbRetryAfter: newRetryAfter,
+    },
+  });
+
+  if (newCount >= MAX_TMDB_RETRIES) {
+    const msg = `TMDB retry max reached: hash ${hash}... — waiting for manual assign`;
+    result.details.push(msg);
+    console.log(`[reconciler] ${msg}`);
+  } else {
+    const msg = `TMDB retry failed (attempt ${newCount}/${MAX_TMDB_RETRIES}): hash ${hash}... — next at ${newRetryAfter?.toISOString()}`;
+    result.details.push(msg);
+    console.log(`[reconciler] ${msg}`);
+  }
+}
+
+/**
+ * Episode counterpart of assignMovieToNzbFile: reuse-or-create show and
+ * episode, link the NzbFile and flip sibling needs_review jobs to queued.
+ */
+async function assignEpisodeToNzbFile(
+  nzbFileId: string,
+  show: TmdbShowResult,
+  season: number,
+  episode: number,
+  tmdbEpisode: TmdbEpisodeResult | null,
+): Promise<boolean> {
+  let flippedJobIds: string[] = [];
+  try {
+    flippedJobIds = await prisma.$transaction(async (tx) => {
+      const fresh = await tx.nzbFile.findUnique({
+        where: { id: nzbFileId },
+        select: { movieId: true, episodeId: true },
+      });
+      if (!fresh) return [];
+
+      if (fresh.movieId === null && fresh.episodeId === null) {
+        const episodeId = await upsertEpisode(tx, show, season, episode, tmdbEpisode);
+        await tx.nzbFile.update({ where: { id: nzbFileId }, data: { episodeId } });
+      }
+
+      const siblings = await tx.downloadJob.findMany({
+        where: { nzbFileId, status: "needs_review" },
+        select: { id: true },
+      });
+      await tx.downloadJob.updateMany({
+        where: { nzbFileId, status: "needs_review" },
+        data: { status: "queued", error: null, reviewExpiresAt: null, tmdbRetryAfter: null },
+      });
+      return siblings.map((j) => j.id);
+    });
+  } catch (err: any) {
+    console.error(`[reconciler] assignEpisodeToNzbFile failed for ${nzbFileId}:`, err);
+    return false;
+  }
+
+  for (const jobId of flippedJobIds) {
+    provisionDownload(jobId).catch((err) => {
+      console.error(`[reconciler] Auto-provision failed for flipped job ${jobId}:`, err);
+    });
+  }
+
+  return true;
 }
 
 /**
@@ -427,7 +510,7 @@ export async function cleanupExpiredReviews(
     // between our initial query and now).
     const freshFile = await prisma.nzbFile.findUnique({
       where: { id: job.nzbFileId },
-      select: { id: true, movieId: true, s3Key: true, hash: true },
+      select: { id: true, movieId: true, episodeId: true, s3Key: true, hash: true },
     });
 
     if (!freshFile) {
@@ -435,8 +518,8 @@ export async function cleanupExpiredReviews(
       continue;
     }
 
-    if (freshFile.movieId !== null) {
-      const keepMsg = `Cleanup: kept NzbFile ${hash}... (was assigned to a movie in the meantime)`;
+    if (freshFile.movieId !== null || freshFile.episodeId !== null) {
+      const keepMsg = `Cleanup: kept NzbFile ${hash}... (was assigned in the meantime)`;
       result.details.push(keepMsg);
       console.log(`[reconciler] ${keepMsg}`);
       continue;

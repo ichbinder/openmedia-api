@@ -11,6 +11,7 @@ import { storeNzbInService, NzbServiceUnavailableError } from "../lib/nzb-servic
 import { getDownloadVpsConfig, getUploadVpsConfig } from "../lib/vps-config.js";
 import { generateServiceToken, storeServiceToken, deleteServiceTokens } from "../lib/service-token.js";
 import { drainQueue } from "../lib/queue-drain.js";
+import { resolveEpisodeFromTmdb, upsertEpisode } from "../lib/episode-resolver.js";
 
 const router = Router();
 
@@ -268,7 +269,7 @@ router.post("/jobs", requireAuth, async (req: AuthRequest, res: Response) => {
     // NzbFile must be assigned to a movie before a download job can be created.
     // Files in needs_review state (movieId=null) must be routed through the
     // manual assignment endpoint instead.
-    if (!nzbFile.movieId) {
+    if (!nzbFile.movieId && !nzbFile.episodeId) {
       res.status(409).json({
         error: "NZB-Datei wartet auf manuelle Film-Zuordnung.",
         reason: "needs_review",
@@ -593,8 +594,12 @@ router.post("/request", requireAuth, async (req: AuthRequest, res: Response) => 
     const effectiveFilename = filename || `${title}.nzb`;
     const parsed = parseNzbName(effectiveFilename);
 
-    // --- Resolve movie via TMDB (or mark for review) ---
-    const movieResolution = await resolveMovieFromTmdb(parsed.title, parsed.year, title);
+    const isEpisode = parsed.season !== null && parsed.episode !== null;
+
+    // --- Resolve movie or episode via TMDB (or mark for review) ---
+    const movieResolution = isEpisode
+      ? await resolveEpisodeFromTmdb(parsed, title)
+      : await resolveMovieFromTmdb(parsed.title, parsed.year, title);
 
     // TMDB is completely disabled (no API key configured). This is a server
     // misconfiguration, not a transient or "no match" condition — fail hard
@@ -633,8 +638,17 @@ router.post("/request", requireAuth, async (req: AuthRequest, res: Response) => 
     const result = await prisma.$transaction(async (tx) => {
       let movieId: string | null = null;
       let movie: { id: string; titleEn: string } | null = null;
+      let episodeId: string | null = null;
 
-      if (movieResolution.source === "tmdb-found") {
+      if (movieResolution.source === "tmdb-found" && "show" in movieResolution) {
+        episodeId = await upsertEpisode(
+          tx,
+          movieResolution.show,
+          parsed.season!,
+          parsed.episode!,
+          movieResolution.episode,
+        );
+      } else if (movieResolution.source === "tmdb-found") {
         // Atomic reuse-or-create on the tmdbId unique constraint.
         // Handles TOCTOU race: if findUnique returns null but another request
         // creates the same tmdbId between findUnique and create, we catch P2002
@@ -681,6 +695,7 @@ router.post("/request", requireAuth, async (req: AuthRequest, res: Response) => 
       const nzbFile = await tx.nzbFile.create({
         data: {
           movieId,
+          episodeId,
           hash,
           originalFilename: effectiveFilename,
           fileSize: BigInt(Buffer.byteLength(nzbContent, "utf-8")),
@@ -729,7 +744,22 @@ router.post("/request", requireAuth, async (req: AuthRequest, res: Response) => 
     // Reload job with relations for response
     const fullJob = await prisma.downloadJob.findUnique({
       where: { id: result.job.id },
-      include: { nzbFile: { include: { movie: true } } },
+      include: {
+        nzbFile: {
+          include: {
+            movie: true,
+            episode: {
+              select: {
+                id: true,
+                season: true,
+                episode: true,
+                titleDe: true,
+                show: { select: { tmdbId: true, titleDe: true, titleEn: true, year: true, posterPath: true } },
+              },
+            },
+          },
+        },
+      },
     });
 
     if (!fullJob) {
