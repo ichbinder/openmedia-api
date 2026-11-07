@@ -310,6 +310,41 @@ describe("requestEpisodes for a season", () => {
   });
 });
 
+describe("season re-requests", () => {
+  it("leaves done episodes with a playable version alone and reclaims evicted ones", async () => {
+    mockSeason.mockResolvedValue({
+      status: "found",
+      show,
+      episodes: [
+        { episode: 5, titleDe: "Fünf", airDate: "2025-02-14", runtime: 50 },
+        { episode: 6, titleDe: "Sechs", airDate: "2025-02-21", runtime: 50 },
+      ],
+    });
+    mockSearch.mockResolvedValue([]);
+    const kept = await createEpisodeRow();
+    const evicted = await prisma.nzbEpisode.create({ data: { showId: kept.showId, season: 2, episode: 6 } });
+    const user = await createUser();
+    const file = await prisma.nzbFile.create({
+      data: { hash: "h-kept", originalFilename: "k.nzb", episodeId: kept.id, s3Key: "media/k.mkv" },
+    });
+    const gone = await prisma.nzbFile.create({ data: { hash: "h-gone", originalFilename: "g.nzb", episodeId: evicted.id } });
+    await createRequest(user.id, kept.id, { status: "done", nzbFileId: file.id });
+    await createRequest(user.id, evicted.id, { status: "done", nzbFileId: gone.id });
+    await prisma.userLibrary.create({ data: { userId: user.id, nzbFileId: file.id, removedAt: new Date() } });
+
+    const views = await requestEpisodes(user.id, 95396, 2);
+
+    expect(views.map((v) => [v.episode, v.status])).toEqual([[5, "done"], [6, "searching"]]);
+    await vi.waitFor(async () => {
+      const after = await prisma.episodeRequest.findFirstOrThrow({ where: { episodeId: evicted.id } });
+      expect(after.status).toBe("waiting");
+    });
+    expect(mockSearch.mock.calls.map((c) => c[2])).toEqual([6]);
+    const library = await prisma.userLibrary.findFirstOrThrow({ where: { userId: user.id } });
+    expect(library.removedAt).not.toBeNull();
+  });
+});
+
 describe("syncEpisodeRequests", () => {
   it("expires waiting requests older than 30 days without searching", async () => {
     const episode = await createEpisodeRow();

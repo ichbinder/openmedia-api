@@ -275,18 +275,29 @@ export async function requestEpisodes(
     return ids;
   });
 
+  // A season request leaves done episodes with a playable version alone, so it
+  // does not re-add episodes the user removed from the library.
+  const restartable =
+    episode !== undefined
+      ? claimable(["waiting", "expired", "done"])
+      : {
+          OR: [
+            claimable(),
+            { status: "done", episode: { nzbFiles: { none: { s3Key: { not: null }, status: { not: "broken" } } } } },
+          ],
+        };
   const requestIds: string[] = [];
   const claims: { id: string; token: Date }[] = [];
   for (const episodeId of episodeIds) {
     // New rows start as "waiting" so the claim below treats new and restartable
-    // requests the same way; "done" is claimable so a lost version is searched again.
+    // requests the same way.
     const request = await prisma.episodeRequest.upsert({
       where: { userId_episodeId: { userId, episodeId } },
       create: { userId, episodeId, manualGuid: manualGuid ?? null, status: "waiting", nextSearchAt: new Date() },
       update: { manualGuid: manualGuid ?? null },
     });
     requestIds.push(request.id);
-    const token = await claim(request.id, claimable(["waiting", "expired", "done"]), {
+    const token = await claim(request.id, restartable, {
       createdAt: new Date(),
       waitReason: null,
       nextSearchAt: null,
