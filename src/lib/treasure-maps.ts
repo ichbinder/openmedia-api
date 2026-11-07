@@ -107,7 +107,7 @@ function videoWidth(release: RawRelease): number | null {
   return Number.isNaN(width) ? null : width;
 }
 
-function toRelease(raw: RawRelease): IndexerRelease {
+export function toRelease(raw: RawRelease): IndexerRelease {
   return {
     guid: raw.guid,
     title: raw.title,
