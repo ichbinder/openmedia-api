@@ -63,7 +63,7 @@ async function send(url: URL, apiKey: string): Promise<Response> {
   const headers: Record<string, string> = {};
   if (url.origin === new URL(BASE_URL).origin) headers["X-API-Key"] = apiKey;
   try {
-    return await fetch(url, {
+    return await fetch(url.href, {
       headers,
       redirect: "manual",
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
