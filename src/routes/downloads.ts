@@ -1,4 +1,3 @@
-import { createHash } from "crypto";
 import { Router, type Response } from "express";
 import prisma from "../lib/prisma.js";
 import { requireAuth, requireServiceOrUserAuth, type AuthRequest } from "../middleware/auth.js";
@@ -6,12 +5,11 @@ import { parseNzbName } from "../lib/nzb-parser.js";
 import { sendToSabnzbd, getSabnzbdStatus, getSabnzbdConfigSummary } from "../lib/sabnzbd.js";
 import { searchTmdbMovie, searchTmdbMovieById, type TmdbMovieResult } from "../lib/tmdb.js";
 import { markJobFailed } from "../lib/job-failure.js";
-import { computeReviewExpiresAt, computeInitialTmdbRetryAfter } from "../lib/review-config.js";
-import { storeNzbInService, NzbServiceUnavailableError } from "../lib/nzb-service.js";
 import { getDownloadVpsConfig, getUploadVpsConfig } from "../lib/vps-config.js";
 import { generateServiceToken, storeServiceToken, deleteServiceTokens } from "../lib/service-token.js";
 import { drainQueue } from "../lib/queue-drain.js";
-import { resolveEpisodeFromTmdb, upsertEpisode } from "../lib/episode-resolver.js";
+import { resolveEpisodeFromTmdb } from "../lib/episode-resolver.js";
+import { ingestNzb, JOB_NZB_FILE_INCLUDE } from "../lib/nzb-ingest.js";
 
 const router = Router();
 
@@ -88,19 +86,6 @@ async function resolveMovieFromTmdb(
   );
   return { source: "tmdb-found", tmdb: result.movie };
 }
-
-const JOB_NZB_FILE_INCLUDE = {
-  movie: true,
-  episode: {
-    select: {
-      id: true,
-      season: true,
-      episode: true,
-      titleDe: true,
-      show: { select: { tmdbId: true, titleDe: true, titleEn: true, year: true, posterPath: true } },
-    },
-  },
-} as const;
 
 const NZB_API_URL = process.env.NZB_API_URL || "http://localhost:4100";
 
@@ -398,389 +383,77 @@ router.post("/request", requireAuth, async (req: AuthRequest, res: Response) => 
       return;
     }
 
-    // --- Hash for deduplication ---
-    const hash = createHash("sha256").update(nzbContent).digest("hex");
-    console.log(`[nzb-request] Processing: "${title}" (hash: ${hash.slice(0, 12)}...)`);
-
-    // --- Check for existing NzbFile with same hash (serializable to prevent race conditions) ---
-    const existingFile = await prisma.nzbFile.findUnique({
-      where: { hash },
-      include: { movie: true },
+    const result = await ingestNzb({
+      nzbContent,
+      title,
+      filename,
+      userId: req.user?.userId || null,
+      resolve: (parsed) =>
+        parsed.season !== null && parsed.episode !== null
+          ? resolveEpisodeFromTmdb(parsed, title)
+          : resolveMovieFromTmdb(parsed.title, parsed.year, title),
     });
 
-    if (existingFile) {
-      // --- Check if NzbFile is marked as broken (≥3 failures) ---
-      // Note: if the file is already on S3, broken status is irrelevant —
-      // the user can still stream it. So we check S3 first.
-      // --- Check if file is already on S3 (no download needed) ---
-      if (existingFile.s3Key) {
-        try {
-          const { fileExists } = await import("../lib/s3.js");
-          const onS3 = await fileExists(existingFile.s3Key, existingFile.s3Bucket || undefined);
-
-          if (onS3) {
-            console.log(
-              `[nzb-request] Already on S3: ${hash.slice(0, 12)}... → ${existingFile.s3Key} — skipping download`
-            );
-            res.status(200).json({
-              alreadyAvailable: true,
-              message: "Film ist bereits heruntergeladen und verfügbar.",
-              movie: existingFile.movie,
-              nzbFile: {
-                id: existingFile.id,
-                hash: existingFile.hash,
-                resolution: existingFile.resolution,
-                s3Key: existingFile.s3Key,
-                s3StreamKey: existingFile.s3StreamKey,
-              },
-            });
-            return;
-          }
-
-          // S3 key set but file gone (LRU cleanup) — reset DB and continue with download
-          console.warn(
-            `[nzb-request] S3 key set but file gone: ${hash.slice(0, 12)}... → resetting and re-downloading`
-          );
-          await prisma.nzbFile.update({
-            where: { id: existingFile.id },
-            data: { s3Key: null, s3StreamKey: null, s3Bucket: null, fileExtension: null, downloadedAt: null },
-          });
-        } catch (err: any) {
-          // S3 not configured or unreachable — continue with download as fallback
-          console.warn(`[nzb-request] S3 check failed: ${err.message} — continuing with download`);
-        }
-      }
-
-      // --- Reject broken NzbFiles (≥3 failures) ---
-      // The file isn't on S3 and is known to be broken. Don't waste a VPS.
-      if (existingFile.status === "broken") {
-        console.log(
-          `[nzb-request] Rejected broken NZB: ${hash.slice(0, 12)}... (${existingFile.failedAttempts} failures)`
-        );
+    switch (result.kind) {
+      case "already-available":
+        res.status(200).json({
+          alreadyAvailable: true,
+          message: "Film ist bereits heruntergeladen und verfügbar.",
+          movie: result.file.movie,
+          nzbFile: {
+            id: result.file.id,
+            hash: result.file.hash,
+            resolution: result.file.resolution,
+            s3Key: result.file.s3Key,
+            s3StreamKey: result.file.s3StreamKey,
+          },
+        });
+        return;
+      case "broken":
         res.status(410).json({
           error: "Diese NZB-Datei ist als kaputt markiert.",
-          reason: existingFile.brokenReason || `Download ${existingFile.failedAttempts}x fehlgeschlagen.`,
-          failedAttempts: existingFile.failedAttempts,
-          movie: existingFile.movie,
+          reason: result.file.brokenReason || `Download ${result.file.failedAttempts}x fehlgeschlagen.`,
+          failedAttempts: result.file.failedAttempts,
+          movie: result.file.movie,
           hint: "Bitte suche eine andere NZB-Version dieses Films.",
         });
         return;
-      }
-
-      // Ensure NZB exists on NZB service BEFORE creating any DB rows. If the
-      // service is down, fail fast with 503 so we don't leave an orphan
-      // DownloadJob pointing at an NZB the VPS can't fetch.
-      try {
-        await storeNzbInService(hash, nzbContent);
-      } catch (err) {
-        if (err instanceof NzbServiceUnavailableError) {
-          res.status(503).json({
-            error: "NZB-Service nicht erreichbar — Download abgebrochen.",
-            reason: "nzb_service_unavailable",
-          });
-          return;
-        }
-        throw err;
-      }
-
-      // File already known — atomic check-and-create inside a transaction.
-      // We re-read the NzbFile's movieId INSIDE the transaction so a concurrent
-      // /assign-movie call (landing in S02) can't create a TOCTOU where we
-      // decide "needs_review" based on a stale null and leave a stuck job.
-      let reuseResult;
-      try {
-        reuseResult = await prisma.$transaction(async (tx) => {
-          // Fresh read: movieId may have been set between the initial findUnique
-          // and the start of this transaction (concurrent assign-movie, reconciler
-          // TMDB retry, etc.).
-          const freshFile = await tx.nzbFile.findUnique({
-            where: { id: existingFile.id },
-            select: { id: true, movieId: true, episodeId: true },
-          });
-
-          if (!freshFile) {
-            // Extremely unlikely — NzbFile vanished between reads. Treat as not found.
-            return { missing: true as const };
-          }
-
-          const reuseNeedsReview = freshFile.movieId === null && freshFile.episodeId === null;
-
-          // Cross-user conflict: any active running download for this file blocks
-          // a new job (the second user should wait for the first download to
-          // finish, then they share the result via S3).
-          const runningJob = await tx.downloadJob.findFirst({
-            where: {
-              nzbFileId: existingFile.id,
-              status: { in: ["queued", "provisioning", "downloading", "uploading"] },
-            },
-          });
-
-          if (runningJob) {
-            return { conflict: true as const, activeJob: runningJob };
-          }
-
-          // Per-user needs_review check: if THIS user already has a pending
-          // review for the same file, surface that existing job rather than
-          // spamming a duplicate row. Other users may have their own review
-          // jobs in parallel — that's intentional.
-          const ownReview = await tx.downloadJob.findFirst({
-            where: {
-              nzbFileId: existingFile.id,
-              status: "needs_review",
-              userId: req.user?.userId || null,
-            },
-          });
-
-          if (ownReview) {
-            return { conflict: true as const, activeJob: ownReview };
-          }
-
-          const job = await tx.downloadJob.create({
-            data: {
-              nzbFileId: existingFile.id,
-              userId: req.user?.userId || null,
-              ...(reuseNeedsReview && {
-                status: "needs_review",
-                reviewExpiresAt: computeReviewExpiresAt(),
-                // No retry hint here — we don't know whether the original
-                // upload failed via TMDB error or not_found. The reconciler
-                // will only retry rows whose tmdbRetryAfter is set.
-              }),
-            },
-            include: { nzbFile: { include: JOB_NZB_FILE_INCLUDE } },
-          });
-
-          return { conflict: false as const, job, reuseNeedsReview };
-        }, { isolationLevel: "Serializable" });
-      } catch (err: any) {
-        if (err?.code === "P2034" || err?.code === "40001") {
-          res.status(409).json({ error: "Gleichzeitiger Request — bitte erneut versuchen." });
-          return;
-        }
-        throw err;
-      }
-
-      if ("missing" in reuseResult) {
-        res.status(404).json({ error: "NZB-Datei wurde inzwischen entfernt." });
-        return;
-      }
-
-      if (reuseResult.conflict) {
-        res.status(409).json({
-          error: "Es läuft bereits ein Download für diese Datei.",
-          existingJobId: reuseResult.activeJob.id,
-          existingStatus: reuseResult.activeJob.status,
-        });
-        return;
-      }
-
-      const reuseNeedsReview = reuseResult.reuseNeedsReview;
-
-      if (reuseNeedsReview) {
-        console.log(
-          `[nzb-request] Reuse needs_review NzbFile ${hash.slice(0, 12)}... → new job ${reuseResult.job.id} (needs_review)`
-        );
-      } else {
-        console.log(`[nzb-request] Reusing existing NzbFile ${hash.slice(0, 12)}... → new job ${reuseResult.job.id}`);
-      }
-
-      res.status(201).json({
-        job: serializeJob(reuseResult.job),
-        reused: true,
-        needsReview: reuseNeedsReview,
-      });
-
-      // Trigger auto-provisioner — but skip needs_review jobs.
-      if (!reuseNeedsReview && process.env.AUTO_PROVISION !== "false") {
-        import("../lib/provisioner.js").then(({ provisionDownload }) => {
-          provisionDownload(reuseResult.job.id).catch((err) => {
-            console.error("[nzb-request] Auto-provision failed:", err);
-          });
-        }).catch((err) => {
-          console.error("[nzb-request] Failed to load provisioner module:", err);
-        });
-      }
-      return;
-    }
-
-    // --- Parse filename for metadata (if provided) ---
-    const effectiveFilename = filename || `${title}.nzb`;
-    const parsed = parseNzbName(effectiveFilename);
-
-    const isEpisode = parsed.season !== null && parsed.episode !== null;
-
-    // --- Resolve movie or episode via TMDB (or mark for review) ---
-    const movieResolution = isEpisode
-      ? await resolveEpisodeFromTmdb(parsed, title)
-      : await resolveMovieFromTmdb(parsed.title, parsed.year, title);
-
-    // TMDB is completely disabled (no API key configured). This is a server
-    // misconfiguration, not a transient or "no match" condition — fail hard
-    // so the ops team notices.
-    if (movieResolution.source === "tmdb-disabled") {
-      res.status(503).json({
-        error: "TMDB-Matching ist nicht verfügbar — Server-Konfiguration fehlt.",
-        reason: "tmdb_disabled",
-        hint: "Der Administrator muss TMDB_API_KEY setzen.",
-      });
-      return;
-    }
-
-    const isNeedsReview = movieResolution.source === "needs-review";
-
-    // Ensure NZB exists on NZB service BEFORE writing any DB rows. If the
-    // service is down, fail fast with 503 so we don't leave orphan
-    // NzbMovie/NzbFile/DownloadJob rows pointing at an NZB the VPS can't fetch.
-    try {
-      await storeNzbInService(hash, nzbContent);
-    } catch (err) {
-      if (err instanceof NzbServiceUnavailableError) {
+      case "service-unavailable":
         res.status(503).json({
           error: "NZB-Service nicht erreichbar — Download abgebrochen.",
           reason: "nzb_service_unavailable",
         });
         return;
-      }
-      throw err;
-    }
-
-    // --- Create NzbMovie (or reuse existing) + NzbFile + DownloadJob in one transaction ---
-    // For needs-review uploads, NzbMovie is skipped entirely and NzbFile is created
-    // with movieId=null. The DownloadJob is still created so the user sees it on the
-    // downloads page, but it enters status='needs_review' and is not provisioned.
-    const result = await prisma.$transaction(async (tx) => {
-      let movieId: string | null = null;
-      let movie: { id: string; titleEn: string } | null = null;
-      let episodeId: string | null = null;
-
-      if (movieResolution.source === "tmdb-found" && "show" in movieResolution) {
-        episodeId = await upsertEpisode(
-          tx,
-          movieResolution.show,
-          parsed.season!,
-          parsed.episode!,
-          movieResolution.episode,
-        );
-      } else if (movieResolution.source === "tmdb-found") {
-        // Atomic reuse-or-create on the tmdbId unique constraint.
-        // Handles TOCTOU race: if findUnique returns null but another request
-        // creates the same tmdbId between findUnique and create, we catch P2002
-        // and re-fetch the winner.
-        const t = movieResolution.tmdb;
-        const existing = await tx.nzbMovie.findUnique({ where: { tmdbId: t.tmdbId } });
-
-        if (existing) {
-          movie = existing;
-          console.log(
-            `[matching] TMDB ${t.tmdbId} → reusing existing NzbMovie ${existing.id.slice(0, 8)}...`
-          );
-        } else {
-          try {
-            movie = await tx.nzbMovie.create({
-              data: {
-                tmdbId: t.tmdbId,
-                imdbId: t.imdbId,
-                titleDe: t.titleDe,
-                titleEn: t.titleEn,
-                description: t.description,
-                year: t.year,
-                posterPath: t.posterPath,
-              },
-            });
-            console.log(`[matching] TMDB ${t.tmdbId} → created new NzbMovie ${movie.id.slice(0, 8)}...`);
-          } catch (err: any) {
-            // P2002: unique constraint — another request won the race
-            if (err?.code === "P2002") {
-              movie = await tx.nzbMovie.findUniqueOrThrow({ where: { tmdbId: t.tmdbId } });
-              console.log(
-                `[matching] TMDB ${t.tmdbId} → race detected, reusing winner ${movie.id.slice(0, 8)}...`
-              );
-            } else {
-              throw err;
-            }
-          }
-        }
-        movieId = movie.id;
-      }
-      // else: needs-review — NzbMovie is intentionally not created. The user must
-      // assign a movie via POST /downloads/jobs/:id/assign-movie before the job runs.
-
-      const nzbFile = await tx.nzbFile.create({
-        data: {
-          movieId,
-          episodeId,
-          hash,
-          originalFilename: effectiveFilename,
-          fileSize: BigInt(Buffer.byteLength(nzbContent, "utf-8")),
-          resolution: parsed.resolution,
-          audioLanguages: parsed.audioLanguages,
-          codec: parsed.codec,
-          source: "external",
-          releaseType: parsed.source || null,
-        },
-      });
-
-      const job = await tx.downloadJob.create({
-        data: {
-          nzbFileId: nzbFile.id,
-          userId: req.user?.userId || null,
-          // needs_review jobs wait for manual assignment or background TMDB retry.
-          // The reconciler will fail and clean them up after reviewExpiresAt.
-          ...(isNeedsReview && {
-            status: "needs_review",
-            reviewExpiresAt: computeReviewExpiresAt(),
-            // Only schedule a background retry for transient TMDB errors.
-            // 'not-found' is a definitive answer — no automatic retry, the user
-            // must intervene manually.
-            ...(movieResolution.reason === "error" && {
-              tmdbRetryAfter: computeInitialTmdbRetryAfter(),
-            }),
-          }),
-        },
-      });
-
-      return { movie, nzbFile, job };
-    });
-
-    if (isNeedsReview) {
-      console.log(
-        `[nzb-request] Created (needs_review): file=${result.nzbFile.id} job=${result.job.id} ` +
-        `"${title}" (${parsed.resolution || "unknown"})`
-      );
-    } else {
-      console.log(
-        `[nzb-request] Created: movie=${result.movie?.id} file=${result.nzbFile.id} job=${result.job.id} ` +
-        `"${title}" (${parsed.resolution || "unknown"})`
-      );
-    }
-
-    // Reload job with relations for response
-    const fullJob = await prisma.downloadJob.findUnique({
-      where: { id: result.job.id },
-      include: { nzbFile: { include: JOB_NZB_FILE_INCLUDE } },
-    });
-
-    if (!fullJob) {
-      res.status(500).json({ error: "Job wurde erstellt, konnte aber nicht geladen werden." });
-      return;
-    }
-
-    res.status(201).json({
-      job: serializeJob(fullJob),
-      reused: false,
-      needsReview: isNeedsReview,
-    });
-
-    // Trigger auto-provisioner — but NOT for needs_review jobs.
-    // They wait until a movie is manually assigned (or auto-retry succeeds).
-    if (!isNeedsReview && process.env.AUTO_PROVISION !== "false") {
-      import("../lib/provisioner.js").then(({ provisionDownload }) => {
-        provisionDownload(result.job.id).catch((err) => {
-          console.error("[nzb-request] Auto-provision failed:", err);
+      case "concurrent":
+        res.status(409).json({ error: "Gleichzeitiger Request — bitte erneut versuchen." });
+        return;
+      case "missing":
+        res.status(404).json({ error: "NZB-Datei wurde inzwischen entfernt." });
+        return;
+      case "conflict":
+        res.status(409).json({
+          error: "Es läuft bereits ein Download für diese Datei.",
+          existingJobId: result.activeJob.id,
+          existingStatus: result.activeJob.status,
         });
-      }).catch((err) => {
-        console.error("[nzb-request] Failed to load provisioner module:", err);
-      });
+        return;
+      case "tmdb-disabled":
+        res.status(503).json({
+          error: "TMDB-Matching ist nicht verfügbar — Server-Konfiguration fehlt.",
+          reason: "tmdb_disabled",
+          hint: "Der Administrator muss TMDB_API_KEY setzen.",
+        });
+        return;
+      case "reload-failed":
+        res.status(500).json({ error: "Job wurde erstellt, konnte aber nicht geladen werden." });
+        return;
+      case "created":
+        res.status(201).json({
+          job: serializeJob(result.job),
+          reused: result.reused,
+          needsReview: result.needsReview,
+        });
+        return;
     }
   } catch (err: any) {
     // Handle hash uniqueness race condition
