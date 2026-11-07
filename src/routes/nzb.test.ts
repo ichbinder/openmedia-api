@@ -59,6 +59,7 @@ describe("NZB Routes", () => {
       expect(res.body.show.episodes.map((e: any) => [e.season, e.episode])).toEqual([[1, 2], [2, 1]]);
       expect(res.body.show.episodes[0]).toMatchObject({ id: e1.id, titleDe: "Halt", airDate: null });
       expect(res.body.show.episodes[0].nzbFiles[0].fileSize).toBe("5000000000");
+      expect(res.body.show.episodes[0].nzbFiles[0]).not.toHaveProperty("mediaInfo");
       expect(res.body.show.episodes[1].id).toBe(e2.id);
       expect(res.body.show.episodes[1].nzbFiles).toEqual([]);
     });
@@ -67,8 +68,10 @@ describe("NZB Routes", () => {
       const missing = await request(app).get("/nzb/shows/by-tmdb/424242").set("Authorization", `Bearer ${token}`);
       expect(missing.status).toBe(404);
       expect(missing.body.error).toBe("Serie nicht gefunden.");
-      const bad = await request(app).get("/nzb/shows/by-tmdb/abc").set("Authorization", `Bearer ${token}`);
-      expect(bad.status).toBe(400);
+      for (const raw of ["abc", "1.5", "1e3", "-1", "0", "0x10", "007"]) {
+        const bad = await request(app).get(`/nzb/shows/by-tmdb/${raw}`).set("Authorization", `Bearer ${token}`);
+        expect(bad.status, raw).toBe(400);
+      }
     });
   });
 

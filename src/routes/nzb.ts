@@ -204,18 +204,19 @@ router.get("/movies/by-tmdb/:tmdbId", async (req: AuthRequest, res: Response) =>
 // GET /nzb/shows/by-tmdb/:tmdbId — find show with its episodes and versions
 router.get("/shows/by-tmdb/:tmdbId", async (req: AuthRequest, res: Response) => {
   try {
-    const tmdbId = Number(String(req.params.tmdbId));
-    if (isNaN(tmdbId)) {
+    const rawTmdbId = String(req.params.tmdbId);
+    if (!/^[1-9]\d{0,9}$/.test(rawTmdbId)) {
       res.status(400).json({ error: "Ungültige TMDB-ID." });
       return;
     }
+    const tmdbId = Number(rawTmdbId);
 
     const show = await prisma.nzbShow.findUnique({
       where: { tmdbId },
       include: {
         episodes: {
           orderBy: [{ season: "asc" }, { episode: "asc" }],
-          include: { nzbFiles: { select: nzbFileSelect } },
+          include: { nzbFiles: { select: { ...nzbFileSelect, mediaInfo: false } } },
         },
       },
     });

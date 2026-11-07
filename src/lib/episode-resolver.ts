@@ -29,23 +29,6 @@ export async function resolveEpisodeFromTmdb(
   return { source: "tmdb-found", show: result.show, episode: result.episode };
 }
 
-async function reuseOrCreate<T>(
-  find: () => Promise<T | null>,
-  create: () => Promise<T>,
-): Promise<T> {
-  const existing = await find();
-  if (existing) return existing;
-  try {
-    return await create();
-  } catch (err: any) {
-    if (err?.code === "P2002") {
-      const winner = await find();
-      if (winner) return winner;
-    }
-    throw err;
-  }
-}
-
 export async function upsertEpisode(
   tx: Prisma.TransactionClient,
   show: TmdbShowResult,
@@ -53,34 +36,31 @@ export async function upsertEpisode(
   episode: number,
   tmdbEpisode: TmdbEpisodeResult | null,
 ): Promise<string> {
-  const nzbShow = await reuseOrCreate(
-    () => tx.nzbShow.findUnique({ where: { tmdbId: show.tmdbId } }),
-    () =>
-      tx.nzbShow.create({
-        data: {
-          tmdbId: show.tmdbId,
-          titleDe: show.titleDe,
-          titleEn: show.titleEn,
-          description: show.description,
-          year: show.year,
-          posterPath: show.posterPath,
-        },
-      }),
-  );
+  await tx.nzbShow.createMany({
+    data: [{
+      tmdbId: show.tmdbId,
+      titleDe: show.titleDe,
+      titleEn: show.titleEn,
+      description: show.description,
+      year: show.year,
+      posterPath: show.posterPath,
+    }],
+    skipDuplicates: true,
+  });
+  const nzbShow = await tx.nzbShow.findUniqueOrThrow({ where: { tmdbId: show.tmdbId } });
 
-  const key = { showId_season_episode: { showId: nzbShow.id, season, episode } };
-  const nzbEpisode = await reuseOrCreate(
-    () => tx.nzbEpisode.findUnique({ where: key }),
-    () =>
-      tx.nzbEpisode.create({
-        data: {
-          showId: nzbShow.id,
-          season,
-          episode,
-          titleDe: tmdbEpisode?.titleDe ?? "",
-          airDate: tmdbEpisode?.airDate ? new Date(tmdbEpisode.airDate) : null,
-        },
-      }),
-  );
+  await tx.nzbEpisode.createMany({
+    data: [{
+      showId: nzbShow.id,
+      season,
+      episode,
+      titleDe: tmdbEpisode?.titleDe ?? "",
+      airDate: tmdbEpisode?.airDate ? new Date(tmdbEpisode.airDate) : null,
+    }],
+    skipDuplicates: true,
+  });
+  const nzbEpisode = await tx.nzbEpisode.findUniqueOrThrow({
+    where: { showId_season_episode: { showId: nzbShow.id, season, episode } },
+  });
   return nzbEpisode.id;
 }

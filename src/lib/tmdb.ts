@@ -196,7 +196,9 @@ async function fetchTmdbJson(path: string, language: string): Promise<Record<str
     `${TMDB_BASE}${path}?api_key=${TMDB_API_KEY}&language=${language}`,
     { signal: AbortSignal.timeout(TMDB_REQUEST_TIMEOUT_MS) }
   );
-  return res.ok ? ((await res.json()) as Record<string, any>) : null;
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`TMDB ${path} responded ${res.status}`);
+  return (await res.json()) as Record<string, any>;
 }
 
 async function fetchTmdbShowDetails(

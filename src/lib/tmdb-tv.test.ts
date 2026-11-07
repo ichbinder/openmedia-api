@@ -74,6 +74,30 @@ describe("searchTmdbShowEpisode", () => {
     expect(result).toMatchObject({ status: "found", episode: null });
   });
 
+  it("returns error instead of not_found when the show details fail transiently", async () => {
+    stubFetch([
+      showRoutes[0],
+      { match: "/tv/95396?", status: 503 },
+    ]);
+    const search = await load();
+
+    const result = await search("Severance", null, 2, 5);
+
+    expect(result.status).toBe("error");
+  });
+
+  it("returns error instead of episode null when the episode endpoint is rate limited", async () => {
+    stubFetch([
+      ...showRoutes,
+      { match: "/tv/95396/season/2/episode/5", status: 429 },
+    ]);
+    const search = await load();
+
+    const result = await search("Severance", null, 2, 5);
+
+    expect(result.status).toBe("error");
+  });
+
   it("returns not_found when the search has no results", async () => {
     stubFetch([{ match: "/search/tv", body: { results: [] } }]);
     const search = await load();
