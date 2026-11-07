@@ -26,6 +26,10 @@ function hasWord(title: string, words: string[]): boolean {
   return new RegExp(`(^|[._\\- ])(${words.join("|")})($|[._\\- ])`, "i").test(title);
 }
 
+function hasGermanNameHint(title: string): boolean {
+  return hasWord(title.replace(/(WEB|HD|BD)[._\- ]DL/gi, "$1"), ["German", "Deutsch", "DL"]);
+}
+
 function includesGerman(list: string[] | null): boolean {
   return !!list?.some((l) => l.toLowerCase() === "german");
 }
@@ -56,13 +60,14 @@ export function rankReleases(
   releases: IndexerRelease[],
   opts: { season: number; episode: number; runtimeMinutes: number; band: Band },
 ): RankedRelease[] {
-  const { season, episode, runtimeMinutes, band } = opts;
+  const { season, episode, band } = opts;
+  const runtimeMinutes = Number.isFinite(opts.runtimeMinutes) && opts.runtimeMinutes > 0 ? opts.runtimeMinutes : 45;
   const candidates = releases.filter((r) => r.season === season && r.episode === episode && r.password !== 2);
 
   const ranked: RankedRelease[] = [];
   for (const r of dropDatalessTwins(candidates)) {
     const hasData = r.audioLanguages !== null;
-    if (hasData ? !includesGerman(r.audioLanguages) : !hasWord(r.title, ["German", "Deutsch", "DL"])) continue;
+    if (hasData ? !includesGerman(r.audioLanguages) : !hasGermanNameHint(r.title)) continue;
     const qualityTier = tierOf(r);
     const gbPerHour = r.size / 1e9 / (runtimeMinutes / 60);
     ranked.push({
@@ -93,8 +98,9 @@ async function readPositive(key: string, fallback: number): Promise<number> {
 }
 
 export async function getTargetBand(): Promise<Band> {
-  return {
+  const band = {
     min: await readPositive("targetGbPerHourMin", DEFAULT_BAND.min),
     max: await readPositive("targetGbPerHourMax", DEFAULT_BAND.max),
   };
+  return band.min < band.max ? band : DEFAULT_BAND;
 }

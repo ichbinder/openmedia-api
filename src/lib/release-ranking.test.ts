@@ -77,6 +77,31 @@ describe("rankReleases rules", () => {
     expect(out[0].qualityTier).toBe("480p");
   });
 
+  it("does not treat WEB-DL as a German hint", () => {
+    const noData = { audioLanguages: null };
+    expect(rankReleases([release({ ...noData, title: "Show.S02E05.1080p.WEB-DL.x264-GRP" })], opts)).toEqual([]);
+    expect(rankReleases([release({ ...noData, title: "Show.S02E05.German.DL.1080p.WEB-DL.x264-GRP" })], opts)).toHaveLength(1);
+    expect(rankReleases([release({ ...noData, title: "Show.S02E05.DL.1080p.WEB.x264-GRP" })], opts)).toHaveLength(1);
+  });
+
+  it("treats gbPerHour exactly at max as in band", () => {
+    const out = rankReleases([release({ size: 5e9 })], { ...opts, band: { min: 1.5, max: 6 }, runtimeMinutes: 50 });
+    expect(out[0].gbPerHour).toBeCloseTo(6);
+    const exact = rankReleases([release({ size: 6e9 })], { ...opts, runtimeMinutes: 60 });
+    expect(exact[0].inTargetBand).toBe(true);
+  });
+
+  it("ranks 2160p below out-of-band 1080p and above 720p", () => {
+    const hd = release({ guid: "hd", size: 0.5e9 });
+    const uhd = release({ guid: "uhd", videoWidth: 3840, size: 10e9 });
+    const p720 = release({ guid: "p720", videoWidth: 1280, size: 2e9 });
+    expect(rankReleases([p720, uhd, hd], opts).map((r) => r.guid)).toEqual(["hd", "uhd", "p720"]);
+  });
+
+  it("falls back to 45 minutes for invalid runtime", () => {
+    expect(rankReleases([release({ size: 3e9 })], { ...opts, runtimeMinutes: 0 })[0].gbPerHour).toBeCloseTo(4);
+  });
+
   it("falls back to the title resolution without width", () => {
     const r = release({ videoWidth: null, title: "Show.S02E05.German.DL.720p.WEB-GRP", audioLanguages: null });
     expect(rankReleases([r], opts)[0].qualityTier).toBe("720p");
@@ -111,6 +136,11 @@ describe("getTargetBand", () => {
     getEntry.mockResolvedValue({ value: "abc" });
     expect(await getTargetBand()).toEqual({ min: 1.5, max: 6 });
     getEntry.mockResolvedValue({ value: "-2" });
+    expect(await getTargetBand()).toEqual({ min: 1.5, max: 6 });
+  });
+
+  it("falls back when min >= max", async () => {
+    getEntry.mockImplementation(async (_c: string, key: string) => ({ value: key === "targetGbPerHourMin" ? "8" : "2" }));
     expect(await getTargetBand()).toEqual({ min: 1.5, max: 6 });
   });
 
