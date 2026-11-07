@@ -170,3 +170,122 @@ export async function searchTmdbMovieById(tmdbId: number): Promise<TmdbLookupRes
     return { status: "error", reason: "Network or unexpected error" };
   }
 }
+
+export interface TmdbShowResult {
+  tmdbId: number;
+  titleDe: string;
+  titleEn: string;
+  description: string;
+  year: number | null;
+  posterPath: string | null;
+}
+
+export interface TmdbEpisodeResult {
+  titleDe: string;
+  airDate: string | null;
+}
+
+export type TmdbShowLookupResult =
+  | { status: "found"; show: TmdbShowResult; episode: TmdbEpisodeResult | null }
+  | { status: "not_found" }
+  | { status: "error"; reason: string }
+  | { status: "disabled"; reason: string };
+
+async function fetchTmdbJson(path: string, language: string): Promise<Record<string, any> | null> {
+  const res = await fetch(
+    `${TMDB_BASE}${path}?api_key=${TMDB_API_KEY}&language=${language}`,
+    { signal: AbortSignal.timeout(TMDB_REQUEST_TIMEOUT_MS) }
+  );
+  return res.ok ? ((await res.json()) as Record<string, any>) : null;
+}
+
+async function fetchTmdbShowDetails(
+  tmdbId: number,
+  fallbackName: string,
+  fallbackOriginalName: string,
+  fallbackPosterPath: string | null,
+): Promise<TmdbShowResult | null> {
+  const detailDe = await fetchTmdbJson(`/tv/${tmdbId}`, "de-DE");
+  const detailEn = await fetchTmdbJson(`/tv/${tmdbId}`, "en-US");
+  if (!detailDe && !detailEn) return null;
+
+  const firstAirDate = detailDe?.first_air_date || detailEn?.first_air_date || "";
+  const parsedYear = firstAirDate ? Number(firstAirDate.slice(0, 4)) : NaN;
+
+  return {
+    tmdbId,
+    titleDe: detailDe?.name || fallbackName || String(tmdbId),
+    titleEn: detailEn?.name || fallbackOriginalName || detailDe?.original_name || fallbackName || String(tmdbId),
+    description: detailDe?.overview || detailEn?.overview || "",
+    year: Number.isFinite(parsedYear) ? parsedYear : null,
+    posterPath: detailDe?.poster_path || detailEn?.poster_path || fallbackPosterPath || null,
+  };
+}
+
+async function fetchTmdbEpisode(
+  tmdbId: number,
+  season: number,
+  episode: number,
+): Promise<TmdbEpisodeResult | null> {
+  const path = `/tv/${tmdbId}/season/${season}/episode/${episode}`;
+  const de = await fetchTmdbJson(path, "de-DE");
+  const data = de?.name ? de : ((await fetchTmdbJson(path, "en-US")) ?? de);
+  if (!data) return null;
+  return { titleDe: data.name || `Episode ${episode}`, airDate: data.air_date || null };
+}
+
+/**
+ * Search for a TV show on TMDB (first hit) and resolve one episode of it.
+ * Same four statuses as searchTmdbMovie; a missing episode is not an error
+ * and yields `episode: null`.
+ */
+export async function searchTmdbShowEpisode(
+  title: string,
+  year: number | null,
+  season: number,
+  episode: number,
+): Promise<TmdbShowLookupResult> {
+  if (!TMDB_API_KEY) {
+    console.warn("[tmdb] TMDB_API_KEY is not set — returning 'disabled' status");
+    return { status: "disabled", reason: "TMDB_API_KEY is not configured" };
+  }
+
+  try {
+    const searchParams = new URLSearchParams({
+      api_key: TMDB_API_KEY,
+      query: title,
+      language: "de-DE",
+      ...(year ? { first_air_date_year: String(year) } : {}),
+    });
+
+    const searchRes = await fetch(
+      `${TMDB_BASE}/search/tv?${searchParams}`,
+      { signal: AbortSignal.timeout(TMDB_REQUEST_TIMEOUT_MS) }
+    );
+
+    if (searchRes.status === 429) {
+      return { status: "error", reason: "TMDB rate limit exceeded" };
+    }
+    if (!searchRes.ok) {
+      return { status: "error", reason: `TMDB search failed: ${searchRes.status}` };
+    }
+
+    const searchData = (await searchRes.json()) as { results?: Array<{ id: number; name: string; original_name: string; poster_path: string | null }> };
+    const match = searchData.results?.[0];
+    if (!match) {
+      return { status: "not_found" };
+    }
+
+    const show = await fetchTmdbShowDetails(match.id, match.name, match.original_name, match.poster_path);
+    if (!show) {
+      return { status: "not_found" };
+    }
+
+    const episodeResult = await fetchTmdbEpisode(match.id, season, episode);
+    console.log(`[tmdb] Matched show: "${title}" → ${show.titleEn} (${show.tmdbId}) S${season}E${episode}`);
+    return { status: "found", show, episode: episodeResult };
+  } catch (err) {
+    console.error("[tmdb] Show lookup error:", err);
+    return { status: "error", reason: "Network or unexpected error" };
+  }
+}
