@@ -187,7 +187,7 @@ describe("retryTmdbForPendingReviews", () => {
         year: 2022,
         posterPath: "/s.jpg",
       },
-      episode: { titleDe: "Folge 5", airDate: "2025-02-14" },
+      episode: { titleDe: "Folge 5", airDate: "2025-02-14", runtime: null },
     });
 
     const result = await reconcileStaleJobs();
