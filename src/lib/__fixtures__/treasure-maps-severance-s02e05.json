@@ -1,0 +1,1307 @@
+{
+  "items": [
+    {
+      "guid": "41167b5c8fbfef7ffea529a9093284b6",
+      "title": "Severance.S02E05.German.AC3.DL.1080p.Web.x265-FuN",
+      "category": {
+        "id": 5140,
+        "name": "TV - DE > HD"
+      },
+      "size": 1015986574,
+      "files": 10,
+      "comments": 0,
+      "posted_at": "2025-04-05T14:15:36+02:00",
+      "usenet_at": null,
+      "links": {
+        "details": "https://treasure-maps.com/details/41167b5c8fbfef7ffea529a9093284b6",
+        "download": "/api/v1/releases/41167b5c8fbfef7ffea529a9093284b6/download",
+        "comments": "https://treasure-maps.com/details/41167b5c8fbfef7ffea529a9093284b6#comments",
+        "nfo": "/api/v1/releases/41167b5c8fbfef7ffea529a9093284b6/nfo",
+        "mediainfo": "/api/v1/releases/41167b5c8fbfef7ffea529a9093284b6/mediainfo"
+      },
+      "sha1": "e977e4cf486007e849eb2ad3006036af032715d3",
+      "password": -1,
+      "audio_languages": [
+        "English",
+        "German"
+      ],
+      "subtitles": [
+        "English",
+        "German"
+      ],
+      "season": 2,
+      "episode": 5,
+      "video": {
+        "codec": "V_MPEGH/ISO/HEVC",
+        "resolution": "1918x802",
+        "aspect_ratio": "2.39",
+        "framerate": "23.975999832153"
+      },
+      "ids": {
+        "tmdb": "95396",
+        "tvdb": "371980",
+        "tvmaze": "44933"
+      },
+      "images": {
+        "cover": "https://picbit.io/tv_23140.webp"
+      },
+      "tv": {
+        "title": "Severance",
+        "imdb": "11280740",
+        "tvdb": "371980",
+        "tmdb": "95396",
+        "tvmaze": "44933",
+        "first_aired": "2022-02-18T00:00:00+01:00",
+        "episode": {
+          "title": "Trojan's Horse",
+          "air_date": "2025-02-13T00:00:00+01:00",
+          "rating": "8",
+          "overview": "Tensions emerge after the team suffers a loss."
+        }
+      }
+    },
+    {
+      "guid": "25f4bc84eb229115583123c79b59aad6",
+      "title": "Severance.S02E05.German.AC3.DL.1080p.Web.x265-FuN",
+      "category": {
+        "id": 5140,
+        "name": "TV - DE > HD"
+      },
+      "size": 953048842,
+      "files": 23,
+      "comments": 0,
+      "posted_at": "2026-05-10T21:38:51+02:00",
+      "usenet_at": null,
+      "links": {
+        "details": "https://treasure-maps.com/details/25f4bc84eb229115583123c79b59aad6",
+        "download": "/api/v1/releases/25f4bc84eb229115583123c79b59aad6/download",
+        "comments": "https://treasure-maps.com/details/25f4bc84eb229115583123c79b59aad6#comments",
+        "nfo": "/api/v1/releases/25f4bc84eb229115583123c79b59aad6/nfo",
+        "mediainfo": "/api/v1/releases/25f4bc84eb229115583123c79b59aad6/mediainfo"
+      },
+      "password": -1,
+      "season": 2,
+      "episode": 5,
+      "ids": {
+        "imdb": "11280740",
+        "tmdb": "95396",
+        "tvdb": "371980",
+        "tvmaze": "44933"
+      },
+      "images": {
+        "cover": "https://picbit.io/movies_11280740-cover.webp"
+      },
+      "movie": {
+        "title": "Severance",
+        "plot": "Severance: Schöpfer: Dan Erickson Mit Adam Scott, Britt Lower, Zach Cherry, Tramell Tillman Mark leitet ein Team, dessen Erinnerungen chirurgisch zwischen ihrem Arbeits- und Privatleben aufgeteilt wurden. Als ein Kollege außerhalb der Arbeit auftaucht, beginnt eine Reise zur Entdeckung der Wahrheit über ihre Arbeit.",
+        "rating": "8.6",
+        "year": "2022",
+        "actors": "Adam Scott, Britt Lower, Zach Cherry"
+      },
+      "tv": {
+        "title": "Severance",
+        "imdb": "11280740",
+        "tvdb": "371980",
+        "tmdb": "95396",
+        "tvmaze": "44933",
+        "first_aired": "2022-02-18T00:00:00+01:00",
+        "episode": {
+          "title": "Trojan's Horse",
+          "air_date": "2025-02-13T00:00:00+01:00",
+          "rating": "8",
+          "overview": "Tensions emerge after the team suffers a loss."
+        }
+      }
+    },
+    {
+      "guid": "d1c390957ba0b7550b114efaa1d4d5a0",
+      "title": "Severance.S02E05.German.DL.AppleHD.x264-4SF",
+      "category": {
+        "id": 5130,
+        "name": "TV - DE > SD"
+      },
+      "size": 281289198,
+      "files": 8,
+      "comments": 0,
+      "posted_at": "2025-03-23T17:00:21+01:00",
+      "usenet_at": null,
+      "links": {
+        "details": "https://treasure-maps.com/details/d1c390957ba0b7550b114efaa1d4d5a0",
+        "download": "/api/v1/releases/d1c390957ba0b7550b114efaa1d4d5a0/download",
+        "comments": "https://treasure-maps.com/details/d1c390957ba0b7550b114efaa1d4d5a0#comments",
+        "nfo": "/api/v1/releases/d1c390957ba0b7550b114efaa1d4d5a0/nfo",
+        "mediainfo": "/api/v1/releases/d1c390957ba0b7550b114efaa1d4d5a0/mediainfo"
+      },
+      "sha1": "a0f9903697ef2d1e75e366c28c4c4c9c46737d7c",
+      "password": -1,
+      "audio_languages": [
+        "English",
+        "German"
+      ],
+      "subtitles": [
+        "English",
+        "German"
+      ],
+      "season": 2,
+      "episode": 5,
+      "video": {
+        "codec": "V_MPEG4/ISO/AVC",
+        "resolution": "720x300",
+        "aspect_ratio": "2.4",
+        "framerate": "23.975999832153"
+      },
+      "ids": {
+        "tmdb": "95396",
+        "tvdb": "371980",
+        "tvmaze": "44933"
+      },
+      "images": {
+        "cover": "https://picbit.io/tv_23140.webp"
+      },
+      "tv": {
+        "title": "Severance",
+        "imdb": "11280740",
+        "tvdb": "371980",
+        "tmdb": "95396",
+        "tvmaze": "44933",
+        "first_aired": "2022-02-18T00:00:00+01:00",
+        "episode": {
+          "title": "Trojan's Horse",
+          "air_date": "2025-02-13T00:00:00+01:00",
+          "rating": "8",
+          "overview": "Tensions emerge after the team suffers a loss."
+        }
+      }
+    },
+    {
+      "guid": "8c5684a64d0934c03cafc0cf053701d2",
+      "title": "Severance.2022.S02E05.German.DL.Atmos.2160p.DV.HDR.ATVP.WEB.H265-ZeroTwo",
+      "category": {
+        "id": 5145,
+        "name": "TV - DE > UHD"
+      },
+      "size": 10240919120,
+      "files": 12,
+      "comments": 0,
+      "posted_at": "2025-02-14T16:13:59+01:00",
+      "usenet_at": "6025-11-07T17:39:54+01:00",
+      "links": {
+        "details": "https://treasure-maps.com/details/8c5684a64d0934c03cafc0cf053701d2",
+        "download": "/api/v1/releases/8c5684a64d0934c03cafc0cf053701d2/download",
+        "comments": "https://treasure-maps.com/details/8c5684a64d0934c03cafc0cf053701d2#comments",
+        "nfo": "/api/v1/releases/8c5684a64d0934c03cafc0cf053701d2/nfo",
+        "mediainfo": "/api/v1/releases/8c5684a64d0934c03cafc0cf053701d2/mediainfo"
+      },
+      "sha1": "f8aecd8f312fc16947aef3be32bf52e8e7172a56",
+      "password": -1,
+      "audio_languages": [
+        "English",
+        "German"
+      ],
+      "subtitles": [
+        "Arabic",
+        "Bulgarian",
+        "Chinese",
+        "Czech",
+        "Danish",
+        "Dutch",
+        "English",
+        "Estonian",
+        "Finnish",
+        "French",
+        "German",
+        "Greek",
+        "Hebrew",
+        "Hindi",
+        "Hungarian",
+        "Indonesian",
+        "Italian",
+        "Japanese",
+        "Korean",
+        "Latvian/Lettish",
+        "Lithuanian",
+        "Malay",
+        "Norwegian",
+        "Polish",
+        "Portuguese",
+        "Russian",
+        "Slovak",
+        "Slovenian",
+        "Spanish",
+        "Swedish",
+        "Tamil",
+        "Tegulu",
+        "Thai",
+        "Turkish",
+        "Ukrainian",
+        "Vietnamese"
+      ],
+      "season": 2,
+      "episode": 5,
+      "video": {
+        "codec": "V_MPEGH/ISO/HEVC",
+        "resolution": "3840x1606",
+        "aspect_ratio": "2.39",
+        "framerate": "23.975999832153"
+      },
+      "ids": {
+        "tmdb": "95396",
+        "tvdb": "371980",
+        "tvmaze": "44933"
+      },
+      "images": {
+        "cover": "https://picbit.io/tv_23140.webp"
+      },
+      "tv": {
+        "title": "Severance",
+        "imdb": "11280740",
+        "tvdb": "371980",
+        "tmdb": "95396",
+        "tvmaze": "44933",
+        "first_aired": "2022-02-18T00:00:00+01:00",
+        "episode": {
+          "title": "Trojan's Horse",
+          "air_date": "2025-02-13T00:00:00+01:00",
+          "rating": "8",
+          "overview": "Tensions emerge after the team suffers a loss."
+        }
+      }
+    },
+    {
+      "guid": "17c315c99a4b4156c247920a62c3f240",
+      "title": "Severance.2022.S02E05.German.DL.Atmos.1080p.DV.HDR.ATVP.WEB.H265-ZeroTwo",
+      "category": {
+        "id": 5140,
+        "name": "TV - DE > HD"
+      },
+      "size": 3014082472,
+      "files": 12,
+      "comments": 0,
+      "posted_at": "2025-02-14T16:12:25+01:00",
+      "usenet_at": "5938-11-07T17:39:54+01:00",
+      "links": {
+        "details": "https://treasure-maps.com/details/17c315c99a4b4156c247920a62c3f240",
+        "download": "/api/v1/releases/17c315c99a4b4156c247920a62c3f240/download",
+        "comments": "https://treasure-maps.com/details/17c315c99a4b4156c247920a62c3f240#comments",
+        "nfo": "/api/v1/releases/17c315c99a4b4156c247920a62c3f240/nfo",
+        "mediainfo": "/api/v1/releases/17c315c99a4b4156c247920a62c3f240/mediainfo"
+      },
+      "sha1": "8eede9749eae0607f37d75b377e506af2a736254",
+      "password": -1,
+      "audio_languages": [
+        "English",
+        "German"
+      ],
+      "subtitles": [
+        "Arabic",
+        "Bulgarian",
+        "Chinese",
+        "Czech",
+        "Danish",
+        "Dutch",
+        "English",
+        "Estonian",
+        "Finnish",
+        "French",
+        "German",
+        "Greek",
+        "Hebrew",
+        "Hindi",
+        "Hungarian",
+        "Indonesian",
+        "Italian",
+        "Japanese",
+        "Korean",
+        "Latvian/Lettish",
+        "Lithuanian",
+        "Malay",
+        "Norwegian",
+        "Polish",
+        "Portuguese",
+        "Russian",
+        "Slovak",
+        "Slovenian",
+        "Spanish",
+        "Swedish",
+        "Tamil",
+        "Tegulu",
+        "Thai",
+        "Turkish",
+        "Ukrainian",
+        "Vietnamese"
+      ],
+      "season": 2,
+      "episode": 5,
+      "video": {
+        "codec": "V_MPEGH/ISO/HEVC",
+        "resolution": "1918x802",
+        "aspect_ratio": "2.39",
+        "framerate": "23.975999832153"
+      },
+      "ids": {
+        "tmdb": "95396",
+        "tvdb": "371980",
+        "tvmaze": "44933"
+      },
+      "images": {
+        "cover": "https://picbit.io/tv_23140.webp"
+      },
+      "tv": {
+        "title": "Severance",
+        "imdb": "11280740",
+        "tvdb": "371980",
+        "tmdb": "95396",
+        "tvmaze": "44933",
+        "first_aired": "2022-02-18T00:00:00+01:00",
+        "episode": {
+          "title": "Trojan's Horse",
+          "air_date": "2025-02-13T00:00:00+01:00",
+          "rating": "8",
+          "overview": "Tensions emerge after the team suffers a loss."
+        }
+      }
+    },
+    {
+      "guid": "73af81be3e25e88f019798d63595c6cb",
+      "title": "Severance.2022.S02E05.German.DL.Atmos.1080p.ATVP.WEB.H265-ZeroTwo",
+      "category": {
+        "id": 5140,
+        "name": "TV - DE > HD"
+      },
+      "size": 2598834937,
+      "files": 12,
+      "comments": 0,
+      "posted_at": "2025-02-14T16:11:53+01:00",
+      "usenet_at": "5911-11-07T17:39:54+01:00",
+      "links": {
+        "details": "https://treasure-maps.com/details/73af81be3e25e88f019798d63595c6cb",
+        "download": "/api/v1/releases/73af81be3e25e88f019798d63595c6cb/download",
+        "comments": "https://treasure-maps.com/details/73af81be3e25e88f019798d63595c6cb#comments",
+        "nfo": "/api/v1/releases/73af81be3e25e88f019798d63595c6cb/nfo",
+        "mediainfo": "/api/v1/releases/73af81be3e25e88f019798d63595c6cb/mediainfo"
+      },
+      "sha1": "4f80e065effb360913e724b6d608f729b1a119e1",
+      "password": -1,
+      "audio_languages": [
+        "English",
+        "German"
+      ],
+      "subtitles": [
+        "Arabic",
+        "Bulgarian",
+        "Chinese",
+        "Czech",
+        "Danish",
+        "Dutch",
+        "English",
+        "Estonian",
+        "Finnish",
+        "French",
+        "German",
+        "Greek",
+        "Hebrew",
+        "Hindi",
+        "Hungarian",
+        "Indonesian",
+        "Italian",
+        "Japanese",
+        "Korean",
+        "Latvian/Lettish",
+        "Lithuanian",
+        "Malay",
+        "Norwegian",
+        "Polish",
+        "Portuguese",
+        "Russian",
+        "Slovak",
+        "Slovenian",
+        "Spanish",
+        "Swedish",
+        "Tamil",
+        "Tegulu",
+        "Thai",
+        "Turkish",
+        "Ukrainian",
+        "Vietnamese"
+      ],
+      "season": 2,
+      "episode": 5,
+      "video": {
+        "codec": "V_MPEGH/ISO/HEVC",
+        "resolution": "1918x802",
+        "aspect_ratio": "2.39",
+        "framerate": "23.975999832153"
+      },
+      "ids": {
+        "tmdb": "95396",
+        "tvdb": "371980",
+        "tvmaze": "44933"
+      },
+      "images": {
+        "cover": "https://picbit.io/tv_23140.webp"
+      },
+      "tv": {
+        "title": "Severance",
+        "imdb": "11280740",
+        "tvdb": "371980",
+        "tmdb": "95396",
+        "tvmaze": "44933",
+        "first_aired": "2022-02-18T00:00:00+01:00",
+        "episode": {
+          "title": "Trojan's Horse",
+          "air_date": "2025-02-13T00:00:00+01:00",
+          "rating": "8",
+          "overview": "Tensions emerge after the team suffers a loss."
+        }
+      }
+    },
+    {
+      "guid": "cc6e62d62007e83facc2a543ce5bbd1b",
+      "title": "Severance.S02E05.GERMAN.WEBRiP.x264-AVTOMAT",
+      "category": {
+        "id": 5130,
+        "name": "TV - DE > SD"
+      },
+      "size": 276715650,
+      "files": 13,
+      "comments": 0,
+      "posted_at": "2026-05-11T03:19:51+02:00",
+      "usenet_at": "1140-11-07T17:39:53+00:53",
+      "links": {
+        "details": "https://treasure-maps.com/details/cc6e62d62007e83facc2a543ce5bbd1b",
+        "download": "/api/v1/releases/cc6e62d62007e83facc2a543ce5bbd1b/download",
+        "comments": "https://treasure-maps.com/details/cc6e62d62007e83facc2a543ce5bbd1b#comments",
+        "nfo": "/api/v1/releases/cc6e62d62007e83facc2a543ce5bbd1b/nfo",
+        "mediainfo": "/api/v1/releases/cc6e62d62007e83facc2a543ce5bbd1b/mediainfo"
+      },
+      "password": -1,
+      "season": 2,
+      "episode": 5,
+      "ids": {
+        "imdb": "11280740",
+        "tmdb": "95396",
+        "tvdb": "371980",
+        "tvmaze": "44933"
+      },
+      "images": {
+        "cover": "https://picbit.io/movies_11280740-cover.webp"
+      },
+      "movie": {
+        "title": "Severance",
+        "plot": "Severance: Schöpfer: Dan Erickson Mit Adam Scott, Britt Lower, Zach Cherry, Tramell Tillman Mark leitet ein Team, dessen Erinnerungen chirurgisch zwischen ihrem Arbeits- und Privatleben aufgeteilt wurden. Als ein Kollege außerhalb der Arbeit auftaucht, beginnt eine Reise zur Entdeckung der Wahrheit über ihre Arbeit.",
+        "rating": "8.6",
+        "year": "2022",
+        "actors": "Adam Scott, Britt Lower, Zach Cherry"
+      },
+      "tv": {
+        "title": "Severance",
+        "imdb": "11280740",
+        "tvdb": "371980",
+        "tmdb": "95396",
+        "tvmaze": "44933",
+        "first_aired": "2022-02-18T00:00:00+01:00",
+        "episode": {
+          "title": "Trojan's Horse",
+          "air_date": "2025-02-13T00:00:00+01:00",
+          "rating": "8",
+          "overview": "Tensions emerge after the team suffers a loss."
+        }
+      }
+    },
+    {
+      "guid": "67efa90f3549c3c3ae662aaef8077a08",
+      "title": "Severance.S02E05.GERMAN.WEBRiP.x264-AVTOMAT",
+      "category": {
+        "id": 5130,
+        "name": "TV - DE > SD"
+      },
+      "size": 310434610,
+      "files": 17,
+      "comments": 0,
+      "posted_at": "2025-02-14T12:01:53+01:00",
+      "usenet_at": "0911-11-07T17:39:53+00:53",
+      "links": {
+        "details": "https://treasure-maps.com/details/67efa90f3549c3c3ae662aaef8077a08",
+        "download": "/api/v1/releases/67efa90f3549c3c3ae662aaef8077a08/download",
+        "comments": "https://treasure-maps.com/details/67efa90f3549c3c3ae662aaef8077a08#comments",
+        "nfo": "/api/v1/releases/67efa90f3549c3c3ae662aaef8077a08/nfo",
+        "mediainfo": "/api/v1/releases/67efa90f3549c3c3ae662aaef8077a08/mediainfo"
+      },
+      "sha1": "940ec064c117ee55ac4df07d5bf339857063bffc",
+      "password": -1,
+      "audio_languages": [
+        "German"
+      ],
+      "subtitles": [
+        "German"
+      ],
+      "season": 2,
+      "episode": 5,
+      "video": {
+        "codec": "V_MPEG4/ISO/AVC",
+        "resolution": "720x300",
+        "aspect_ratio": "2.4",
+        "framerate": "23.975999832153"
+      },
+      "ids": {
+        "tmdb": "95396",
+        "tvdb": "371980",
+        "tvmaze": "44933"
+      },
+      "images": {
+        "cover": "https://picbit.io/tv_23140.webp"
+      },
+      "tv": {
+        "title": "Severance",
+        "imdb": "11280740",
+        "tvdb": "371980",
+        "tmdb": "95396",
+        "tvmaze": "44933",
+        "first_aired": "2022-02-18T00:00:00+01:00",
+        "episode": {
+          "title": "Trojan's Horse",
+          "air_date": "2025-02-13T00:00:00+01:00",
+          "rating": "8",
+          "overview": "Tensions emerge after the team suffers a loss."
+        }
+      }
+    },
+    {
+      "guid": "3e1f89d064760710b8482619832c921b",
+      "title": "Severance.S02E05.German.DL.HDR.2160p.WEB.h265-W4K",
+      "category": {
+        "id": 5145,
+        "name": "TV - DE > UHD"
+      },
+      "size": 9693104210,
+      "files": 112,
+      "comments": 0,
+      "posted_at": "2026-05-10T10:49:40+02:00",
+      "usenet_at": "7012-11-07T17:39:52+01:00",
+      "links": {
+        "details": "https://treasure-maps.com/details/3e1f89d064760710b8482619832c921b",
+        "download": "/api/v1/releases/3e1f89d064760710b8482619832c921b/download",
+        "comments": "https://treasure-maps.com/details/3e1f89d064760710b8482619832c921b#comments",
+        "nfo": "/api/v1/releases/3e1f89d064760710b8482619832c921b/nfo",
+        "mediainfo": "/api/v1/releases/3e1f89d064760710b8482619832c921b/mediainfo"
+      },
+      "password": -1,
+      "season": 2,
+      "episode": 5,
+      "ids": {
+        "imdb": "11280740",
+        "tmdb": "95396",
+        "tvdb": "371980",
+        "tvmaze": "44933"
+      },
+      "images": {
+        "cover": "https://picbit.io/movies_11280740-cover.webp"
+      },
+      "movie": {
+        "title": "Severance",
+        "plot": "Severance: Schöpfer: Dan Erickson Mit Adam Scott, Britt Lower, Zach Cherry, Tramell Tillman Mark leitet ein Team, dessen Erinnerungen chirurgisch zwischen ihrem Arbeits- und Privatleben aufgeteilt wurden. Als ein Kollege außerhalb der Arbeit auftaucht, beginnt eine Reise zur Entdeckung der Wahrheit über ihre Arbeit.",
+        "rating": "8.6",
+        "year": "2022",
+        "actors": "Adam Scott, Britt Lower, Zach Cherry"
+      },
+      "tv": {
+        "title": "Severance",
+        "imdb": "11280740",
+        "tvdb": "371980",
+        "tmdb": "95396",
+        "tvmaze": "44933",
+        "first_aired": "2022-02-18T00:00:00+01:00",
+        "episode": {
+          "title": "Trojan's Horse",
+          "air_date": "2025-02-13T00:00:00+01:00",
+          "rating": "8",
+          "overview": "Tensions emerge after the team suffers a loss."
+        }
+      }
+    },
+    {
+      "guid": "b7024999d13d1101ccae4d583ba188e3",
+      "title": "Severance.S02E05.German.DL.HDR.2160p.WEB.h265-W4K",
+      "category": {
+        "id": 5145,
+        "name": "TV - DE > UHD"
+      },
+      "size": 10366993312,
+      "files": 22,
+      "comments": 0,
+      "posted_at": "2025-02-14T10:39:17+01:00",
+      "usenet_at": "5955-11-07T17:39:52+01:00",
+      "links": {
+        "details": "https://treasure-maps.com/details/b7024999d13d1101ccae4d583ba188e3",
+        "download": "/api/v1/releases/b7024999d13d1101ccae4d583ba188e3/download",
+        "comments": "https://treasure-maps.com/details/b7024999d13d1101ccae4d583ba188e3#comments",
+        "nfo": "/api/v1/releases/b7024999d13d1101ccae4d583ba188e3/nfo",
+        "mediainfo": "/api/v1/releases/b7024999d13d1101ccae4d583ba188e3/mediainfo"
+      },
+      "sha1": "44bad8579bf8fd9b829e0251c3cb02a4c7457e4e",
+      "password": -1,
+      "audio_languages": [
+        "English",
+        "German"
+      ],
+      "subtitles": [
+        "English",
+        "German"
+      ],
+      "season": 2,
+      "episode": 5,
+      "video": {
+        "codec": "V_MPEGH/ISO/HEVC",
+        "resolution": "3840x1606",
+        "aspect_ratio": "2.39",
+        "framerate": "23.975999832153"
+      },
+      "ids": {
+        "tmdb": "95396",
+        "tvdb": "371980",
+        "tvmaze": "44933"
+      },
+      "images": {
+        "cover": "https://picbit.io/tv_23140.webp"
+      },
+      "tv": {
+        "title": "Severance",
+        "imdb": "11280740",
+        "tvdb": "371980",
+        "tmdb": "95396",
+        "tvmaze": "44933",
+        "first_aired": "2022-02-18T00:00:00+01:00",
+        "episode": {
+          "title": "Trojan's Horse",
+          "air_date": "2025-02-13T00:00:00+01:00",
+          "rating": "8",
+          "overview": "Tensions emerge after the team suffers a loss."
+        }
+      }
+    },
+    {
+      "guid": "d9e84ffecf4489c67ed159eeb1c90c06",
+      "title": "Severance.2022.S02E05.German.DL.Atmos.2160p.ATVP.WEB.H265-ZeroTwo",
+      "category": {
+        "id": 5145,
+        "name": "TV - DE > UHD"
+      },
+      "size": 8355692294,
+      "files": 112,
+      "comments": 0,
+      "posted_at": "2026-05-10T10:49:16+02:00",
+      "usenet_at": "5565-11-07T17:39:52+01:00",
+      "links": {
+        "details": "https://treasure-maps.com/details/d9e84ffecf4489c67ed159eeb1c90c06",
+        "download": "/api/v1/releases/d9e84ffecf4489c67ed159eeb1c90c06/download",
+        "comments": "https://treasure-maps.com/details/d9e84ffecf4489c67ed159eeb1c90c06#comments",
+        "nfo": "/api/v1/releases/d9e84ffecf4489c67ed159eeb1c90c06/nfo",
+        "mediainfo": "/api/v1/releases/d9e84ffecf4489c67ed159eeb1c90c06/mediainfo"
+      },
+      "password": -1,
+      "season": 2,
+      "episode": 5,
+      "ids": {
+        "imdb": "11280740",
+        "tmdb": "95396",
+        "tvdb": "371980",
+        "tvmaze": "44933"
+      },
+      "images": {
+        "cover": "https://picbit.io/movies_11280740-cover.webp"
+      },
+      "movie": {
+        "title": "Severance",
+        "plot": "Severance: Schöpfer: Dan Erickson Mit Adam Scott, Britt Lower, Zach Cherry, Tramell Tillman Mark leitet ein Team, dessen Erinnerungen chirurgisch zwischen ihrem Arbeits- und Privatleben aufgeteilt wurden. Als ein Kollege außerhalb der Arbeit auftaucht, beginnt eine Reise zur Entdeckung der Wahrheit über ihre Arbeit.",
+        "rating": "8.6",
+        "year": "2022",
+        "actors": "Adam Scott, Britt Lower, Zach Cherry"
+      },
+      "tv": {
+        "title": "Severance",
+        "imdb": "11280740",
+        "tvdb": "371980",
+        "tmdb": "95396",
+        "tvmaze": "44933",
+        "first_aired": "2022-02-18T00:00:00+01:00",
+        "episode": {
+          "title": "Trojan's Horse",
+          "air_date": "2025-02-13T00:00:00+01:00",
+          "rating": "8",
+          "overview": "Tensions emerge after the team suffers a loss."
+        }
+      }
+    },
+    {
+      "guid": "6f9503389c68c90667178d4da1715c9c",
+      "title": "Severance.S02E05.German.DL.720p.WEB.h264-WvF",
+      "category": {
+        "id": 5140,
+        "name": "TV - DE > HD"
+      },
+      "size": 1680461266,
+      "files": 33,
+      "comments": 0,
+      "posted_at": "2026-05-10T21:38:51+02:00",
+      "usenet_at": "5449-11-07T17:39:52+01:00",
+      "links": {
+        "details": "https://treasure-maps.com/details/6f9503389c68c90667178d4da1715c9c",
+        "download": "/api/v1/releases/6f9503389c68c90667178d4da1715c9c/download",
+        "comments": "https://treasure-maps.com/details/6f9503389c68c90667178d4da1715c9c#comments",
+        "nfo": "/api/v1/releases/6f9503389c68c90667178d4da1715c9c/nfo",
+        "mediainfo": "/api/v1/releases/6f9503389c68c90667178d4da1715c9c/mediainfo"
+      },
+      "password": -1,
+      "season": 2,
+      "episode": 5,
+      "ids": {
+        "imdb": "11280740",
+        "tmdb": "95396",
+        "tvdb": "371980",
+        "tvmaze": "44933"
+      },
+      "images": {
+        "cover": "https://picbit.io/movies_11280740-cover.webp"
+      },
+      "movie": {
+        "title": "Severance",
+        "plot": "Severance: Schöpfer: Dan Erickson Mit Adam Scott, Britt Lower, Zach Cherry, Tramell Tillman Mark leitet ein Team, dessen Erinnerungen chirurgisch zwischen ihrem Arbeits- und Privatleben aufgeteilt wurden. Als ein Kollege außerhalb der Arbeit auftaucht, beginnt eine Reise zur Entdeckung der Wahrheit über ihre Arbeit.",
+        "rating": "8.6",
+        "year": "2022",
+        "actors": "Adam Scott, Britt Lower, Zach Cherry"
+      },
+      "tv": {
+        "title": "Severance",
+        "imdb": "11280740",
+        "tvdb": "371980",
+        "tmdb": "95396",
+        "tvmaze": "44933",
+        "first_aired": "2022-02-18T00:00:00+01:00",
+        "episode": {
+          "title": "Trojan's Horse",
+          "air_date": "2025-02-13T00:00:00+01:00",
+          "rating": "8",
+          "overview": "Tensions emerge after the team suffers a loss."
+        }
+      }
+    },
+    {
+      "guid": "8562c9c2a502b8016e7cfcbc56d02880",
+      "title": "Severance.2022.S02E05.German.DL.Atmos.2160p.DV.HDR.ATVP.WEB.H265-ZeroTwo",
+      "category": {
+        "id": 5145,
+        "name": "TV - DE > UHD"
+      },
+      "size": 9715322674,
+      "files": 112,
+      "comments": 0,
+      "posted_at": "2026-05-10T10:49:17+02:00",
+      "usenet_at": "5301-11-07T17:39:52+01:00",
+      "links": {
+        "details": "https://treasure-maps.com/details/8562c9c2a502b8016e7cfcbc56d02880",
+        "download": "/api/v1/releases/8562c9c2a502b8016e7cfcbc56d02880/download",
+        "comments": "https://treasure-maps.com/details/8562c9c2a502b8016e7cfcbc56d02880#comments",
+        "nfo": "/api/v1/releases/8562c9c2a502b8016e7cfcbc56d02880/nfo",
+        "mediainfo": "/api/v1/releases/8562c9c2a502b8016e7cfcbc56d02880/mediainfo"
+      },
+      "password": -1,
+      "season": 2,
+      "episode": 5,
+      "ids": {
+        "imdb": "11280740",
+        "tmdb": "95396",
+        "tvdb": "371980",
+        "tvmaze": "44933"
+      },
+      "images": {
+        "cover": "https://picbit.io/movies_11280740-cover.webp"
+      },
+      "movie": {
+        "title": "Severance",
+        "plot": "Severance: Schöpfer: Dan Erickson Mit Adam Scott, Britt Lower, Zach Cherry, Tramell Tillman Mark leitet ein Team, dessen Erinnerungen chirurgisch zwischen ihrem Arbeits- und Privatleben aufgeteilt wurden. Als ein Kollege außerhalb der Arbeit auftaucht, beginnt eine Reise zur Entdeckung der Wahrheit über ihre Arbeit.",
+        "rating": "8.6",
+        "year": "2022",
+        "actors": "Adam Scott, Britt Lower, Zach Cherry"
+      },
+      "tv": {
+        "title": "Severance",
+        "imdb": "11280740",
+        "tvdb": "371980",
+        "tmdb": "95396",
+        "tvmaze": "44933",
+        "first_aired": "2022-02-18T00:00:00+01:00",
+        "episode": {
+          "title": "Trojan's Horse",
+          "air_date": "2025-02-13T00:00:00+01:00",
+          "rating": "8",
+          "overview": "Tensions emerge after the team suffers a loss."
+        }
+      }
+    },
+    {
+      "guid": "2da553c3a45fd04c6384997745923303",
+      "title": "Severance.2022.S02E05.German.DL.Atmos.1080p.ATVP.WEB.H265-ZeroTwo",
+      "category": {
+        "id": 5140,
+        "name": "TV - DE > HD"
+      },
+      "size": 2465480766,
+      "files": 43,
+      "comments": 0,
+      "posted_at": "2026-05-10T21:38:38+02:00",
+      "usenet_at": "5047-11-07T17:39:52+01:00",
+      "links": {
+        "details": "https://treasure-maps.com/details/2da553c3a45fd04c6384997745923303",
+        "download": "/api/v1/releases/2da553c3a45fd04c6384997745923303/download",
+        "comments": "https://treasure-maps.com/details/2da553c3a45fd04c6384997745923303#comments",
+        "nfo": "/api/v1/releases/2da553c3a45fd04c6384997745923303/nfo",
+        "mediainfo": "/api/v1/releases/2da553c3a45fd04c6384997745923303/mediainfo"
+      },
+      "password": -1,
+      "season": 2,
+      "episode": 5,
+      "ids": {
+        "imdb": "11280740",
+        "tmdb": "95396",
+        "tvdb": "371980",
+        "tvmaze": "44933"
+      },
+      "images": {
+        "cover": "https://picbit.io/movies_11280740-cover.webp"
+      },
+      "movie": {
+        "title": "Severance",
+        "plot": "Severance: Schöpfer: Dan Erickson Mit Adam Scott, Britt Lower, Zach Cherry, Tramell Tillman Mark leitet ein Team, dessen Erinnerungen chirurgisch zwischen ihrem Arbeits- und Privatleben aufgeteilt wurden. Als ein Kollege außerhalb der Arbeit auftaucht, beginnt eine Reise zur Entdeckung der Wahrheit über ihre Arbeit.",
+        "rating": "8.6",
+        "year": "2022",
+        "actors": "Adam Scott, Britt Lower, Zach Cherry"
+      },
+      "tv": {
+        "title": "Severance",
+        "imdb": "11280740",
+        "tvdb": "371980",
+        "tmdb": "95396",
+        "tvmaze": "44933",
+        "first_aired": "2022-02-18T00:00:00+01:00",
+        "episode": {
+          "title": "Trojan's Horse",
+          "air_date": "2025-02-13T00:00:00+01:00",
+          "rating": "8",
+          "overview": "Tensions emerge after the team suffers a loss."
+        }
+      }
+    },
+    {
+      "guid": "38974f14f3f9038d1ecfcde3fa403fb3",
+      "title": "Severance.2022.S02E05.German.DL.Atmos.1080p.DV.HDR.ATVP.WEB.H265-ZeroTwo",
+      "category": {
+        "id": 5140,
+        "name": "TV - DE > HD"
+      },
+      "size": 2863778830,
+      "files": 49,
+      "comments": 0,
+      "posted_at": "2026-05-10T21:38:38+02:00",
+      "usenet_at": "4992-11-07T17:39:52+01:00",
+      "links": {
+        "details": "https://treasure-maps.com/details/38974f14f3f9038d1ecfcde3fa403fb3",
+        "download": "/api/v1/releases/38974f14f3f9038d1ecfcde3fa403fb3/download",
+        "comments": "https://treasure-maps.com/details/38974f14f3f9038d1ecfcde3fa403fb3#comments",
+        "nfo": "/api/v1/releases/38974f14f3f9038d1ecfcde3fa403fb3/nfo",
+        "mediainfo": "/api/v1/releases/38974f14f3f9038d1ecfcde3fa403fb3/mediainfo"
+      },
+      "password": -1,
+      "season": 2,
+      "episode": 5,
+      "ids": {
+        "imdb": "11280740",
+        "tmdb": "95396",
+        "tvdb": "371980",
+        "tvmaze": "44933"
+      },
+      "images": {
+        "cover": "https://picbit.io/movies_11280740-cover.webp"
+      },
+      "movie": {
+        "title": "Severance",
+        "plot": "Severance: Schöpfer: Dan Erickson Mit Adam Scott, Britt Lower, Zach Cherry, Tramell Tillman Mark leitet ein Team, dessen Erinnerungen chirurgisch zwischen ihrem Arbeits- und Privatleben aufgeteilt wurden. Als ein Kollege außerhalb der Arbeit auftaucht, beginnt eine Reise zur Entdeckung der Wahrheit über ihre Arbeit.",
+        "rating": "8.6",
+        "year": "2022",
+        "actors": "Adam Scott, Britt Lower, Zach Cherry"
+      },
+      "tv": {
+        "title": "Severance",
+        "imdb": "11280740",
+        "tvdb": "371980",
+        "tmdb": "95396",
+        "tvmaze": "44933",
+        "first_aired": "2022-02-18T00:00:00+01:00",
+        "episode": {
+          "title": "Trojan's Horse",
+          "air_date": "2025-02-13T00:00:00+01:00",
+          "rating": "8",
+          "overview": "Tensions emerge after the team suffers a loss."
+        }
+      }
+    },
+    {
+      "guid": "fc25c9b537f97a26a344212e088f7068",
+      "title": "Severance.2022.S02E05.German.DL.Atmos.720p.ATVP.WEB.H264-ZeroTwo",
+      "category": {
+        "id": 5140,
+        "name": "TV - DE > HD"
+      },
+      "size": 1682820894,
+      "files": 33,
+      "comments": 0,
+      "posted_at": "2026-05-10T21:38:38+02:00",
+      "usenet_at": "4922-11-07T17:39:52+01:00",
+      "links": {
+        "details": "https://treasure-maps.com/details/fc25c9b537f97a26a344212e088f7068",
+        "download": "/api/v1/releases/fc25c9b537f97a26a344212e088f7068/download",
+        "comments": "https://treasure-maps.com/details/fc25c9b537f97a26a344212e088f7068#comments",
+        "nfo": "/api/v1/releases/fc25c9b537f97a26a344212e088f7068/nfo",
+        "mediainfo": "/api/v1/releases/fc25c9b537f97a26a344212e088f7068/mediainfo"
+      },
+      "password": -1,
+      "season": 2,
+      "episode": 5,
+      "ids": {
+        "imdb": "11280740",
+        "tmdb": "95396",
+        "tvdb": "371980",
+        "tvmaze": "44933"
+      },
+      "images": {
+        "cover": "https://picbit.io/movies_11280740-cover.webp"
+      },
+      "movie": {
+        "title": "Severance",
+        "plot": "Severance: Schöpfer: Dan Erickson Mit Adam Scott, Britt Lower, Zach Cherry, Tramell Tillman Mark leitet ein Team, dessen Erinnerungen chirurgisch zwischen ihrem Arbeits- und Privatleben aufgeteilt wurden. Als ein Kollege außerhalb der Arbeit auftaucht, beginnt eine Reise zur Entdeckung der Wahrheit über ihre Arbeit.",
+        "rating": "8.6",
+        "year": "2022",
+        "actors": "Adam Scott, Britt Lower, Zach Cherry"
+      },
+      "tv": {
+        "title": "Severance",
+        "imdb": "11280740",
+        "tvdb": "371980",
+        "tmdb": "95396",
+        "tvmaze": "44933",
+        "first_aired": "2022-02-18T00:00:00+01:00",
+        "episode": {
+          "title": "Trojan's Horse",
+          "air_date": "2025-02-13T00:00:00+01:00",
+          "rating": "8",
+          "overview": "Tensions emerge after the team suffers a loss."
+        }
+      }
+    },
+    {
+      "guid": "eaa01ef2199cba380d4bd798df517b11",
+      "title": "Severance.2022.S02E05.German.DL.Atmos.1080p.ATVP.WEB.H264-ZeroTwo",
+      "category": {
+        "id": 5140,
+        "name": "TV - DE > HD"
+      },
+      "size": 4412211398,
+      "files": 71,
+      "comments": 0,
+      "posted_at": "2026-05-10T21:38:37+02:00",
+      "usenet_at": "4852-11-07T17:39:52+01:00",
+      "links": {
+        "details": "https://treasure-maps.com/details/eaa01ef2199cba380d4bd798df517b11",
+        "download": "/api/v1/releases/eaa01ef2199cba380d4bd798df517b11/download",
+        "comments": "https://treasure-maps.com/details/eaa01ef2199cba380d4bd798df517b11#comments",
+        "nfo": "/api/v1/releases/eaa01ef2199cba380d4bd798df517b11/nfo",
+        "mediainfo": "/api/v1/releases/eaa01ef2199cba380d4bd798df517b11/mediainfo"
+      },
+      "password": -1,
+      "season": 2,
+      "episode": 5,
+      "ids": {
+        "imdb": "11280740",
+        "tmdb": "95396",
+        "tvdb": "371980",
+        "tvmaze": "44933"
+      },
+      "images": {
+        "cover": "https://picbit.io/movies_11280740-cover.webp"
+      },
+      "movie": {
+        "title": "Severance",
+        "plot": "Severance: Schöpfer: Dan Erickson Mit Adam Scott, Britt Lower, Zach Cherry, Tramell Tillman Mark leitet ein Team, dessen Erinnerungen chirurgisch zwischen ihrem Arbeits- und Privatleben aufgeteilt wurden. Als ein Kollege außerhalb der Arbeit auftaucht, beginnt eine Reise zur Entdeckung der Wahrheit über ihre Arbeit.",
+        "rating": "8.6",
+        "year": "2022",
+        "actors": "Adam Scott, Britt Lower, Zach Cherry"
+      },
+      "tv": {
+        "title": "Severance",
+        "imdb": "11280740",
+        "tvdb": "371980",
+        "tmdb": "95396",
+        "tvmaze": "44933",
+        "first_aired": "2022-02-18T00:00:00+01:00",
+        "episode": {
+          "title": "Trojan's Horse",
+          "air_date": "2025-02-13T00:00:00+01:00",
+          "rating": "8",
+          "overview": "Tensions emerge after the team suffers a loss."
+        }
+      }
+    },
+    {
+      "guid": "4f9afdc67e820fb4a6d45a2c6941b4ef",
+      "title": "Severance.S02E05.German.DL.720p.WEB.h264-WvF",
+      "category": {
+        "id": 5140,
+        "name": "TV - DE > HD"
+      },
+      "size": 1830355144,
+      "files": 20,
+      "comments": 0,
+      "posted_at": "2025-02-14T10:20:35+01:00",
+      "usenet_at": "4826-11-07T17:39:52+01:00",
+      "links": {
+        "details": "https://treasure-maps.com/details/4f9afdc67e820fb4a6d45a2c6941b4ef",
+        "download": "/api/v1/releases/4f9afdc67e820fb4a6d45a2c6941b4ef/download",
+        "comments": "https://treasure-maps.com/details/4f9afdc67e820fb4a6d45a2c6941b4ef#comments",
+        "nfo": "/api/v1/releases/4f9afdc67e820fb4a6d45a2c6941b4ef/nfo",
+        "mediainfo": "/api/v1/releases/4f9afdc67e820fb4a6d45a2c6941b4ef/mediainfo"
+      },
+      "sha1": "01f1f128bccf1e12aa413e53268bb9a24c76ee63",
+      "password": -1,
+      "audio_languages": [
+        "English",
+        "German"
+      ],
+      "subtitles": [
+        "English",
+        "German"
+      ],
+      "season": 2,
+      "episode": 5,
+      "video": {
+        "codec": "V_MPEG4/ISO/AVC",
+        "resolution": "1482x620",
+        "aspect_ratio": "2.39",
+        "framerate": "23.975999832153"
+      },
+      "ids": {
+        "tmdb": "95396",
+        "tvdb": "371980",
+        "tvmaze": "44933"
+      },
+      "images": {
+        "cover": "https://picbit.io/tv_23140.webp"
+      },
+      "tv": {
+        "title": "Severance",
+        "imdb": "11280740",
+        "tvdb": "371980",
+        "tmdb": "95396",
+        "tvmaze": "44933",
+        "first_aired": "2022-02-18T00:00:00+01:00",
+        "episode": {
+          "title": "Trojan's Horse",
+          "air_date": "2025-02-13T00:00:00+01:00",
+          "rating": "8",
+          "overview": "Tensions emerge after the team suffers a loss."
+        }
+      }
+    },
+    {
+      "guid": "307ddc620fd592d174d2ff33974f49f5",
+      "title": "Severance.2022.S02E05.German.DL.Atmos.2160p.DV.HDR.ATVP.WEB.H265-ZeroTwo",
+      "category": {
+        "id": 5145,
+        "name": "TV - DE > UHD"
+      },
+      "size": 10240972376,
+      "files": 12,
+      "comments": 0,
+      "posted_at": "2025-02-14T09:24:36+01:00",
+      "usenet_at": "1468-11-07T17:39:52+00:53",
+      "links": {
+        "details": "https://treasure-maps.com/details/307ddc620fd592d174d2ff33974f49f5",
+        "download": "/api/v1/releases/307ddc620fd592d174d2ff33974f49f5/download",
+        "comments": "https://treasure-maps.com/details/307ddc620fd592d174d2ff33974f49f5#comments",
+        "nfo": "/api/v1/releases/307ddc620fd592d174d2ff33974f49f5/nfo",
+        "mediainfo": "/api/v1/releases/307ddc620fd592d174d2ff33974f49f5/mediainfo"
+      },
+      "sha1": "6731d82aec3712d6aa42bff59b592d10de00f9f5",
+      "password": -1,
+      "audio_languages": [
+        "English",
+        "German"
+      ],
+      "subtitles": [
+        "Arabic",
+        "Bulgarian",
+        "Chinese",
+        "Czech",
+        "Danish",
+        "Dutch",
+        "English",
+        "Estonian",
+        "Finnish",
+        "French",
+        "German",
+        "Greek",
+        "Hebrew",
+        "Hindi",
+        "Hungarian",
+        "Indonesian",
+        "Italian",
+        "Japanese",
+        "Korean",
+        "Latvian/Lettish",
+        "Lithuanian",
+        "Malay",
+        "Norwegian",
+        "Polish",
+        "Portuguese",
+        "Russian",
+        "Slovak",
+        "Slovenian",
+        "Spanish",
+        "Swedish",
+        "Tamil",
+        "Tegulu",
+        "Thai",
+        "Turkish",
+        "Ukrainian",
+        "Vietnamese"
+      ],
+      "season": 2,
+      "episode": 5,
+      "video": {
+        "codec": "V_MPEGH/ISO/HEVC",
+        "resolution": "3840x1606",
+        "aspect_ratio": "2.39",
+        "framerate": "23.975999832153"
+      },
+      "ids": {
+        "tmdb": "95396",
+        "tvdb": "371980",
+        "tvmaze": "44933"
+      },
+      "images": {
+        "cover": "https://picbit.io/tv_23140.webp"
+      },
+      "tv": {
+        "title": "Severance",
+        "imdb": "11280740",
+        "tvdb": "371980",
+        "tmdb": "95396",
+        "tvmaze": "44933",
+        "first_aired": "2022-02-18T00:00:00+01:00",
+        "episode": {
+          "title": "Trojan's Horse",
+          "air_date": "2025-02-13T00:00:00+01:00",
+          "rating": "8",
+          "overview": "Tensions emerge after the team suffers a loss."
+        }
+      }
+    },
+    {
+      "guid": "89ffdbd2ddb0e6a1c20da2680d7b129e",
+      "title": "Severance.2022.S02E05.German.DL.Atmos.720p.ATVP.WEB.H264-ZeroTwo",
+      "category": {
+        "id": 5140,
+        "name": "TV - DE > HD"
+      },
+      "size": 1781212566,
+      "files": 11,
+      "comments": 0,
+      "posted_at": "2025-02-14T09:24:04+01:00",
+      "usenet_at": "1440-11-07T17:39:52+00:53",
+      "links": {
+        "details": "https://treasure-maps.com/details/89ffdbd2ddb0e6a1c20da2680d7b129e",
+        "download": "/api/v1/releases/89ffdbd2ddb0e6a1c20da2680d7b129e/download",
+        "comments": "https://treasure-maps.com/details/89ffdbd2ddb0e6a1c20da2680d7b129e#comments",
+        "nfo": "/api/v1/releases/89ffdbd2ddb0e6a1c20da2680d7b129e/nfo",
+        "mediainfo": "/api/v1/releases/89ffdbd2ddb0e6a1c20da2680d7b129e/mediainfo"
+      },
+      "sha1": "a3bd5d5eecb2d3fec4bfe0852c1d76fe418db694",
+      "password": -1,
+      "audio_languages": [
+        "English",
+        "German"
+      ],
+      "subtitles": [
+        "Arabic",
+        "Bulgarian",
+        "Chinese",
+        "Czech",
+        "Danish",
+        "Dutch",
+        "English",
+        "Estonian",
+        "Finnish",
+        "French",
+        "German",
+        "Greek",
+        "Hebrew",
+        "Hindi",
+        "Hungarian",
+        "Indonesian",
+        "Italian",
+        "Japanese",
+        "Korean",
+        "Latvian/Lettish",
+        "Lithuanian",
+        "Malay",
+        "Norwegian",
+        "Polish",
+        "Portuguese",
+        "Russian",
+        "Slovak",
+        "Slovenian",
+        "Spanish",
+        "Swedish",
+        "Tamil",
+        "Tegulu",
+        "Thai",
+        "Turkish",
+        "Ukrainian",
+        "Vietnamese"
+      ],
+      "season": 2,
+      "episode": 5,
+      "video": {
+        "codec": "V_MPEG4/ISO/AVC",
+        "resolution": "1482x620",
+        "aspect_ratio": "2.39",
+        "framerate": "23.975999832153"
+      },
+      "ids": {
+        "tmdb": "95396",
+        "tvdb": "371980",
+        "tvmaze": "44933"
+      },
+      "images": {
+        "cover": "https://picbit.io/tv_23140.webp"
+      },
+      "tv": {
+        "title": "Severance",
+        "imdb": "11280740",
+        "tvdb": "371980",
+        "tmdb": "95396",
+        "tvmaze": "44933",
+        "first_aired": "2022-02-18T00:00:00+01:00",
+        "episode": {
+          "title": "Trojan's Horse",
+          "air_date": "2025-02-13T00:00:00+01:00",
+          "rating": "8",
+          "overview": "Tensions emerge after the team suffers a loss."
+        }
+      }
+    }
+  ],
+  "pagination": {
+    "limit": 20,
+    "offset": 0,
+    "total": 30
+  }
+}
