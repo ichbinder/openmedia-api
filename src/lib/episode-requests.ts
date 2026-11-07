@@ -1,5 +1,5 @@
 import { createHash } from "crypto";
-import type { EpisodeRequest, NzbEpisode, NzbShow } from "../../generated/client/index.js";
+import type { EpisodeRequest, NzbEpisode, NzbShow, Prisma } from "../../generated/client/index.js";
 import prisma from "./prisma.js";
 import { getTmdbEpisodeById, getTmdbSeasonById } from "./tmdb.js";
 import { downloadNzb, getDownloadBudget, IndexerError, searchEpisode } from "./treasure-maps.js";
@@ -22,10 +22,33 @@ const EXPIRE_MS = 30 * 24 * 60 * 60 * 1000;
 const BUDGET_RESERVE = 50;
 const MAX_NZBS_PER_REQUEST = 3;
 const SYNC_BATCH = 20;
+const STALE_SEARCH_MS = 15 * 60 * 1000;
 const DEFAULT_RUNTIME_MINUTES = 45;
 const TIER_PREFERENCE = ["1080p", "2160p", "720p", "480p"];
 
 type FullRequest = EpisodeRequest & { episode: NzbEpisode & { show: NzbShow } };
+
+function claimable(): Prisma.EpisodeRequestWhereInput {
+  return {
+    OR: [
+      { status: { in: ["waiting", "expired"] } },
+      { status: "searching", updatedAt: { lt: new Date(Date.now() - STALE_SEARCH_MS) } },
+    ],
+  };
+}
+
+// A claim sets status "searching" and bumps updatedAt; the new updatedAt is the
+// claim token, so only its holder (or a sync run once it went stale) may proceed.
+async function claim(
+  id: string,
+  where: Prisma.EpisodeRequestWhereInput,
+  data: Prisma.EpisodeRequestUpdateManyMutationInput = {},
+): Promise<Date | null> {
+  const { count } = await prisma.episodeRequest.updateMany({ where: { id, ...where }, data: { ...data, status: "searching" } });
+  if (count === 0) return null;
+  const row = await prisma.episodeRequest.findUniqueOrThrow({ where: { id }, select: { updatedAt: true } });
+  return row.updatedAt;
+}
 
 function tierRank(tier: string | null): number {
   const index = TIER_PREFERENCE.indexOf(tier ?? "");
@@ -120,12 +143,17 @@ async function ingestCandidate(
   }
 }
 
-export async function fulfillEpisodeRequest(requestId: string): Promise<void> {
+export async function fulfillEpisodeRequest(requestId: string, claimToken?: Date): Promise<void> {
+  const claimed = await claim(
+    requestId,
+    claimToken ? { status: "searching", updatedAt: claimToken } : { ...claimable(), status: { not: "expired" } },
+  );
+  if (!claimed) return;
   const request = await prisma.episodeRequest.findUnique({
     where: { id: requestId },
     include: { episode: { include: { show: true } } },
   });
-  if (!request || !["searching", "waiting"].includes(request.status)) return;
+  if (!request) return;
   const { episode } = request;
 
   const available = await prisma.nzbFile.findMany({
@@ -153,19 +181,19 @@ export async function fulfillEpisodeRequest(requestId: string): Promise<void> {
 
   try {
     let candidates = await rankEpisodeCandidates(episode.show.tmdbId, episode.season, episode.episode);
+    candidates = candidates.filter((c) => Number.isSafeInteger(c.size) && c.size > 0);
     if (request.manualGuid) candidates = candidates.filter((c) => c.guid === request.manualGuid);
     if (candidates.length === 0) {
       await markWaiting(request, "no_german");
       return;
     }
 
-    const budget = await getDownloadBudget();
-    if (budget.used >= budget.max - BUDGET_RESERVE) {
-      await markWaiting(request, "budget");
-      return;
-    }
-
     for (const candidate of candidates.slice(0, MAX_NZBS_PER_REQUEST)) {
+      const budget = await getDownloadBudget();
+      if (budget.used >= budget.max - BUDGET_RESERVE) {
+        await markWaiting(request, "budget");
+        return;
+      }
       const result = await ingestCandidate(request, candidate);
       switch (result.kind) {
         case "created":
@@ -240,29 +268,34 @@ export async function requestEpisodes(
   });
 
   const requestIds: string[] = [];
+  const claims: { id: string; token: Date }[] = [];
   for (const episodeId of episodeIds) {
+    // New rows start as "waiting" (without nextSearchAt) so the claim below
+    // treats new and restartable requests the same way.
     const request = await prisma.episodeRequest.upsert({
       where: { userId_episodeId: { userId, episodeId } },
-      create: { userId, episodeId, manualGuid },
-      update: manualGuid ? { manualGuid } : {},
-    });
-    await prisma.episodeRequest.updateMany({
-      where: { id: request.id, status: { in: ["expired", "waiting"] } },
-      data: { status: "searching", createdAt: new Date(), waitReason: null, nextSearchAt: null },
+      create: { userId, episodeId, manualGuid: manualGuid ?? null, status: "waiting" },
+      update: { manualGuid: manualGuid ?? null },
     });
     requestIds.push(request.id);
+    const token = await claim(request.id, claimable(), {
+      createdAt: new Date(),
+      waitReason: null,
+      nextSearchAt: null,
+    });
+    if (token) claims.push({ id: request.id, token });
   }
 
   if (episode !== undefined) {
-    for (const id of requestIds) await fulfillEpisodeRequest(id);
+    for (const { id, token } of claims) await fulfillEpisodeRequest(id, token);
     return readViews(requestIds);
   }
 
   const views = await readViews(requestIds);
   void (async () => {
-    for (const id of requestIds) {
+    for (const { id, token } of claims) {
       try {
-        await fulfillEpisodeRequest(id);
+        await fulfillEpisodeRequest(id, token);
       } catch (err) {
         console.error(`[episode-requests] Background fulfil of ${id} failed:`, err);
       }
@@ -303,19 +336,30 @@ export async function syncEpisodeRequests(): Promise<void> {
 
   // Requests requeued above are searched on the next run, not in this one.
   const due = await prisma.episodeRequest.findMany({
-    where: { status: "waiting", nextSearchAt: { lte: new Date() }, id: { notIn: requeued } },
+    where: {
+      OR: [
+        { status: "waiting", nextSearchAt: { lte: new Date() } },
+        { status: "searching", updatedAt: { lt: new Date(Date.now() - STALE_SEARCH_MS) } },
+      ],
+      id: { notIn: requeued },
+    },
     orderBy: { createdAt: "asc" },
     take: SYNC_BATCH,
   });
   for (const request of due) {
     try {
       if (request.createdAt.getTime() < Date.now() - EXPIRE_MS) {
-        await prisma.episodeRequest.update({ where: { id: request.id }, data: { status: "expired" } });
-      } else {
-        await fulfillEpisodeRequest(request.id);
+        await prisma.episodeRequest.updateMany({
+          where: { id: request.id, status: request.status, updatedAt: request.updatedAt },
+          data: { status: "expired" },
+        });
+        continue;
       }
+      await fulfillEpisodeRequest(request.id);
+      const after = await prisma.episodeRequest.findUnique({ where: { id: request.id }, select: { waitReason: true, status: true } });
+      if (after?.status === "waiting" && after.waitReason === "indexer_error") break;
     } catch (err) {
-      console.error(`[episode-requests] Sync of waiting request ${request.id} failed:`, err);
+      console.error(`[episode-requests] Sync of request ${request.id} failed:`, err);
     }
   }
 }

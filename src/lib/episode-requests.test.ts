@@ -20,8 +20,8 @@ vi.mock("./treasure-maps.js", async (importOriginal) => {
 });
 
 import { getTmdbEpisodeById, getTmdbSeasonById } from "./tmdb.js";
-import { downloadNzb, getDownloadBudget, searchEpisode, toRelease } from "./treasure-maps.js";
-import { requestEpisodes, syncEpisodeRequests } from "./episode-requests.js";
+import { downloadNzb, getDownloadBudget, IndexerError, searchEpisode, toRelease } from "./treasure-maps.js";
+import { fulfillEpisodeRequest, requestEpisodes, syncEpisodeRequests } from "./episode-requests.js";
 
 const mockEpisode = vi.mocked(getTmdbEpisodeById);
 const mockSeason = vi.mocked(getTmdbSeasonById);
@@ -48,6 +48,14 @@ let counter = 0;
 function createUser() {
   counter++;
   return prisma.user.create({ data: { email: `req-${counter}-${Date.now()}@test.de`, name: "U", password: "x" } });
+}
+
+async function createRequest(userId: string, episodeId: string, data: Record<string, unknown>, staleMinutes = 0) {
+  const req = await prisma.episodeRequest.create({ data: { userId, episodeId, ...data } });
+  if (staleMinutes) {
+    await prisma.$executeRaw`UPDATE episode_requests SET updated_at = now() - make_interval(mins => ${staleMinutes}) WHERE id = ${req.id}`;
+  }
+  return req;
 }
 
 async function createEpisodeRow() {
@@ -144,6 +152,49 @@ describe("requestEpisodes for one episode", () => {
     const job = await prisma.downloadJob.findFirstOrThrow({ include: { nzbFile: true } });
     expect(job.nzbFile.indexerGuid).toBe(SECOND);
   });
+
+  it("stops before the next NZB once the budget threshold is crossed", async () => {
+    const episode = await createEpisodeRow();
+    await prisma.nzbFile.create({
+      data: {
+        hash: createHash("sha256").update(nzb(BEST)).digest("hex"),
+        originalFilename: "old.nzb",
+        status: "broken",
+        episodeId: episode.id,
+      },
+    });
+    mockBudget.mockResolvedValueOnce({ used: 0, max: 400 }).mockResolvedValue({ used: 350, max: 400 });
+    const user = await createUser();
+
+    const views = await requestEpisodes(user.id, 95396, 2, 5);
+
+    expect(mockDownload.mock.calls.map((c) => c[0])).toEqual([BEST]);
+    expect(views[0]).toMatchObject({ status: "waiting", waitReason: "budget" });
+  });
+
+  it("clears an old manual pick on an automatic re-request", async () => {
+    mockSearch.mockResolvedValue([]);
+    const user = await createUser();
+    await requestEpisodes(user.id, 95396, 2, 5, SECOND);
+    expect((await prisma.episodeRequest.findFirstOrThrow()).manualGuid).toBe(SECOND);
+
+    await requestEpisodes(user.id, 95396, 2, 5);
+
+    expect((await prisma.episodeRequest.findFirstOrThrow()).manualGuid).toBeNull();
+  });
+});
+
+describe("fulfillEpisodeRequest", () => {
+  it("lets only one of two concurrent calls work on a waiting request", async () => {
+    const episode = await createEpisodeRow();
+    const user = await createUser();
+    const req = await createRequest(user.id, episode.id, { status: "waiting", nextSearchAt: new Date(Date.now() - 1000) });
+
+    await Promise.all([fulfillEpisodeRequest(req.id), fulfillEpisodeRequest(req.id)]);
+
+    expect(mockDownload).toHaveBeenCalledTimes(1);
+    expect((await prisma.episodeRequest.findFirstOrThrow()).status).toBe("downloading");
+  });
 });
 
 describe("requestEpisodes for a season", () => {
@@ -192,6 +243,43 @@ describe("syncEpisodeRequests", () => {
 
     expect((await prisma.episodeRequest.findFirstOrThrow()).status).toBe("expired");
     expect(mockSearch).not.toHaveBeenCalled();
+  });
+
+  it("recovers stale searching requests and leaves fresh ones alone", async () => {
+    const episode = await createEpisodeRow();
+    const [stale, fresh, old] = [await createUser(), await createUser(), await createUser()];
+    const staleReq = await createRequest(stale.id, episode.id, { status: "searching" }, 20);
+    const freshReq = await createRequest(fresh.id, episode.id, { status: "searching" });
+    const oldReq = await createRequest(
+      old.id,
+      episode.id,
+      { status: "searching", createdAt: new Date(Date.now() - 31 * 24 * 60 * 60 * 1000) },
+      20,
+    );
+
+    await syncEpisodeRequests();
+
+    const byId = async (id: string) => (await prisma.episodeRequest.findUniqueOrThrow({ where: { id } })).status;
+    expect(await byId(staleReq.id)).toBe("downloading");
+    expect(await byId(freshReq.id)).toBe("searching");
+    expect(await byId(oldReq.id)).toBe("expired");
+  });
+
+  it("stops the run after the first indexer error", async () => {
+    mockSearch.mockRejectedValue(new IndexerError("http", 500));
+    const episode = await createEpisodeRow();
+    const [a, b] = [await createUser(), await createUser()];
+    const due = { status: "waiting", nextSearchAt: new Date(Date.now() - 1000) };
+    const first = await createRequest(a.id, episode.id, { ...due, createdAt: new Date(Date.now() - 60_000) });
+    const second = await createRequest(b.id, episode.id, due);
+
+    await syncEpisodeRequests();
+
+    expect(mockSearch).toHaveBeenCalledTimes(1);
+    const firstAfter = await prisma.episodeRequest.findUniqueOrThrow({ where: { id: first.id } });
+    expect(firstAfter).toMatchObject({ status: "waiting", waitReason: "indexer_error" });
+    const secondAfter = await prisma.episodeRequest.findUniqueOrThrow({ where: { id: second.id } });
+    expect(secondAfter.nextSearchAt!.getTime()).toBeLessThan(Date.now());
   });
 
   it("puts a downloading request back to waiting when its job failed", async () => {
