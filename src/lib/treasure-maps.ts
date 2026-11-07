@@ -55,14 +55,51 @@ function awaitSlot(): Promise<void> {
   return slot;
 }
 
+const REQUEST_TIMEOUT_MS = 15000;
+const MAX_REDIRECTS = 3;
+
+async function send(url: URL, apiKey: string): Promise<Response> {
+  await awaitSlot();
+  const headers: Record<string, string> = {};
+  if (url.origin === new URL(BASE_URL).origin) headers["X-API-Key"] = apiKey;
+  try {
+    return await fetch(url, {
+      headers,
+      redirect: "manual",
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+  } catch {
+    throw new IndexerError("http");
+  }
+}
+
 async function request(path: string): Promise<Response> {
   const entry = await getEntry("indexer", "treasureMapsApiKey", true);
   if (!entry?.value) throw new IndexerError("not_configured");
-  await awaitSlot();
-  const res = await fetch(`${BASE_URL}${path}`, { headers: { "X-API-Key": entry.value } });
-  if (res.status === 429) throw new IndexerError("rate_limited", 429);
-  if (!res.ok) throw new IndexerError("http", res.status);
-  return res;
+  let url = new URL(`${BASE_URL}${path}`);
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    const res = await send(url, entry.value);
+    const location = res.status >= 300 && res.status < 400 ? res.headers?.get("location") : null;
+    if (!location) {
+      if (res.status === 429) throw new IndexerError("rate_limited", 429);
+      if (!res.ok) throw new IndexerError("http", res.status);
+      return res;
+    }
+    try {
+      url = new URL(location, url);
+    } catch {
+      throw new IndexerError("http", res.status);
+    }
+  }
+  throw new IndexerError("http");
+}
+
+async function readJson<T>(res: Response): Promise<T> {
+  try {
+    return (await res.json()) as T;
+  } catch {
+    throw new IndexerError("http");
+  }
 }
 
 function videoWidth(release: RawRelease): number | null {
@@ -96,19 +133,26 @@ export function searchEpisode(tmdbId: number, season: number, episode: number): 
       limit: "100",
     });
     const res = await request(`/tv?${query}`);
-    const body = (await res.json()) as { items?: RawRelease[] };
-    return (body.items ?? []).map(toRelease);
+    const body = await readJson<{ items?: unknown }>(res);
+    if (!Array.isArray(body?.items)) throw new IndexerError("http");
+    return (body.items as RawRelease[]).map(toRelease);
   });
 }
 
 export async function downloadNzb(guid: string): Promise<string> {
   if (!GUID_PATTERN.test(guid)) throw new IndexerError("http", 400);
   const res = await request(`/releases/${guid}/download`);
-  return res.text();
+  try {
+    return await res.text();
+  } catch {
+    throw new IndexerError("http");
+  }
 }
 
 export async function getDownloadBudget(): Promise<{ used: number; max: number }> {
   const res = await request("/user");
-  const body = (await res.json()) as { limits: { download_current: number; download_max: number } };
-  return { used: body.limits.download_current, max: body.limits.download_max };
+  const body = await readJson<{ limits?: { download_current?: unknown; download_max?: unknown } }>(res);
+  const { download_current: used, download_max: max } = body?.limits ?? {};
+  if (typeof used !== "number" || typeof max !== "number") throw new IndexerError("http");
+  return { used, max };
 }

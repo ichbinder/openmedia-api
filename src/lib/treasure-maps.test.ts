@@ -12,6 +12,7 @@ function reply(status: number, body: unknown) {
   return {
     ok: status >= 200 && status < 300,
     status,
+    headers: new Headers(typeof body === "object" && body && "location" in body ? { location: String((body as { location: string }).location) } : {}),
     json: async () => body,
     text: async () => (typeof body === "string" ? body : JSON.stringify(body)),
   };
@@ -46,15 +47,15 @@ describe("treasure-maps client", () => {
       tmdbid: "95396", season: "2", ep: "5", cat: "5100", extended: "true", limit: "100",
     });
     expect(init.headers["X-API-Key"]).toBe(KEY);
+    expect(init.signal).toBeInstanceOf(AbortSignal);
     expect(releases).toHaveLength(20);
     expect(releases[0]).toMatchObject({
       guid: GUID, videoWidth: 1918, audioLanguages: ["English", "German"], season: 2, episode: 5,
     });
     const idx = fixture.items.findIndex((i) => !i.video);
-    if (idx >= 0) {
-      expect(releases[idx].videoWidth).toBeNull();
-      expect(releases[idx].audioLanguages).toBeNull();
-    }
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(releases[idx].videoWidth).toBeNull();
+    expect(releases[idx].audioLanguages).toBeNull();
   });
 
   it("maps a release without video to null width and null languages", async () => {
@@ -131,5 +132,48 @@ describe("treasure-maps client", () => {
     expect(err.reason).toBe("http");
     expect(err.status).toBe(400);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("does not send the key to a cross-origin redirect target", async () => {
+    fetchMock
+      .mockResolvedValueOnce(reply(302, { location: "https://cdn.example.org/n.nzb" }))
+      .mockResolvedValueOnce(reply(200, "<nzb/>"));
+    const { downloadNzb } = await import("./treasure-maps.js");
+    expect(await downloadNzb(GUID)).toBe("<nzb/>");
+    const [url, init] = fetchMock.mock.calls[1];
+    expect(String(url)).toBe("https://cdn.example.org/n.nzb");
+    expect(init.headers["X-API-Key"]).toBeUndefined();
+  });
+
+  it("keeps the key on a same-origin redirect", async () => {
+    fetchMock
+      .mockResolvedValueOnce(reply(302, { location: "/api/v1/files/n.nzb" }))
+      .mockResolvedValueOnce(reply(200, "<nzb/>"));
+    const { downloadNzb } = await import("./treasure-maps.js");
+    await downloadNzb(GUID);
+    const [url, init] = fetchMock.mock.calls[1];
+    expect(String(url)).toBe("https://treasure-maps.com/api/v1/files/n.nzb");
+    expect(init.headers["X-API-Key"]).toBe(KEY);
+  });
+
+  it("maps a rejected fetch to IndexerError http without the key", async () => {
+    fetchMock.mockRejectedValue(new Error(`reset ${KEY}`));
+    const { searchEpisode, IndexerError } = await import("./treasure-maps.js");
+    const err = await searchEpisode(1, 1, 1).catch((e) => e);
+    expect(err).toBeInstanceOf(IndexerError);
+    expect(err.reason).toBe("http");
+    expect(err.message).not.toContain(KEY);
+  });
+
+  it("maps a budget body without limits to IndexerError http", async () => {
+    fetchMock.mockResolvedValue(reply(200, { user: {} }));
+    const { getDownloadBudget, IndexerError } = await import("./treasure-maps.js");
+    await expect(getDownloadBudget()).rejects.toBeInstanceOf(IndexerError);
+  });
+
+  it("maps a search body without items array to IndexerError http", async () => {
+    fetchMock.mockResolvedValue(reply(200, { items: "nope" }));
+    const { searchEpisode, IndexerError } = await import("./treasure-maps.js");
+    await expect(searchEpisode(2, 2, 2)).rejects.toBeInstanceOf(IndexerError);
   });
 });
