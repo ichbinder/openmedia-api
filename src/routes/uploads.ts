@@ -341,7 +341,7 @@ router.patch("/:id", requireServiceOrUserAuth, async (req: AuthRequest, res: Res
       if (nzbHash && !existingNzb) {
         const originalFile = await tx.nzbFile.findUnique({
           where: { id: job.nzbFileId },
-          select: { hash: true, originalFilename: true, movieId: true },
+          select: { hash: true, originalFilename: true, movieId: true, episodeId: true },
         });
 
         const targetMovieId = originalFile?.movieId ?? null;
@@ -353,6 +353,7 @@ router.patch("/:id", requireServiceOrUserAuth, async (req: AuthRequest, res: Res
             source: "own",
             status: "untested",
             movieId: targetMovieId,
+            episodeId: originalFile?.episodeId ?? null,
             qualityTier: resolveQualityTier(String(meta.qualityTier || meta.resolution || "") || null),
             resolution: typeof meta.resolution === "string" ? meta.resolution : null,
             codec: typeof meta.codec === "string" ? meta.codec : null,

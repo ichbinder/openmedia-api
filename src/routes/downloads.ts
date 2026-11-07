@@ -1033,22 +1033,27 @@ router.patch("/jobs/:id/status", requireServiceOrUserAuth, async (req: AuthReque
             const uploadJob = await prisma.$transaction(async (tx) => {
               const nzb = await tx.nzbFile.findUnique({
                 where: { id: currentJob.nzbFileId },
-                select: { source: true, s3Key: true, hash: true, movieId: true },
+                select: { source: true, s3Key: true, hash: true, movieId: true, episodeId: true },
               });
               if (!nzb || nzb.source === "own" || !nzb.s3Key) return null;
 
-              // Check: does this Movie already have a healthy own version?
+              // Check: does this Movie/Episode already have a healthy own version?
               // Expired/broken own versions don't count — their Usenet content is unavailable
-              if (nzb.movieId) {
+              const ownTarget = nzb.movieId
+                ? { movieId: nzb.movieId }
+                : nzb.episodeId
+                  ? { episodeId: nzb.episodeId }
+                  : null;
+              if (ownTarget) {
                 const ownVersion = await tx.nzbFile.findFirst({
                   where: {
-                    movieId: nzb.movieId,
+                    ...ownTarget,
                     source: "own",
                     status: { notIn: ["expired", "broken"] },
                   },
                   select: { id: true },
                 });
-                if (ownVersion) return null; // already have healthy own version for this movie
+                if (ownVersion) return null;
               }
 
               // Check: is there already a running/pending upload?
@@ -1061,6 +1066,7 @@ router.patch("/jobs/:id/status", requireServiceOrUserAuth, async (req: AuthReque
                 data: {
                   nzbFileId: currentJob.nzbFileId,
                   movieId: nzb.movieId,
+                  episodeId: nzb.episodeId,
                   status: "queued",
                 },
               });

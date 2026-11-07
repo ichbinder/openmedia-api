@@ -177,6 +177,36 @@ describe("UploadJob routes (M025)", () => {
       expect(original?.source).toBe("external");
     });
 
+    it("copies episodeId onto the own NzbFile for episode uploads", async () => {
+      const show = await prisma.nzbShow.create({
+        data: { tmdbId: 880_200 + emailCounter, titleDe: "Serie", titleEn: "Series", year: 2022 },
+      });
+      const episode = await prisma.nzbEpisode.create({ data: { showId: show.id, season: 1, episode: 1 } });
+      const nzbFile = await prisma.nzbFile.create({
+        data: {
+          episodeId: episode.id,
+          hash: `ep-hash-${Date.now()}`,
+          originalFilename: "Series.S01E01.mkv",
+          source: "external",
+          s3Key: "ep-hash/original.mkv",
+        },
+      });
+      const job = await prisma.uploadJob.create({ data: { nzbFileId: nzbFile.id, episodeId: episode.id } });
+      await request(app).patch(`/uploads/${job.id}`).set("Authorization", `Bearer ${authToken}`).send({ status: "running" });
+
+      const newNzbHash = `own-ep-hash-${Date.now()}`;
+      const res = await request(app)
+        .patch(`/uploads/${job.id}`)
+        .set("Authorization", `Bearer ${authToken}`)
+        .send({ status: "completed", nzbHash: newNzbHash });
+
+      expect(res.status).toBe(200);
+      const own = await prisma.nzbFile.findUnique({ where: { hash: newNzbHash } });
+      expect(own?.source).toBe("own");
+      expect(own?.episodeId).toBe(episode.id);
+      expect(own?.movieId).toBeNull();
+    });
+
     it("rejects invalid status transitions", async () => {
       const nzbFile = await createTestNzbFile();
       const job = await prisma.uploadJob.create({
