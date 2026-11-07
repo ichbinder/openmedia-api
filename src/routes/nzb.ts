@@ -201,6 +201,45 @@ router.get("/movies/by-tmdb/:tmdbId", async (req: AuthRequest, res: Response) =>
   }
 });
 
+// GET /nzb/shows/by-tmdb/:tmdbId — find show with its episodes and versions
+router.get("/shows/by-tmdb/:tmdbId", async (req: AuthRequest, res: Response) => {
+  try {
+    const tmdbId = Number(String(req.params.tmdbId));
+    if (isNaN(tmdbId)) {
+      res.status(400).json({ error: "Ungültige TMDB-ID." });
+      return;
+    }
+
+    const show = await prisma.nzbShow.findUnique({
+      where: { tmdbId },
+      include: {
+        episodes: {
+          orderBy: [{ season: "asc" }, { episode: "asc" }],
+          include: { nzbFiles: { select: nzbFileSelect } },
+        },
+      },
+    });
+
+    if (!show) {
+      res.status(404).json({ error: "Serie nicht gefunden." });
+      return;
+    }
+
+    res.json({
+      show: {
+        ...show,
+        episodes: show.episodes.map((episode) => ({
+          ...episode,
+          nzbFiles: episode.nzbFiles.map(serializeNzbFile),
+        })),
+      },
+    });
+  } catch (err) {
+    console.error("[nzb] Find show by TMDB error:", err);
+    res.status(500).json({ error: "Fehler beim Suchen der Serie." });
+  }
+});
+
 // --- NZB File endpoints ---
 
 // POST /nzb/files — add NZB file to a movie

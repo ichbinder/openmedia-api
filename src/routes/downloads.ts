@@ -810,7 +810,10 @@ router.get("/jobs", requireAuth, async (req: AuthRequest, res: Response) => {
       where: statusFilter ? { status: statusFilter } : undefined,
       include: {
         nzbFile: {
-          include: { movie: { select: { id: true, tmdbId: true, titleDe: true, titleEn: true, year: true, posterPath: true } } },
+          include: {
+            movie: { select: { id: true, tmdbId: true, titleDe: true, titleEn: true, year: true, posterPath: true } },
+            episode: JOB_NZB_FILE_INCLUDE.episode,
+          },
         },
       },
       orderBy: { createdAt: "desc" },
@@ -829,11 +832,7 @@ router.get("/jobs/:id", requireAuth, async (req: AuthRequest, res: Response) => 
   try {
     const job = await prisma.downloadJob.findUnique({
       where: { id: String(req.params.id) },
-      include: {
-        nzbFile: {
-          include: { movie: true },
-        },
-      },
+      include: { nzbFile: { include: JOB_NZB_FILE_INCLUDE } },
     });
 
     if (!job) {

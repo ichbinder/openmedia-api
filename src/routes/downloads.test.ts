@@ -460,6 +460,33 @@ describe("Downloads Routes", () => {
     });
   });
 
+  describe("nzbFile.episode in Job-Antworten", () => {
+    it("liefert episode mit Serie für Episoden-Jobs in Liste und Detail", async () => {
+      const show = await prisma.nzbShow.create({
+        data: { tmdbId: 95396, titleDe: "Severance", titleEn: "Severance", year: 2022, posterPath: "/s.jpg" },
+      });
+      const ep = await prisma.nzbEpisode.create({ data: { showId: show.id, season: 2, episode: 5, titleDe: "Trojans' Horse" } });
+      const nzbFile = await prisma.nzbFile.create({
+        data: { episodeId: ep.id, hash: `eph-${Date.now()}`, originalFilename: "ep.nzb" },
+      });
+      const job = await prisma.downloadJob.create({ data: { nzbFileId: nzbFile.id, status: "queued" } });
+      const expected = {
+        id: ep.id,
+        season: 2,
+        episode: 5,
+        titleDe: "Trojans' Horse",
+        show: { tmdbId: 95396, titleDe: "Severance", titleEn: "Severance", year: 2022, posterPath: "/s.jpg" },
+      };
+
+      const list = await request(app).get("/downloads/jobs").set("Authorization", `Bearer ${token}`);
+      expect(list.body.jobs.find((j: any) => j.id === job.id).nzbFile.episode).toEqual(expected);
+
+      const detail = await request(app).get(`/downloads/jobs/${job.id}`).set("Authorization", `Bearer ${token}`);
+      expect(detail.body.job.nzbFile.episode).toEqual(expected);
+      expect(detail.body.job.nzbFile.movie).toBeNull();
+    });
+  });
+
   describe("DELETE /downloads/jobs/:id", () => {
     it("löscht einen queued Job", async () => {
       const { nzbFile } = await createTestNzbFile();
