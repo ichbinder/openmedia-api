@@ -38,6 +38,7 @@ import { parseNzbName } from "./nzb-parser.js";
 import { deleteNzbFromService } from "./nzb-service.js";
 import { provisionDownload } from "./provisioner.js";
 import { deleteServiceTokens } from "./service-token.js";
+import { syncEpisodeRequests } from "./episode-requests.js";
 
 // ── Configuration ───────────────────────────────────────────
 
@@ -543,6 +544,12 @@ export async function reconcileStaleJobs(): Promise<ReconcileResult> {
     await cleanupExpiredReviews(result);
   } catch (err) {
     console.error("[reconciler] cleanupExpiredReviews failed:", err);
+  }
+
+  try {
+    await syncEpisodeRequests();
+  } catch (err) {
+    console.error("[reconciler] syncEpisodeRequests failed:", err);
   }
 
   try {
