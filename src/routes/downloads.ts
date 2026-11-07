@@ -1442,6 +1442,14 @@ router.post("/jobs/:id/assign-movie", requireAuth, async (req: AuthRequest, res:
       return;
     }
 
+    if (parseNzbName(job.nzbFile.originalFilename).season !== null) {
+      res.status(409).json({
+        error: "Folgen werden automatisch zugeordnet und können nicht als Film zugewiesen werden.",
+        reason: "episode_not_assignable",
+      });
+      return;
+    }
+
     // --- TMDB lookup (outside transaction — I/O) ---
     const tmdbResult = await searchTmdbMovieById(tmdbId);
 
