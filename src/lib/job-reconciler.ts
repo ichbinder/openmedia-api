@@ -195,6 +195,28 @@ export async function retryTmdbForPendingReviews(
   }
 }
 
+type ReconcilerTx = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
+
+async function flipNeedsReviewJobsInTx(tx: ReconcilerTx, nzbFileId: string): Promise<string[]> {
+  const jobs = await tx.downloadJob.findMany({
+    where: { nzbFileId, status: "needs_review" },
+    select: { id: true },
+  });
+  await tx.downloadJob.updateMany({
+    where: { nzbFileId, status: "needs_review" },
+    data: { status: "queued", error: null, reviewExpiresAt: null, tmdbRetryAfter: null },
+  });
+  return jobs.map((j) => j.id);
+}
+
+function provisionFlippedJobs(jobIds: string[]): void {
+  for (const jobId of jobIds) {
+    provisionDownload(jobId).catch((err) => {
+      console.error(`[reconciler] Auto-provision failed for flipped job ${jobId}:`, err);
+    });
+  }
+}
+
 /**
  * Failure path of a TMDB retry (not_found, error, disabled): bump the retry
  * counter on all still-pending jobs of the NzbFile and schedule the next attempt.
@@ -262,26 +284,14 @@ async function assignEpisodeToNzbFile(
         await tx.nzbFile.update({ where: { id: nzbFileId }, data: { episodeId } });
       }
 
-      const siblings = await tx.downloadJob.findMany({
-        where: { nzbFileId, status: "needs_review" },
-        select: { id: true },
-      });
-      await tx.downloadJob.updateMany({
-        where: { nzbFileId, status: "needs_review" },
-        data: { status: "queued", error: null, reviewExpiresAt: null, tmdbRetryAfter: null },
-      });
-      return siblings.map((j) => j.id);
+      return flipNeedsReviewJobsInTx(tx, nzbFileId);
     });
   } catch (err: any) {
     console.error(`[reconciler] assignEpisodeToNzbFile failed for ${nzbFileId}:`, err);
     return false;
   }
 
-  for (const jobId of flippedJobIds) {
-    provisionDownload(jobId).catch((err) => {
-      console.error(`[reconciler] Auto-provision failed for flipped job ${jobId}:`, err);
-    });
-  }
+  provisionFlippedJobs(flippedJobIds);
 
   return true;
 }
@@ -322,20 +332,7 @@ async function assignMovieToNzbFile(
 
       // Race: already assigned — flip sibling jobs and return.
       if (fresh.movieId !== null) {
-        const siblings = await tx.downloadJob.findMany({
-          where: { nzbFileId, status: "needs_review" },
-          select: { id: true },
-        });
-        await tx.downloadJob.updateMany({
-          where: { nzbFileId, status: "needs_review" },
-          data: {
-            status: "queued",
-            error: null,
-            reviewExpiresAt: null,
-            tmdbRetryAfter: null,
-          },
-        });
-        return siblings.map((j) => j.id);
+        return flipNeedsReviewJobsInTx(tx, nzbFileId);
       }
 
       // Reuse-or-create NzbMovie on tmdbId unique.
@@ -367,34 +364,14 @@ async function assignMovieToNzbFile(
         data: { movieId: movie.id },
       });
 
-      const siblings = await tx.downloadJob.findMany({
-        where: { nzbFileId, status: "needs_review" },
-        select: { id: true },
-      });
-
-      await tx.downloadJob.updateMany({
-        where: { nzbFileId, status: "needs_review" },
-        data: {
-          status: "queued",
-          error: null,
-          reviewExpiresAt: null,
-          tmdbRetryAfter: null,
-        },
-      });
-
-      return siblings.map((j) => j.id);
+      return flipNeedsReviewJobsInTx(tx, nzbFileId);
     });
   } catch (err: any) {
     console.error(`[reconciler] assignMovieToNzbFile failed for ${nzbFileId}:`, err);
     return false;
   }
 
-  // Fire-and-forget provisioning (outside the transaction)
-  for (const jobId of flippedJobIds) {
-    provisionDownload(jobId).catch((err) => {
-      console.error(`[reconciler] Auto-provision failed for flipped job ${jobId}:`, err);
-    });
-  }
+  provisionFlippedJobs(flippedJobIds);
 
   return true;
 }
@@ -408,31 +385,14 @@ async function flipNeedsReviewJobsToQueued(nzbFileId: string): Promise<string[]>
   let flippedIds: string[] = [];
   try {
     flippedIds = await prisma.$transaction(async (tx) => {
-      const jobs = await tx.downloadJob.findMany({
-        where: { nzbFileId, status: "needs_review" },
-        select: { id: true },
-      });
-      await tx.downloadJob.updateMany({
-        where: { nzbFileId, status: "needs_review" },
-        data: {
-          status: "queued",
-          error: null,
-          reviewExpiresAt: null,
-          tmdbRetryAfter: null,
-        },
-      });
-      return jobs.map((j) => j.id);
+      return flipNeedsReviewJobsInTx(tx, nzbFileId);
     });
   } catch (err: any) {
     console.error(`[reconciler] flipNeedsReviewJobsToQueued failed for ${nzbFileId}:`, err);
     return [];
   }
 
-  for (const jobId of flippedIds) {
-    provisionDownload(jobId).catch((err) => {
-      console.error(`[reconciler] Auto-provision failed for flipped job ${jobId}:`, err);
-    });
-  }
+  provisionFlippedJobs(flippedIds);
   return flippedIds;
 }
 

@@ -138,6 +138,20 @@ describe("POST /downloads/request (Serien)", () => {
     expect(res.body.job.nzbFile.episodeId).toBeNull();
   });
 
+  it("erneute Anfrage derselben bekannten Folge landet nicht im Review", async () => {
+    foundEpisode(5);
+    const first = await post("again", "Severance.S02E05.German.DL.1080p.WEB.x264-FuN.nzb");
+    await prisma.downloadJob.updateMany({ where: { nzbFileId: first.body.job.nzbFileId }, data: { status: "completed" } });
+
+    const second = await post("again", "Severance.S02E05.German.DL.1080p.WEB.x264-FuN.nzb");
+
+    expect(second.status).toBe(201);
+    expect(second.body.reused).toBe(true);
+    expect(second.body.needsReview).toBe(false);
+    expect(second.body.job.status).not.toBe("needs_review");
+    expect(second.body.job.nzbFile.episode).toMatchObject({ season: 2, episode: 5, show: { tmdbId: 95396 } });
+  });
+
   it("POST /jobs für Folgen-NzbFile liefert kein 409", async () => {
     foundEpisode(8);
     const first = await post("jobs", "Severance.S02E08.German.DL.1080p.WEB.x264-FuN.nzb");

@@ -47,7 +47,11 @@ export async function provisionDownload(jobId: string): Promise<void> {
 
   const job = await prisma.downloadJob.findUnique({
     where: { id: jobId },
-    include: { nzbFile: { include: { movie: true } } },
+    include: {
+      nzbFile: {
+        include: { movie: true, episode: { include: { show: true } } },
+      },
+    },
   });
 
   if (!job || job.status !== "queued") {
@@ -55,13 +59,12 @@ export async function provisionDownload(jobId: string): Promise<void> {
     return;
   }
 
-  // Defensive: NzbFile without movieId means the upload is still in review.
-  // The /request path should never route such jobs here, but if something slips
-  // through (e.g. manual DB edit), skip cleanly rather than crash or start a
-  // download without a movie context.
-  if (!job.nzbFile.movieId || !job.nzbFile.movie) {
+  // Defensive: NzbFile without movie or episode means the upload is still in
+  // review. The /request path should never route such jobs here, but if
+  // something slips through (e.g. manual DB edit), skip cleanly.
+  if (!job.nzbFile.movieId && !job.nzbFile.episodeId) {
     console.log(
-      `[provision] Skipping job ${jobId}: NzbFile ${job.nzbFile.hash.slice(0, 12)}... has no movie (needs_review)`
+      `[provision] Skipping job ${jobId}: NzbFile ${job.nzbFile.hash.slice(0, 12)}... has no movie or episode (needs_review)`
     );
     return;
   }
@@ -86,7 +89,11 @@ export async function provisionDownload(jobId: string): Promise<void> {
     return;
   }
 
-  console.log(`[provision] Mode: ${mode} — ${job.nzbFile.movie.titleEn} (${job.nzbFile.hash.slice(0, 12)}...)`);
+  const { movie, episode } = job.nzbFile;
+  const label = movie
+    ? movie.titleEn
+    : `${episode?.show.titleEn} S${String(episode?.season).padStart(2, "0")}E${String(episode?.episode).padStart(2, "0")}`;
+  console.log(`[provision] Mode: ${mode} — ${label} (${job.nzbFile.hash.slice(0, 12)}...)`);
 
   if (mode === "hetzner") {
     await provisionHetznerVPS(job);

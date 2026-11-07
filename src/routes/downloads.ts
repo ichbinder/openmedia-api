@@ -89,6 +89,19 @@ async function resolveMovieFromTmdb(
   return { source: "tmdb-found", tmdb: result.movie };
 }
 
+const JOB_NZB_FILE_INCLUDE = {
+  movie: true,
+  episode: {
+    select: {
+      id: true,
+      season: true,
+      episode: true,
+      titleDe: true,
+      show: { select: { tmdbId: true, titleDe: true, titleEn: true, year: true, posterPath: true } },
+    },
+  },
+} as const;
+
 const NZB_API_URL = process.env.NZB_API_URL || "http://localhost:4100";
 
 // ---------------------------------------------------------------------------
@@ -482,7 +495,7 @@ router.post("/request", requireAuth, async (req: AuthRequest, res: Response) => 
           // TMDB retry, etc.).
           const freshFile = await tx.nzbFile.findUnique({
             where: { id: existingFile.id },
-            select: { id: true, movieId: true },
+            select: { id: true, movieId: true, episodeId: true },
           });
 
           if (!freshFile) {
@@ -490,7 +503,7 @@ router.post("/request", requireAuth, async (req: AuthRequest, res: Response) => 
             return { missing: true as const };
           }
 
-          const reuseNeedsReview = freshFile.movieId === null;
+          const reuseNeedsReview = freshFile.movieId === null && freshFile.episodeId === null;
 
           // Cross-user conflict: any active running download for this file blocks
           // a new job (the second user should wait for the first download to
@@ -534,7 +547,7 @@ router.post("/request", requireAuth, async (req: AuthRequest, res: Response) => 
                 // will only retry rows whose tmdbRetryAfter is set.
               }),
             },
-            include: { nzbFile: { include: { movie: true } } },
+            include: { nzbFile: { include: JOB_NZB_FILE_INCLUDE } },
           });
 
           return { conflict: false as const, job, reuseNeedsReview };
@@ -744,22 +757,7 @@ router.post("/request", requireAuth, async (req: AuthRequest, res: Response) => 
     // Reload job with relations for response
     const fullJob = await prisma.downloadJob.findUnique({
       where: { id: result.job.id },
-      include: {
-        nzbFile: {
-          include: {
-            movie: true,
-            episode: {
-              select: {
-                id: true,
-                season: true,
-                episode: true,
-                titleDe: true,
-                show: { select: { tmdbId: true, titleDe: true, titleEn: true, year: true, posterPath: true } },
-              },
-            },
-          },
-        },
-      },
+      include: { nzbFile: { include: JOB_NZB_FILE_INCLUDE } },
     });
 
     if (!fullJob) {
@@ -1658,10 +1656,10 @@ router.post("/jobs/:id/provision", requireAuth, async (req: AuthRequest, res: Re
       return;
     }
 
-    // Defensive: a queued job must have a movieId. If something landed a
+    // Defensive: a queued job must have a movieId or episodeId. If something landed a
     // needs_review NzbFile in queued state without going through assign-movie,
     // abort before spinning up a VPS.
-    if (!job.nzbFile.movieId || !job.nzbFile.movie) {
+    if (!job.nzbFile.movieId && !job.nzbFile.episodeId) {
       res.status(409).json({
         error: "NZB-Datei wartet auf manuelle Film-Zuordnung.",
         reason: "needs_review",
