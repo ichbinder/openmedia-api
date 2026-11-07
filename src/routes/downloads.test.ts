@@ -460,6 +460,33 @@ describe("Downloads Routes", () => {
     });
   });
 
+  describe("nzbFile.episode in Job-Antworten", () => {
+    it("liefert episode mit Serie für Episoden-Jobs in Liste und Detail", async () => {
+      const show = await prisma.nzbShow.create({
+        data: { tmdbId: 95396, titleDe: "Severance", titleEn: "Severance", year: 2022, posterPath: "/s.jpg" },
+      });
+      const ep = await prisma.nzbEpisode.create({ data: { showId: show.id, season: 2, episode: 5, titleDe: "Trojans' Horse" } });
+      const nzbFile = await prisma.nzbFile.create({
+        data: { episodeId: ep.id, hash: `eph-${Date.now()}`, originalFilename: "ep.nzb" },
+      });
+      const job = await prisma.downloadJob.create({ data: { nzbFileId: nzbFile.id, status: "queued" } });
+      const expected = {
+        id: ep.id,
+        season: 2,
+        episode: 5,
+        titleDe: "Trojans' Horse",
+        show: { tmdbId: 95396, titleDe: "Severance", titleEn: "Severance", year: 2022, posterPath: "/s.jpg" },
+      };
+
+      const list = await request(app).get("/downloads/jobs").set("Authorization", `Bearer ${token}`);
+      expect(list.body.jobs.find((j: any) => j.id === job.id).nzbFile.episode).toEqual(expected);
+
+      const detail = await request(app).get(`/downloads/jobs/${job.id}`).set("Authorization", `Bearer ${token}`);
+      expect(detail.body.job.nzbFile.episode).toEqual(expected);
+      expect(detail.body.job.nzbFile.movie).toBeNull();
+    });
+  });
+
   describe("DELETE /downloads/jobs/:id", () => {
     it("löscht einen queued Job", async () => {
       const { nzbFile } = await createTestNzbFile();
@@ -647,6 +674,78 @@ describe("Downloads Routes", () => {
         where: { nzbFileId: nzbFile.id },
       });
       expect(uploadJobCount).toBe(1);
+    });
+  });
+
+  describe("auto-upload trigger for episodes", () => {
+    async function createEpisodes() {
+      const show = await prisma.nzbShow.create({
+        data: { tmdbId: 880_100 + Math.floor(Math.random() * 10_000), titleDe: "Serie", titleEn: "Series", year: 2022 },
+      });
+      const ep1 = await prisma.nzbEpisode.create({ data: { showId: show.id, season: 1, episode: 1 } });
+      const ep2 = await prisma.nzbEpisode.create({ data: { showId: show.id, season: 1, episode: 2 } });
+      return { ep1, ep2 };
+    }
+
+    async function createEpisodeFile(episodeId: string, source: "external" | "own", status = "untested") {
+      return prisma.nzbFile.create({
+        data: {
+          episodeId,
+          hash: `ep-${source}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          originalFilename: "Series.S01E01.1080p.nzb",
+          resolution: "1080p",
+          source,
+          status,
+        },
+      });
+    }
+
+    async function completeEpisodeDownload(nzbFile: { id: string; hash: string }) {
+      const createRes = await request(app)
+        .post("/downloads/jobs")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ nzbFileId: nzbFile.id });
+      const jobId = createRes.body.job.id;
+      for (const body of [
+        { status: "provisioning" },
+        { status: "downloading", progress: 50 },
+        { status: "uploading", progress: 90 },
+        { status: "completed", s3Key: `${nzbFile.hash}/${nzbFile.hash}.mkv`, s3Bucket: "openmedia-files", fileExtension: ".mkv" },
+      ]) {
+        await request(app).patch(`/downloads/jobs/${jobId}/status`).set("Authorization", `Bearer ${token}`).send(body);
+      }
+    }
+
+    it("completed episode file → one UploadJob with episodeId and no movieId", async () => {
+      const { ep1 } = await createEpisodes();
+      const file = await createEpisodeFile(ep1.id, "external");
+
+      await completeEpisodeDownload(file);
+
+      const jobs = await prisma.uploadJob.findMany({ where: { nzbFileId: file.id } });
+      expect(jobs).toHaveLength(1);
+      expect(jobs[0].episodeId).toBe(ep1.id);
+      expect(jobs[0].movieId).toBeNull();
+    });
+
+    it("own copy of another episode does not block the upload", async () => {
+      const { ep1, ep2 } = await createEpisodes();
+      await createEpisodeFile(ep1.id, "own", "ok");
+      const file = await createEpisodeFile(ep2.id, "external");
+
+      await completeEpisodeDownload(file);
+
+      expect(await prisma.uploadJob.count({ where: { nzbFileId: file.id } })).toBe(1);
+    });
+
+    it("healthy own copy of the same episode → no UploadJob", async () => {
+      const { ep1 } = await createEpisodes();
+      await createEpisodeFile(ep1.id, "own", "ok");
+      const file = await createEpisodeFile(ep1.id, "external");
+
+      await completeEpisodeDownload(file);
+
+      expect(await prisma.uploadJob.count({ where: { nzbFileId: file.id } })).toBe(0);
     });
   });
 });

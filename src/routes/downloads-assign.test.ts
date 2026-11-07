@@ -241,6 +241,27 @@ describe("POST /downloads/jobs/:id/assign-movie", () => {
     expect(res.body.currentStatus).toBe("queued");
   });
 
+  it("lehnt ab wenn die NZB eine Folge ist (409)", async () => {
+    const { token } = await registerUser();
+    const jobId = await createNeedsReviewJob(token, NZB_A, "Some Show");
+    const job = await prisma.downloadJob.findUniqueOrThrow({ where: { id: jobId } });
+    await prisma.nzbFile.update({
+      where: { id: job.nzbFileId },
+      data: { originalFilename: "Some.Show.S02E05.1080p.WEB.nzb" },
+    });
+
+    const res = await request(app)
+      .post(`/downloads/jobs/${jobId}/assign-movie`)
+      .set("Authorization", `Bearer ${token}`)
+      .send({ tmdbId: 603 });
+
+    expect(res.status).toBe(409);
+    expect(res.body.reason).toBe("episode_not_assignable");
+    expect(res.body.error).toContain("Folgen werden automatisch zugeordnet");
+    const after = await prisma.downloadJob.findUniqueOrThrow({ where: { id: jobId } });
+    expect(after.status).toBe("needs_review");
+  });
+
   it("lehnt ab wenn Job nicht existiert (404)", async () => {
     const { token } = await registerUser();
 

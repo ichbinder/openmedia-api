@@ -165,3 +165,15 @@ describe("calculateHash", () => {
     expect(hash1).toBe(hash2);
   });
 });
+
+describe("parseNzbName Serien", () => {
+  it.each([
+    ["Severance.S02E05.German.AC3.DL.1080p.Web.x265-FuN.nzb", "Severance", null, 2, 5, "1080p"],
+    ["Severance.2022.S02E05.German.DL.Atmos.2160p.DV.HDR.ATVP.WEB.H265-ZeroTwo.nzb", "Severance", 2022, 2, 5, "2160p"],
+    ["Show.Name.S01E01E02.German.720p.WEB.x264-GRP.nzb", "Show Name", null, 1, 1, "720p"],
+    ["Show.Name.S01E01-E02.German.720p.WEB.x264-GRP.nzb", "Show Name", null, 1, 1, "720p"],
+    ["Dune.2021.German.DL.1080p.BluRay.x264-GRP.nzb", "Dune", 2021, null, null, "1080p"],
+  ])("parst %s", (filename, title, year, season, episode, resolution) => {
+    expect(parseNzbName(filename)).toMatchObject({ title, year, season, episode, resolution });
+  });
+});

@@ -77,6 +77,34 @@ describe("Library Routes", () => {
       expect(res1.body.items[0].nzbFile.movie.titleEn).toBe("Test Movie");
     });
 
+    it("liefert nzbFile.episode mit Serie für Episoden und null für Filme", async () => {
+      const { user, token } = await createUserAndToken();
+      const { nzbFile: film } = await createTestNzbFile("hash-film/hash-film.mkv");
+      const show = await prisma.nzbShow.create({
+        data: { tmdbId: 95396, titleDe: "Severance", titleEn: "Severance", year: 2022, posterPath: "/s.jpg" },
+      });
+      const ep = await prisma.nzbEpisode.create({ data: { showId: show.id, season: 2, episode: 5, titleDe: "Trojans' Horse" } });
+      const epFile = await prisma.nzbFile.create({
+        data: { episodeId: ep.id, hash: `eph-${Date.now()}`, originalFilename: "ep.nzb", s3Key: "ep/ep.mkv", s3Bucket: "b" },
+      });
+      await prisma.userLibrary.createMany({
+        data: [{ userId: user.id, nzbFileId: film.id }, { userId: user.id, nzbFileId: epFile.id }],
+      });
+
+      const res = await request(app).get("/library").set("Authorization", `Bearer ${token}`);
+
+      const byId = (id: string) => res.body.items.find((i: any) => i.nzbFile.id === id).nzbFile;
+      expect(byId(film.id).episode).toBeNull();
+      expect(byId(epFile.id).movie).toBeNull();
+      expect(byId(epFile.id).episode).toEqual({
+        id: ep.id,
+        season: 2,
+        episode: 5,
+        titleDe: "Trojans' Horse",
+        show: { tmdbId: 95396, titleDe: "Severance", titleEn: "Severance", year: 2022, posterPath: "/s.jpg" },
+      });
+    });
+
     it("zeigt keine entfernten Filme", async () => {
       const { user, token } = await createUserAndToken();
       const { nzbFile } = await createTestNzbFile("hash2/hash2.mkv");

@@ -11,6 +11,7 @@ import { storeNzbInService, NzbServiceUnavailableError } from "../lib/nzb-servic
 import { getDownloadVpsConfig, getUploadVpsConfig } from "../lib/vps-config.js";
 import { generateServiceToken, storeServiceToken, deleteServiceTokens } from "../lib/service-token.js";
 import { drainQueue } from "../lib/queue-drain.js";
+import { resolveEpisodeFromTmdb, upsertEpisode } from "../lib/episode-resolver.js";
 
 const router = Router();
 
@@ -87,6 +88,19 @@ async function resolveMovieFromTmdb(
   );
   return { source: "tmdb-found", tmdb: result.movie };
 }
+
+const JOB_NZB_FILE_INCLUDE = {
+  movie: true,
+  episode: {
+    select: {
+      id: true,
+      season: true,
+      episode: true,
+      titleDe: true,
+      show: { select: { tmdbId: true, titleDe: true, titleEn: true, year: true, posterPath: true } },
+    },
+  },
+} as const;
 
 const NZB_API_URL = process.env.NZB_API_URL || "http://localhost:4100";
 
@@ -268,7 +282,7 @@ router.post("/jobs", requireAuth, async (req: AuthRequest, res: Response) => {
     // NzbFile must be assigned to a movie before a download job can be created.
     // Files in needs_review state (movieId=null) must be routed through the
     // manual assignment endpoint instead.
-    if (!nzbFile.movieId) {
+    if (!nzbFile.movieId && !nzbFile.episodeId) {
       res.status(409).json({
         error: "NZB-Datei wartet auf manuelle Film-Zuordnung.",
         reason: "needs_review",
@@ -481,7 +495,7 @@ router.post("/request", requireAuth, async (req: AuthRequest, res: Response) => 
           // TMDB retry, etc.).
           const freshFile = await tx.nzbFile.findUnique({
             where: { id: existingFile.id },
-            select: { id: true, movieId: true },
+            select: { id: true, movieId: true, episodeId: true },
           });
 
           if (!freshFile) {
@@ -489,7 +503,7 @@ router.post("/request", requireAuth, async (req: AuthRequest, res: Response) => 
             return { missing: true as const };
           }
 
-          const reuseNeedsReview = freshFile.movieId === null;
+          const reuseNeedsReview = freshFile.movieId === null && freshFile.episodeId === null;
 
           // Cross-user conflict: any active running download for this file blocks
           // a new job (the second user should wait for the first download to
@@ -533,7 +547,7 @@ router.post("/request", requireAuth, async (req: AuthRequest, res: Response) => 
                 // will only retry rows whose tmdbRetryAfter is set.
               }),
             },
-            include: { nzbFile: { include: { movie: true } } },
+            include: { nzbFile: { include: JOB_NZB_FILE_INCLUDE } },
           });
 
           return { conflict: false as const, job, reuseNeedsReview };
@@ -593,8 +607,12 @@ router.post("/request", requireAuth, async (req: AuthRequest, res: Response) => 
     const effectiveFilename = filename || `${title}.nzb`;
     const parsed = parseNzbName(effectiveFilename);
 
-    // --- Resolve movie via TMDB (or mark for review) ---
-    const movieResolution = await resolveMovieFromTmdb(parsed.title, parsed.year, title);
+    const isEpisode = parsed.season !== null && parsed.episode !== null;
+
+    // --- Resolve movie or episode via TMDB (or mark for review) ---
+    const movieResolution = isEpisode
+      ? await resolveEpisodeFromTmdb(parsed, title)
+      : await resolveMovieFromTmdb(parsed.title, parsed.year, title);
 
     // TMDB is completely disabled (no API key configured). This is a server
     // misconfiguration, not a transient or "no match" condition — fail hard
@@ -633,8 +651,17 @@ router.post("/request", requireAuth, async (req: AuthRequest, res: Response) => 
     const result = await prisma.$transaction(async (tx) => {
       let movieId: string | null = null;
       let movie: { id: string; titleEn: string } | null = null;
+      let episodeId: string | null = null;
 
-      if (movieResolution.source === "tmdb-found") {
+      if (movieResolution.source === "tmdb-found" && "show" in movieResolution) {
+        episodeId = await upsertEpisode(
+          tx,
+          movieResolution.show,
+          parsed.season!,
+          parsed.episode!,
+          movieResolution.episode,
+        );
+      } else if (movieResolution.source === "tmdb-found") {
         // Atomic reuse-or-create on the tmdbId unique constraint.
         // Handles TOCTOU race: if findUnique returns null but another request
         // creates the same tmdbId between findUnique and create, we catch P2002
@@ -681,6 +708,7 @@ router.post("/request", requireAuth, async (req: AuthRequest, res: Response) => 
       const nzbFile = await tx.nzbFile.create({
         data: {
           movieId,
+          episodeId,
           hash,
           originalFilename: effectiveFilename,
           fileSize: BigInt(Buffer.byteLength(nzbContent, "utf-8")),
@@ -729,7 +757,7 @@ router.post("/request", requireAuth, async (req: AuthRequest, res: Response) => 
     // Reload job with relations for response
     const fullJob = await prisma.downloadJob.findUnique({
       where: { id: result.job.id },
-      include: { nzbFile: { include: { movie: true } } },
+      include: { nzbFile: { include: JOB_NZB_FILE_INCLUDE } },
     });
 
     if (!fullJob) {
@@ -782,7 +810,10 @@ router.get("/jobs", requireAuth, async (req: AuthRequest, res: Response) => {
       where: statusFilter ? { status: statusFilter } : undefined,
       include: {
         nzbFile: {
-          include: { movie: { select: { id: true, tmdbId: true, titleDe: true, titleEn: true, year: true, posterPath: true } } },
+          include: {
+            movie: { select: { id: true, tmdbId: true, titleDe: true, titleEn: true, year: true, posterPath: true } },
+            episode: JOB_NZB_FILE_INCLUDE.episode,
+          },
         },
       },
       orderBy: { createdAt: "desc" },
@@ -801,11 +832,7 @@ router.get("/jobs/:id", requireAuth, async (req: AuthRequest, res: Response) => 
   try {
     const job = await prisma.downloadJob.findUnique({
       where: { id: String(req.params.id) },
-      include: {
-        nzbFile: {
-          include: { movie: true },
-        },
-      },
+      include: { nzbFile: { include: JOB_NZB_FILE_INCLUDE } },
     });
 
     if (!job) {
@@ -1005,22 +1032,27 @@ router.patch("/jobs/:id/status", requireServiceOrUserAuth, async (req: AuthReque
             const uploadJob = await prisma.$transaction(async (tx) => {
               const nzb = await tx.nzbFile.findUnique({
                 where: { id: currentJob.nzbFileId },
-                select: { source: true, s3Key: true, hash: true, movieId: true },
+                select: { source: true, s3Key: true, hash: true, movieId: true, episodeId: true },
               });
               if (!nzb || nzb.source === "own" || !nzb.s3Key) return null;
 
-              // Check: does this Movie already have a healthy own version?
+              // Check: does this Movie/Episode already have a healthy own version?
               // Expired/broken own versions don't count — their Usenet content is unavailable
-              if (nzb.movieId) {
+              const ownTarget = nzb.movieId
+                ? { movieId: nzb.movieId }
+                : nzb.episodeId
+                  ? { episodeId: nzb.episodeId }
+                  : null;
+              if (ownTarget) {
                 const ownVersion = await tx.nzbFile.findFirst({
                   where: {
-                    movieId: nzb.movieId,
+                    ...ownTarget,
                     source: "own",
                     status: { notIn: ["expired", "broken"] },
                   },
                   select: { id: true },
                 });
-                if (ownVersion) return null; // already have healthy own version for this movie
+                if (ownVersion) return null;
               }
 
               // Check: is there already a running/pending upload?
@@ -1033,6 +1065,7 @@ router.patch("/jobs/:id/status", requireServiceOrUserAuth, async (req: AuthReque
                 data: {
                   nzbFileId: currentJob.nzbFileId,
                   movieId: nzb.movieId,
+                  episodeId: nzb.episodeId,
                   status: "queued",
                 },
               });
@@ -1409,6 +1442,14 @@ router.post("/jobs/:id/assign-movie", requireAuth, async (req: AuthRequest, res:
       return;
     }
 
+    if (parseNzbName(job.nzbFile.originalFilename).season !== null) {
+      res.status(409).json({
+        error: "Folgen werden automatisch zugeordnet und können nicht als Film zugewiesen werden.",
+        reason: "episode_not_assignable",
+      });
+      return;
+    }
+
     // --- TMDB lookup (outside transaction — I/O) ---
     const tmdbResult = await searchTmdbMovieById(tmdbId);
 
@@ -1628,10 +1669,10 @@ router.post("/jobs/:id/provision", requireAuth, async (req: AuthRequest, res: Re
       return;
     }
 
-    // Defensive: a queued job must have a movieId. If something landed a
+    // Defensive: a queued job must have a movieId or episodeId. If something landed a
     // needs_review NzbFile in queued state without going through assign-movie,
     // abort before spinning up a VPS.
-    if (!job.nzbFile.movieId || !job.nzbFile.movie) {
+    if (!job.nzbFile.movieId && !job.nzbFile.episodeId) {
       res.status(409).json({
         error: "NZB-Datei wartet auf manuelle Film-Zuordnung.",
         reason: "needs_review",

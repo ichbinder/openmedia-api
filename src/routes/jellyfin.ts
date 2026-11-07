@@ -704,6 +704,7 @@ router.get("/library/version", async (req: AuthRequest, res: Response) => {
 router.get("/library", async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.user!.userId;
+    const includeEpisodes = req.query.include === "episodes";
 
     const rows = await prisma.userLibrary.findMany({
       where: {
@@ -720,27 +721,50 @@ router.get("/library", async (req: AuthRequest, res: Response) => {
             resolution: true,
             qualityTier: true,
             movie: { select: { tmdbId: true, titleDe: true, titleEn: true, year: true } },
+            episode: {
+              select: {
+                season: true,
+                episode: true,
+                show: { select: { tmdbId: true, titleDe: true, titleEn: true, year: true } },
+              },
+            },
           },
         },
       },
       orderBy: { addedAt: "desc" },
     });
 
-    const items = rows
-      .filter((row) => row.nzbFile.movie !== null && row.nzbFile.movie.tmdbId !== null)
-      .map((row) => {
-        const movie = row.nzbFile.movie!;
-        return {
-          hash: row.nzbFile.hash,
+    const items = rows.flatMap((row): object[] => {
+      const { movie, episode, hash, fileSize, duration, qualityTier, resolution } = row.nzbFile;
+      const common = {
+        hash,
+        // BigInt → string for safe JSON serialization. Plugin parses as needed.
+        fileSize: fileSize !== null ? fileSize.toString() : null,
+        duration,
+        resolution: qualityTier || resolution,
+      };
+      if (movie && movie.tmdbId !== null) {
+        return [{
+          kind: "movie" as const,
+          ...common,
           tmdbId: movie.tmdbId,
           title: movie.titleDe || movie.titleEn,
           year: movie.year,
-          // BigInt → string for safe JSON serialization. Plugin parses as needed.
-          fileSize: row.nzbFile.fileSize !== null ? row.nzbFile.fileSize.toString() : null,
-          duration: row.nzbFile.duration,
-          resolution: row.nzbFile.qualityTier || row.nzbFile.resolution,
-        };
-      });
+        }];
+      }
+      if (includeEpisodes && episode) {
+        return [{
+          kind: "episode" as const,
+          ...common,
+          tmdbId: episode.show.tmdbId,
+          title: episode.show.titleDe || episode.show.titleEn,
+          year: episode.show.year,
+          season: episode.season,
+          episode: episode.episode,
+        }];
+      }
+      return [];
+    });
 
     console.log(`[jellyfin] library: user=${userId.slice(0, 8)}... count=${items.length}`);
     res.json({ items });

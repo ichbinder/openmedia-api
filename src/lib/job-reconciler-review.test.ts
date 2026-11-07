@@ -15,6 +15,7 @@ import { prisma } from "../test/setup.js";
 vi.mock("./tmdb.js", () => ({
   searchTmdbMovie: vi.fn(),
   searchTmdbMovieById: vi.fn(),
+  searchTmdbShowEpisode: vi.fn(),
 }));
 
 // Mock provisioner — we don't want to hit real Hetzner
@@ -36,7 +37,7 @@ vi.mock("./hetzner.js", () => ({
   listServers: vi.fn(() => []),
 }));
 
-import { searchTmdbMovie } from "./tmdb.js";
+import { searchTmdbMovie, searchTmdbShowEpisode } from "./tmdb.js";
 import { provisionDownload } from "./provisioner.js";
 import { deleteNzbFromService } from "./nzb-service.js";
 import {
@@ -47,6 +48,7 @@ import {
 } from "./job-reconciler.js";
 
 const mockSearchTmdbMovie = vi.mocked(searchTmdbMovie);
+const mockSearchTmdbShowEpisode = vi.mocked(searchTmdbShowEpisode);
 const mockProvisionDownload = vi.mocked(provisionDownload);
 const mockDeleteNzbFromService = vi.mocked(deleteNzbFromService);
 
@@ -163,6 +165,46 @@ describe("retryTmdbForPendingReviews", () => {
     expect(nzbFile.movie?.titleEn).toBe("The Matrix");
 
     // Provisioner triggered
+    expect(mockProvisionDownload).toHaveBeenCalledWith(jobId);
+  });
+
+  it("auto-assigns an episode NzbFile when the show lookup succeeds", async () => {
+    const user = await createUser();
+    const { jobId, nzbFileId } = await createNeedsReviewJob({
+      userId: user.id,
+      hash: "retry-episode-" + Date.now(),
+      originalFilename: "Severance.S02E05.German.DL.1080p.WEB.x264-FuN.nzb",
+      tmdbRetryAfter: new Date(Date.now() - 1000),
+    });
+
+    mockSearchTmdbShowEpisode.mockResolvedValueOnce({
+      status: "found",
+      show: {
+        tmdbId: 95396,
+        titleDe: "Severance",
+        titleEn: "Severance",
+        description: "...",
+        year: 2022,
+        posterPath: "/s.jpg",
+      },
+      episode: { titleDe: "Folge 5", airDate: "2025-02-14" },
+    });
+
+    const result = await reconcileStaleJobs();
+
+    expect(mockSearchTmdbMovie).not.toHaveBeenCalled();
+    expect(result.tmdbAutoAssigned).toBe(1);
+
+    const file = await prisma.nzbFile.findUniqueOrThrow({
+      where: { id: nzbFileId },
+      include: { episode: { include: { show: true } } },
+    });
+    expect(file.movieId).toBeNull();
+    expect(file.episode).toMatchObject({ season: 2, episode: 5, titleDe: "Folge 5" });
+    expect(file.episode?.show.tmdbId).toBe(95396);
+
+    const job = await prisma.downloadJob.findUniqueOrThrow({ where: { id: jobId } });
+    expect(job.status).toBe("queued");
     expect(mockProvisionDownload).toHaveBeenCalledWith(jobId);
   });
 
@@ -485,6 +527,31 @@ describe("cleanupExpiredReviews", () => {
     const nzbFile = await prisma.nzbFile.findUniqueOrThrow({ where: { id: nzbFileId } });
     expect(nzbFile.movieId).toBe(movie.id);
 
+    expect(mockDeleteNzbFromService).not.toHaveBeenCalled();
+  });
+
+  it("does not delete an NzbFile that was assigned to an episode", async () => {
+    const user = await createUser();
+    const { nzbFileId } = await createNeedsReviewJob({
+      userId: user.id,
+      hash: "cleanup-episode-" + Date.now(),
+      reviewExpiresAt: new Date(Date.now() - 1000),
+    });
+    const show = await prisma.nzbShow.create({
+      data: { tmdbId: 777_001, titleDe: "Show", titleEn: "Show", year: 2020 },
+    });
+    const episode = await prisma.nzbEpisode.create({
+      data: { showId: show.id, season: 1, episode: 1 },
+    });
+    await prisma.nzbFile.update({ where: { id: nzbFileId }, data: { episodeId: episode.id } });
+
+    const result = emptyResult();
+    await cleanupExpiredReviews(result);
+
+    expect(result.expired).toBe(1);
+    expect(result.orphansDeleted).toBe(0);
+    const nzbFile = await prisma.nzbFile.findUniqueOrThrow({ where: { id: nzbFileId } });
+    expect(nzbFile.episodeId).toBe(episode.id);
     expect(mockDeleteNzbFromService).not.toHaveBeenCalled();
   });
 

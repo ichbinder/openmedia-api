@@ -19,6 +19,12 @@ router.get("/", async (req: AuthRequest, res: Response) => {
             s3Key: true, s3StreamKey: true, s3Bucket: true, downloadedAt: true,
             lastAccessedAt: true, scheduledDeletionAt: true,
             movie: { select: { id: true, tmdbId: true, titleDe: true, titleEn: true, year: true, posterPath: true } },
+            episode: {
+              select: {
+                id: true, season: true, episode: true, titleDe: true,
+                show: { select: { tmdbId: true, titleDe: true, titleEn: true, year: true, posterPath: true } },
+              },
+            },
           },
         },
       },

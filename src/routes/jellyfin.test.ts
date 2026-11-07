@@ -154,6 +154,46 @@ describe("Jellyfin Routes", () => {
       expect(typeof res.body.items[0].tmdbId).toBe("number");
     });
 
+    it("liefert kind movie und Episoden nur mit include=episodes", async () => {
+      const { user, token } = await createUserAndToken();
+      const { nzbFile: film } = await createMovieAndNzb({ s3Key: "k/film.mkv" });
+      const show = await prisma.nzbShow.create({
+        data: { tmdbId: 95396, titleDe: "Severance", titleEn: "Severance", year: 2022 },
+      });
+      const ep = await prisma.nzbEpisode.create({ data: { showId: show.id, season: 2, episode: 5 } });
+      const epFile = await prisma.nzbFile.create({
+        data: {
+          episodeId: ep.id, hash: `jfep-${Date.now()}`, originalFilename: "ep.nzb", s3Key: "k/ep.mkv",
+          s3Bucket: "openmedia-files", fileSize: 1_000n, duration: 3000, qualityTier: "720p",
+        },
+      });
+      await prisma.userLibrary.createMany({
+        data: [{ userId: user.id, nzbFileId: film.id }, { userId: user.id, nzbFileId: epFile.id }],
+      });
+
+      const plain = await request(app).get("/jellyfin/library").set("Authorization", `Bearer ${token}`);
+      expect(plain.body.items).toHaveLength(1);
+      expect(plain.body.items[0]).toMatchObject({ kind: "movie", hash: film.hash });
+
+      const withEpisodes = await request(app)
+        .get("/jellyfin/library")
+        .query({ include: "episodes" })
+        .set("Authorization", `Bearer ${token}`);
+      expect(withEpisodes.body.items).toHaveLength(2);
+      expect(withEpisodes.body.items.find((i: any) => i.kind === "episode")).toEqual({
+        kind: "episode",
+        hash: epFile.hash,
+        tmdbId: 95396,
+        title: "Severance",
+        year: 2022,
+        season: 2,
+        episode: 5,
+        fileSize: "1000",
+        duration: 3000,
+        resolution: "720p",
+      });
+    });
+
     it("filtert Items ohne tmdbId raus", async () => {
       const { user, token } = await createUserAndToken();
       const { nzbFile: noTmdb } = await createMovieAndNzb({

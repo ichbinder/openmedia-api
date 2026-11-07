@@ -41,6 +41,40 @@ describe("NZB Routes", () => {
     token = await getAuthToken();
   });
 
+  describe("GET /nzb/shows/by-tmdb/:tmdbId", () => {
+    it("liefert Episoden sortiert mit Versionen und fileSize als String", async () => {
+      const show = await prisma.nzbShow.create({
+        data: { tmdbId: 95396, titleDe: "Severance", titleEn: "Severance", year: 2022, posterPath: "/s.jpg" },
+      });
+      const e2 = await prisma.nzbEpisode.create({ data: { showId: show.id, season: 2, episode: 1, titleDe: "Hello" } });
+      const e1 = await prisma.nzbEpisode.create({ data: { showId: show.id, season: 1, episode: 2, titleDe: "Halt" } });
+      await prisma.nzbFile.create({
+        data: { episodeId: e1.id, hash: `showhash-${Date.now()}`, originalFilename: "s01e02.nzb", fileSize: 5_000_000_000n },
+      });
+
+      const res = await request(app).get("/nzb/shows/by-tmdb/95396").set("Authorization", `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.show).toMatchObject({ id: show.id, tmdbId: 95396, titleDe: "Severance", year: 2022, posterPath: "/s.jpg" });
+      expect(res.body.show.episodes.map((e: any) => [e.season, e.episode])).toEqual([[1, 2], [2, 1]]);
+      expect(res.body.show.episodes[0]).toMatchObject({ id: e1.id, titleDe: "Halt", airDate: null });
+      expect(res.body.show.episodes[0].nzbFiles[0].fileSize).toBe("5000000000");
+      expect(res.body.show.episodes[0].nzbFiles[0]).not.toHaveProperty("mediaInfo");
+      expect(res.body.show.episodes[1].id).toBe(e2.id);
+      expect(res.body.show.episodes[1].nzbFiles).toEqual([]);
+    });
+
+    it("404 für unbekannte Serie, 400 bei ungültiger ID", async () => {
+      const missing = await request(app).get("/nzb/shows/by-tmdb/424242").set("Authorization", `Bearer ${token}`);
+      expect(missing.status).toBe(404);
+      expect(missing.body.error).toBe("Serie nicht gefunden.");
+      for (const raw of ["abc", "1.5", "1e3", "-1", "0", "0x10", "007"]) {
+        const bad = await request(app).get(`/nzb/shows/by-tmdb/${raw}`).set("Authorization", `Bearer ${token}`);
+        expect(bad.status, raw).toBe(400);
+      }
+    });
+  });
+
   describe("NzbMovie CRUD", () => {
     it("erstellt einen Film", async () => {
       const res = await createMovie(token);

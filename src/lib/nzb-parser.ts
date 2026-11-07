@@ -18,6 +18,10 @@ export interface ParsedNzbName {
   codec: string | null;
   /** Source type */
   source: string | null;
+  /** Season number for TV episodes, null for films */
+  season: number | null;
+  /** First episode number for TV episodes, null for films */
+  episode: number | null;
 }
 
 /** Map resolution string to normalized quality tier */
@@ -75,6 +79,8 @@ const LANGUAGE_PATTERNS: [RegExp, string][] = [
 // DL = Dual Language — but NOT when part of "WEB-DL"
 // Negative lookbehind ensures "WEB-" is not before "DL"
 const DUAL_LANGUAGE_PATTERN = /(?<!WEB[-.])\bDL\b/;
+
+const EPISODE_PATTERN = /(?:^|[ ._-])S(\d{1,2})[ ._-]?E(\d{1,3})/i;
 
 /**
  * Parse an NZB release name to extract metadata.
@@ -139,24 +145,29 @@ export function parseNzbName(filename: string): ParsedNzbName {
   const year = yearMatch ? Number(yearMatch[1]) : null;
 
   // Extract title: everything before the first technical marker
-  const title = extractTitle(name, year);
+  const episodeMatch = name.match(EPISODE_PATTERN);
+  const season = episodeMatch ? Number(episodeMatch[1]) : null;
+  const episode = episodeMatch ? Number(episodeMatch[2]) : null;
+  const title = extractTitle(name, year, episodeMatch?.index ?? null);
 
   const qualityTier = resolveQualityTier(resolution);
 
-  return { title, year, resolution, qualityTier, audioLanguages, codec, source };
+  return { title, year, resolution, qualityTier, audioLanguages, codec, source, season, episode };
 }
 
 /**
  * Extract the movie title from a release name.
  * Takes everything before the year or the first technical keyword.
  */
-function extractTitle(name: string, year: number | null): string {
+function extractTitle(name: string, year: number | null, episodeIndex: number | null): string {
   let cutPoint = name.length;
+
+  if (episodeIndex !== null) cutPoint = episodeIndex;
 
   // Cut at year if found
   if (year) {
     const yearIndex = name.indexOf(String(year));
-    if (yearIndex > 0) cutPoint = yearIndex;
+    if (yearIndex > 0) cutPoint = Math.min(cutPoint, yearIndex);
   }
 
   // Cut at first technical keyword if before year

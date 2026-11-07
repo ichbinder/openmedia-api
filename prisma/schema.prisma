@@ -76,6 +76,40 @@ model NzbMovie {
   @@map("nzb_movies")
 }
 
+model NzbShow {
+  id          String   @id @default(uuid())
+  tmdbId      Int      @unique @map("tmdb_id")
+  titleDe     String   @map("title_de")
+  titleEn     String   @map("title_en")
+  description String   @default("")
+  year        Int?
+  posterPath  String?  @map("poster_path")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  episodes NzbEpisode[]
+
+  @@map("nzb_shows")
+}
+
+model NzbEpisode {
+  id        String    @id @default(uuid())
+  season    Int
+  episode   Int
+  titleDe   String    @default("") @map("title_de")
+  airDate   DateTime? @map("air_date")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+
+  show   NzbShow @relation(fields: [showId], references: [id], onDelete: Cascade)
+  showId String   @map("show_id")
+
+  nzbFiles NzbFile[]
+
+  @@unique([showId, season, episode])
+  @@map("nzb_episodes")
+}
+
 model NzbFile {
   id                String   @id @default(uuid())
   hash              String   @unique
@@ -126,11 +160,15 @@ model NzbFile {
   movie   NzbMovie? @relation(fields: [movieId], references: [id], onDelete: Cascade)
   movieId String?   @map("movie_id")
 
+  episode   NzbEpisode? @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+  episodeId String?     @map("episode_id")
+
   downloadJobs DownloadJob[]
   uploadJobs   UploadJob[]
   libraryUsers UserLibrary[]
 
   @@index([movieId])
+  @@index([episodeId])
   @@index([source])
   @@map("nzb_files")
 }
@@ -208,6 +246,7 @@ model UploadJob {
   // NZB result — set after Nyuu upload completes
   nzbHash         String?  @map("nzb_hash")   // sha256 of the created NZB file
   movieId         String?  @map("movie_id")   // target movie for the new NzbFile entry
+  episodeId       String?  @map("episode_id")
 
   // Timing
   startedAt       DateTime? @map("started_at")
