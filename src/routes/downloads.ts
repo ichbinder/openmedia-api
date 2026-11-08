@@ -10,7 +10,7 @@ import { generateServiceToken, storeServiceToken, deleteServiceTokens } from "..
 import { drainQueue } from "../lib/queue-drain.js";
 import { resolveEpisodeFromTmdb } from "../lib/episode-resolver.js";
 import { ingestNzb, JOB_NZB_FILE_INCLUDE } from "../lib/nzb-ingest.js";
-import { startDownloadJob } from "../lib/download-jobs.js";
+import { isSerializationFailure, startDownloadJob } from "../lib/download-jobs.js";
 
 const router = Router();
 
@@ -280,9 +280,8 @@ router.post("/jobs", requireAuth, async (req: AuthRequest, res: Response) => {
     let result;
     try {
       result = await startDownloadJob(nzbFileId, req.user?.userId || null);
-    } catch (err: any) {
-      // Serialization failure from concurrent transaction — treat as conflict
-      if (err?.code === "P2034" || err?.code === "40001") {
+    } catch (err) {
+      if (isSerializationFailure(err)) {
         res.status(409).json({ error: "Gleichzeitiger Request — bitte erneut versuchen." });
         return;
       }

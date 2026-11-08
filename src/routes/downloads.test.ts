@@ -27,6 +27,13 @@ vi.mock("../lib/vps-config.js", () => ({
   }),
 }));
 
+vi.mock("../lib/download-jobs.js", async (importOriginal) => {
+  const original = (await importOriginal()) as typeof import("../lib/download-jobs.js");
+  return { ...original, startDownloadJob: vi.fn(original.startDownloadJob) };
+});
+
+import { startDownloadJob } from "../lib/download-jobs.js";
+
 const app = createApp();
 
 // Helper
@@ -166,6 +173,20 @@ describe("Downloads Routes", () => {
         .send({ nzbFileId: nzbFile.id });
       expect(res2.status).toBe(409);
       expect(res2.body.existingJobId).toBe(res1.body.job.id);
+    });
+
+    it("antwortet 409 auf einen Schreibkonflikt des pg-Adapters ohne Prisma-Code", async () => {
+      const { nzbFile } = await createTestNzbFile();
+      vi.mocked(startDownloadJob).mockRejectedValueOnce(
+        Object.assign(new Error("write conflict"), { cause: { kind: "TransactionWriteConflict" } }),
+      );
+
+      const res = await request(app)
+        .post("/downloads/jobs")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ nzbFileId: nzbFile.id });
+
+      expect(res.status).toBe(409);
     });
   });
 
