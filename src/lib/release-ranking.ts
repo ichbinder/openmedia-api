@@ -14,27 +14,27 @@ export interface RankedRelease extends IndexerRelease {
   releaseType: string | null;
 }
 
-interface Band {
+export interface Band {
   min: number;
   max: number;
 }
 
 const DEFAULT_BAND: Band = { min: 1.5, max: 6 };
-const TIER_RANK: Record<QualityTier, number> = { "1080p": 4, "2160p": 3, "720p": 2, "480p": 1 };
+export const TIER_RANK: Record<QualityTier, number> = { "1080p": 4, "2160p": 3, "720p": 2, "480p": 1 };
 
-function hasWord(title: string, words: string[]): boolean {
+export function hasWord(title: string, words: string[]): boolean {
   return new RegExp(`(^|[._\\- ])(${words.join("|")})($|[._\\- ])`, "i").test(title);
 }
 
-function hasGermanNameHint(title: string): boolean {
+export function hasGermanNameHint(title: string): boolean {
   return hasWord(title.replace(/(WEB|HD|BD)[._\- ]DL/gi, "$1"), ["German", "Deutsch", "DL"]);
 }
 
-function includesGerman(list: string[] | null): boolean {
+export function includesGerman(list: string[] | null): boolean {
   return !!list?.some((l) => l.toLowerCase() === "german");
 }
 
-function tierOf(release: IndexerRelease): QualityTier {
+export function tierOf(release: IndexerRelease): QualityTier {
   const width = release.videoWidth;
   if (width !== null) {
     if (width >= 3000) return "2160p";
@@ -45,13 +45,13 @@ function tierOf(release: IndexerRelease): QualityTier {
   return (resolveQualityTier(parseNzbName(release.title).resolution) as QualityTier | null) ?? "480p";
 }
 
-function bandDistance(gbPerHour: number, band: Band): number {
+export function bandDistance(gbPerHour: number, band: Band): number {
   if (gbPerHour < band.min) return band.min - gbPerHour;
   if (gbPerHour > band.max) return gbPerHour - band.max;
   return 0;
 }
 
-function dropDatalessTwins(releases: IndexerRelease[]): IndexerRelease[] {
+export function dropDatalessTwins(releases: IndexerRelease[]): IndexerRelease[] {
   const withData = new Set(releases.filter((r) => r.audioLanguages !== null).map((r) => r.title.toLowerCase()));
   return releases.filter((r) => r.audioLanguages !== null || !withData.has(r.title.toLowerCase()));
 }
