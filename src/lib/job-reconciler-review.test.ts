@@ -141,6 +141,7 @@ describe("retryTmdbForPendingReviews", () => {
         description: "...",
         year: 1999,
         posterPath: "/matrix.jpg",
+        runtime: null,
       },
     });
 
@@ -352,6 +353,7 @@ describe("retryTmdbForPendingReviews", () => {
         description: "...",
         year: 1999,
         posterPath: "/fightclub.jpg",
+        runtime: null,
       },
     });
 
@@ -626,6 +628,7 @@ describe("reconcileStaleJobs integration", () => {
         description: "",
         year: 2020,
         posterPath: null,
+        runtime: null,
       },
     });
     const { jobId: retryJobId } = await createNeedsReviewJob({

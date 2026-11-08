@@ -64,7 +64,7 @@ const SOURCE_PATTERNS: [RegExp, string][] = [
 
 // Language indicators (DL handled separately below)
 export const LANGUAGE_PATTERNS: [RegExp, string][] = [
-  [/\b(german|deutsch|ger)\b/i, "de"],
+  [/\b(german|deutsch|deu|ger)\b/i, "de"],
   [/\b(english|eng|en)\b/i, "en"],
   [/\b(french|fra|fre)\b/i, "fr"],
   [/\b(spanish|spa|esp)\b/i, "es"],
@@ -200,4 +200,9 @@ function extractTitle(name: string, year: number | null, episodeIndex: number | 
  */
 export function calculateHash(content: Buffer): string {
   return createHash("sha256").update(content).digest("hex");
+}
+
+export function toLanguageCodes(names: string[] | null): string[] {
+  const codes = (names ?? []).map((name) => LANGUAGE_PATTERNS.find(([p]) => p.test(name))?.[1] ?? name.toLowerCase());
+  return [...new Set(codes)];
 }

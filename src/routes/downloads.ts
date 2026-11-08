@@ -10,6 +10,7 @@ import { generateServiceToken, storeServiceToken, deleteServiceTokens } from "..
 import { drainQueue } from "../lib/queue-drain.js";
 import { resolveEpisodeFromTmdb } from "../lib/episode-resolver.js";
 import { ingestNzb, JOB_NZB_FILE_INCLUDE } from "../lib/nzb-ingest.js";
+import { isSerializationFailure, startDownloadJob } from "../lib/download-jobs.js";
 
 const router = Router();
 
@@ -276,43 +277,18 @@ router.post("/jobs", requireAuth, async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    // Atomic check-and-create inside a transaction to prevent race conditions
-    // (two concurrent requests for the same nzbFileId)
     let result;
     try {
-      result = await prisma.$transaction(async (tx) => {
-        const existingJob = await tx.downloadJob.findFirst({
-          where: {
-            nzbFileId,
-            status: { in: ["queued", "provisioning", "downloading", "uploading"] },
-          },
-        });
-
-        if (existingJob) {
-          return { conflict: true as const, existingJob };
-        }
-
-        const job = await tx.downloadJob.create({
-          data: { nzbFileId, userId: req.user?.userId || null },
-          include: {
-            nzbFile: {
-              include: { movie: true },
-            },
-          },
-        });
-
-        return { conflict: false as const, job };
-      }, { isolationLevel: "Serializable" });
-    } catch (err: any) {
-      // Serialization failure from concurrent transaction — treat as conflict
-      if (err?.code === "P2034" || err?.code === "40001") {
+      result = await startDownloadJob(nzbFileId, req.user?.userId || null);
+    } catch (err) {
+      if (isSerializationFailure(err)) {
         res.status(409).json({ error: "Gleichzeitiger Request — bitte erneut versuchen." });
         return;
       }
       throw err;
     }
 
-    if (result.conflict) {
+    if (result.kind === "conflict") {
       res.status(409).json({
         error: "Es läuft bereits ein Download für diese Datei.",
         existingJobId: result.existingJob.id,
@@ -326,16 +302,6 @@ router.post("/jobs", requireAuth, async (req: AuthRequest, res: Response) => {
     console.log(`[download-job] Created: ${result.job.id} for ${movieTitle} (${nzbFile.hash.slice(0, 12)}...)`);
 
     res.status(201).json({ job: serializeJob(result.job) });
-
-    // Auto-provision: start download in background
-    // (after response is sent to client)
-    if (process.env.AUTO_PROVISION !== "false") {
-      import("../lib/provisioner.js").then(({ provisionDownload }) => {
-        provisionDownload(result.job.id).catch((err) => {
-          console.error("[download-job] Auto-provision failed:", err);
-        });
-      });
-    }
   } catch (err) {
     console.error("[download-job] Create error:", err);
     res.status(500).json({ error: "Fehler beim Erstellen des Download-Jobs." });
@@ -929,6 +895,13 @@ router.delete("/jobs/:id", requireAuth, async (req: AuthRequest, res: Response) 
         error: `Job-Status hat sich geändert und kann nicht gelöscht werden.`,
       });
       return;
+    }
+
+    if (job.userId) {
+      await prisma.movieRequest.updateMany({
+        where: { nzbFileId: job.nzbFileId, userId: job.userId, status: "downloading" },
+        data: { status: "failed", failReason: "cancelled" },
+      });
     }
 
     console.log(`[download-job] Deleted: ${job.id}`);

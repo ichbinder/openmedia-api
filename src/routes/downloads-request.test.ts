@@ -36,6 +36,7 @@ vi.mock("../lib/tmdb.js", () => ({
       description: "Default mock movie for tests.",
       year: 2024,
       posterPath: "/test-poster.jpg",
+      runtime: null,
     },
   }),
 }));
@@ -298,6 +299,7 @@ describe("POST /downloads/request", () => {
         description: "Eine dysfunktionale Familie...",
         year: 2006,
         posterPath: "/wKn7AJw730emlmzLSmJtzquwaeW.jpg",
+        runtime: null,
       },
     });
 
@@ -341,6 +343,7 @@ describe("POST /downloads/request", () => {
         description: "...",
         year: 2006,
         posterPath: "/poster.jpg",
+        runtime: null,
       },
     });
 

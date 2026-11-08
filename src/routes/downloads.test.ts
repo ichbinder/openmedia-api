@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import request from "supertest";
 import { createApp } from "../app.js";
 import { prisma } from "../test/setup.js";
+import { syncMovieRequests } from "../lib/movie-requests.js";
 
 // Mock Hetzner so the auto-upload trigger doesn't hit real APIs
 vi.mock("../lib/hetzner.js", () => ({
@@ -25,6 +26,13 @@ vi.mock("../lib/vps-config.js", () => ({
     usenetProviders: [],
   }),
 }));
+
+vi.mock("../lib/download-jobs.js", async (importOriginal) => {
+  const original = (await importOriginal()) as typeof import("../lib/download-jobs.js");
+  return { ...original, startDownloadJob: vi.fn(original.startDownloadJob) };
+});
+
+import { startDownloadJob } from "../lib/download-jobs.js";
 
 const app = createApp();
 
@@ -165,6 +173,20 @@ describe("Downloads Routes", () => {
         .send({ nzbFileId: nzbFile.id });
       expect(res2.status).toBe(409);
       expect(res2.body.existingJobId).toBe(res1.body.job.id);
+    });
+
+    it("antwortet 409 auf einen Schreibkonflikt des pg-Adapters ohne Prisma-Code", async () => {
+      const { nzbFile } = await createTestNzbFile();
+      vi.mocked(startDownloadJob).mockRejectedValueOnce(
+        Object.assign(new Error("write conflict"), { cause: { kind: "TransactionWriteConflict" } }),
+      );
+
+      const res = await request(app)
+        .post("/downloads/jobs")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ nzbFileId: nzbFile.id });
+
+      expect(res.status).toBe(409);
     });
   });
 
@@ -521,6 +543,30 @@ describe("Downloads Routes", () => {
         .set("Authorization", `Bearer ${token}`);
 
       expect(res.status).toBe(422);
+    });
+
+    it("Abbrechen beendet die Film-Anfrage, damit der Hintergrund nicht neu lädt", async () => {
+      const { nzbFile } = await createTestNzbFile();
+      const createRes = await request(app)
+        .post("/downloads/jobs")
+        .set("Authorization", `Bearer ${token}`)
+        .send({ nzbFileId: nzbFile.id });
+      const job = await prisma.downloadJob.findUniqueOrThrow({ where: { id: createRes.body.job.id } });
+      const movieRequest = await prisma.movieRequest.create({
+        data: { userId: job.userId!, tmdbId: 603, status: "downloading", allowedGroup: "german", nzbFileId: nzbFile.id },
+      });
+
+      const res = await request(app)
+        .delete(`/downloads/jobs/${job.id}`)
+        .set("Authorization", `Bearer ${token}`);
+      await syncMovieRequests();
+
+      expect(res.status).toBe(200);
+      expect(await prisma.movieRequest.findUniqueOrThrow({ where: { id: movieRequest.id } })).toMatchObject({
+        status: "failed",
+        failReason: "cancelled",
+      });
+      expect(await prisma.downloadJob.count()).toBe(0);
     });
 
     it("gibt 404 für nicht existierenden Job", async () => {

@@ -39,6 +39,7 @@ import { deleteNzbFromService } from "./nzb-service.js";
 import { provisionDownload } from "./provisioner.js";
 import { deleteServiceTokens } from "./service-token.js";
 import { syncEpisodeRequests } from "./episode-requests.js";
+import { syncMovieRequests } from "./movie-requests.js";
 
 // ── Configuration ───────────────────────────────────────────
 
@@ -550,6 +551,12 @@ export async function reconcileStaleJobs(): Promise<ReconcileResult> {
     await syncEpisodeRequests();
   } catch (err) {
     console.error("[reconciler] syncEpisodeRequests failed:", err);
+  }
+
+  try {
+    await syncMovieRequests();
+  } catch (err) {
+    console.error("[reconciler] syncMovieRequests failed:", err);
   }
 
   try {

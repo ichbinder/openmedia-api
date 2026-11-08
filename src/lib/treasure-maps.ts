@@ -141,6 +141,16 @@ export function searchEpisode(tmdbId: number, season: number, episode: number): 
   });
 }
 
+export function searchMovie(tmdbId: number): Promise<IndexerRelease[]> {
+  return cached(`tm:movie:${tmdbId}`, SEARCH_TTL_MS, async () => {
+    const query = new URLSearchParams({ tmdbid: String(tmdbId), extended: "true", limit: "100" });
+    const res = await request(`/movie?${query}`);
+    const body = await readJson<{ items?: unknown }>(res);
+    if (!Array.isArray(body?.items)) throw new IndexerError("http");
+    return (body.items as RawRelease[]).map(toRelease);
+  });
+}
+
 export async function downloadNzb(guid: string): Promise<string> {
   if (!GUID_PATTERN.test(guid)) throw new IndexerError("http", 400);
   const res = await request(`/releases/${guid}/download`);
@@ -157,4 +167,16 @@ export async function getDownloadBudget(): Promise<{ used: number; max: number }
   const { download_current: used, download_max: max } = body?.limits ?? {};
   if (typeof used !== "number" || typeof max !== "number") throw new IndexerError("http");
   return { used, max };
+}
+
+export const BUDGET_RESERVE = 50;
+
+// The indexer counts a download only once it happened, so check and download
+// run one at a time.
+// ponytail: per-process lock, needs a shared reservation if the API ever runs as several processes.
+let budgetLock: Promise<unknown> = Promise.resolve();
+export function withBudgetLock<T>(fn: () => Promise<T>): Promise<T> {
+  const run = budgetLock.then(fn);
+  budgetLock = run.catch(() => undefined);
+  return run;
 }

@@ -2,11 +2,11 @@ import { createHash } from "crypto";
 import type { EpisodeRequest, NzbEpisode, NzbShow, Prisma } from "../../generated/client/index.js";
 import prisma from "./prisma.js";
 import { getTmdbEpisodeById, getTmdbSeasonById } from "./tmdb.js";
-import { downloadNzb, getDownloadBudget, IndexerError, searchEpisode } from "./treasure-maps.js";
+import { BUDGET_RESERVE, downloadNzb, getDownloadBudget, IndexerError, searchEpisode, withBudgetLock } from "./treasure-maps.js";
 import { getTargetBand, rankReleases, type RankedRelease } from "./release-ranking.js";
 import { ingestNzb, type IngestResult } from "./nzb-ingest.js";
 import { upsertEpisode } from "./episode-resolver.js";
-import { LANGUAGE_PATTERNS } from "./nzb-parser.js";
+import { toLanguageCodes } from "./nzb-parser.js";
 
 export type RequestView = { season: number; episode: number; status: string; waitReason: string | null };
 
@@ -17,13 +17,12 @@ export class TmdbUnavailableError extends Error {
   }
 }
 
-const ACTIVE_JOB_STATUSES = ["queued", "provisioning", "downloading", "uploading"];
+export const ACTIVE_JOB_STATUSES = ["queued", "provisioning", "downloading", "uploading"];
 const RETRY_MS = 60 * 60 * 1000;
 const EXPIRE_MS = 30 * 24 * 60 * 60 * 1000;
-const BUDGET_RESERVE = 50;
 const MAX_NZBS_PER_REQUEST = 3;
-const SYNC_BATCH = 20;
-const STALE_SEARCH_MS = 15 * 60 * 1000;
+export const SYNC_BATCH = 20;
+export const STALE_SEARCH_MS = 15 * 60 * 1000;
 const DEFAULT_RUNTIME_MINUTES = 45;
 const TIER_PREFERENCE = ["1080p", "2160p", "720p", "480p"];
 
@@ -56,7 +55,7 @@ function tierRank(tier: string | null): number {
   return index === -1 ? TIER_PREFERENCE.length : index;
 }
 
-async function addToLibrary(userId: string, nzbFileId: string) {
+export async function addToLibrary(userId: string, nzbFileId: string) {
   await prisma.userLibrary.upsert({
     where: { userId_nzbFileId: { userId, nzbFileId } },
     create: { userId, nzbFileId },
@@ -98,11 +97,6 @@ export async function rankEpisodeCandidates(tmdbId: number, season: number, epis
   });
   const brokenGuids = new Set(broken.map((f) => f.indexerGuid));
   return ranked.filter((r) => !brokenGuids.has(r.guid) && Number.isSafeInteger(r.size) && r.size > 0);
-}
-
-function toLanguageCodes(names: string[] | null): string[] {
-  const codes = (names ?? []).map((name) => LANGUAGE_PATTERNS.find(([p]) => p.test(name))?.[1] ?? name.toLowerCase());
-  return [...new Set(codes)];
 }
 
 async function ingestCandidate(
@@ -147,16 +141,6 @@ async function ingestCandidate(
     const file = await prisma.nzbFile.findUniqueOrThrow({ where: { hash } });
     return { kind: "hash-race", nzbFileId: file.id };
   }
-}
-
-// The indexer counts a download only once it happened, so check and download
-// run one at a time.
-// ponytail: per-process lock, needs a shared reservation if the API ever runs as several processes.
-let budgetLock: Promise<unknown> = Promise.resolve();
-function withBudgetLock<T>(fn: () => Promise<T>): Promise<T> {
-  const run = budgetLock.then(fn);
-  budgetLock = run.catch(() => undefined);
-  return run;
 }
 
 export async function fulfillEpisodeRequest(requestId: string, claimToken?: Date): Promise<void> {
