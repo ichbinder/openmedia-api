@@ -182,4 +182,42 @@ describe("rankMovieCandidates", () => {
     );
     expect(c.group).toBe("german");
   });
+
+  it("drops the dataless twin when the own file's guid is the with-data post", () => {
+    const r = rankMovieCandidates(
+      [release({ guid: "x" }), release({ guid: "twin", audioLanguages: null })],
+      [file({ id: "a", indexerGuid: "x" })],
+      opts,
+    );
+    expect(keys(r)).toEqual(["file:a"]);
+  });
+
+  it("returns no languages for a dataless hit without language hint", () => {
+    const [c] = rankMovieCandidates(
+      [
+        release({
+          title: "Film.2024.1080p.WEB.x264-GRP",
+          audioLanguages: null,
+        }),
+      ],
+      [],
+      opts,
+    );
+    expect(c.audioLanguages).toEqual([]);
+    expect(c.group).toBe("foreign");
+  });
+
+  it("keeps name-hinted language codes for a dataless hit", () => {
+    const [c] = rankMovieCandidates(
+      [
+        release({
+          title: "Film.2024.German.DL.1080p.WEB.x264-GRP",
+          audioLanguages: null,
+        }),
+      ],
+      [],
+      opts,
+    );
+    expect(c.audioLanguages).toEqual(["de", "en"]);
+  });
 });

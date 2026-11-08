@@ -9,7 +9,11 @@ import {
   type Band,
   type QualityTier,
 } from "./release-ranking.js";
-import { parseNzbName, toLanguageCodes } from "./nzb-parser.js";
+import {
+  LANGUAGE_PATTERNS,
+  parseNzbName,
+  toLanguageCodes,
+} from "./nzb-parser.js";
 import type { IndexerRelease } from "./treasure-maps.js";
 
 export type CandidateGroup = "german" | "foreign" | "cam";
@@ -127,6 +131,12 @@ function build(
   };
 }
 
+function languagesFromName(title: string): string[] {
+  const hinted = LANGUAGE_PATTERNS.some(([pattern]) => pattern.test(title));
+  const { audioLanguages } = parseNzbName(title);
+  return hinted || audioLanguages.length > 1 ? audioLanguages : [];
+}
+
 function fromRelease(
   r: IndexerRelease,
   opts: { runtimeMinutes: number; band: Band },
@@ -144,7 +154,7 @@ function fromRelease(
       sizeBytes: r.size,
       audioLanguages: hasData
         ? toLanguageCodes(r.audioLanguages)
-        : parseNzbName(r.title).audioLanguages,
+        : languagesFromName(r.title),
       germanSubtitles: includesGerman(r.subtitles),
       hashPrefix: null,
       brokenReason: null,
@@ -196,11 +206,11 @@ export function rankMovieCandidates(
   const ownGuids = new Set(
     files.map((f) => f.indexerGuid).filter((g): g is string => g !== null),
   );
-  const usable = releases.filter(
-    (r) => r.password !== 2 && r.size > 0 && !ownGuids.has(r.guid),
-  );
+  const usable = releases.filter((r) => r.password !== 2 && r.size > 0);
   const entries = [
-    ...dropDatalessTwins(usable).map((r) => fromRelease(r, opts)),
+    ...dropDatalessTwins(usable)
+      .filter((r) => !ownGuids.has(r.guid))
+      .map((r) => fromRelease(r, opts)),
     ...files
       .filter((f) => f.failedAttempts < MAX_FAILED_ATTEMPTS)
       .map((f) => fromFile(f, opts)),
