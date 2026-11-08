@@ -55,7 +55,7 @@ function tierRank(tier: string | null): number {
   return index === -1 ? TIER_PREFERENCE.length : index;
 }
 
-async function addToLibrary(userId: string, nzbFileId: string) {
+export async function addToLibrary(userId: string, nzbFileId: string) {
   await prisma.userLibrary.upsert({
     where: { userId_nzbFileId: { userId, nzbFileId } },
     create: { userId, nzbFileId },

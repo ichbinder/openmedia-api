@@ -21,6 +21,7 @@ model User {
   apiTokens        ApiToken[]
   precacheRequests PrecacheRequest[]
   episodeRequests  EpisodeRequest[]
+  movieRequests    MovieRequest[]
 
   @@map("users")
 }
@@ -170,6 +171,7 @@ model NzbFile {
   uploadJobs      UploadJob[]
   libraryUsers    UserLibrary[]
   episodeRequests EpisodeRequest[]
+  movieRequests   MovieRequest[]
 
   @@index([movieId])
   @@index([episodeId])
@@ -217,6 +219,27 @@ model EpisodeRequest {
   @@index([episodeId])
   @@index([nzbFileId])
   @@map("episode_requests")
+}
+
+model MovieRequest {
+  id           String   @id @default(uuid())
+  tmdbId       Int      @map("tmdb_id")
+  status       String   // 'downloading' | 'done' | 'failed'
+  allowedGroup String   @map("allowed_group")  // 'german' | 'foreign' | 'cam'
+  manual       Boolean  @default(false)
+  attempts     Int      @default(0)
+  triedKeys    String[] @default([]) @map("tried_keys")
+  failReason   String?  @map("fail_reason")    // 'budget' | 'no_candidate' | 'download_failed'
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId       String   @map("user_id")
+  nzbFile      NzbFile? @relation(fields: [nzbFileId], references: [id], onDelete: SetNull)
+  nzbFileId    String?  @map("nzb_file_id")
+  @@unique([userId, tmdbId])
+  @@index([status])
+  @@index([nzbFileId])
+  @@map("movie_requests")
 }
 
 model DownloadJob {
