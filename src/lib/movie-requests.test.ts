@@ -64,6 +64,8 @@ function release(guid: string, over: Partial<IndexerRelease> = {}): IndexerRelea
 const DE1 = release("de1");
 const DE2 = release("de2", { size: 5e9 });
 const EN = release("en1080", { title: "The.Matrix.1999.1080p.BluRay.x264-GRP", audioLanguages: ["English"] });
+const CAM_DE = release("decam", { title: "The.Matrix.1999.German.HDCAM.x264-GRP", audioLanguages: ["German"] });
+const CAM_EN = release("encam", { title: "The.Matrix.1999.HDCAM.x264-GRP", audioLanguages: ["English"] });
 
 function nzb(guid: string) {
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -152,7 +154,19 @@ describe("requestMovie", () => {
     const outcome = await requestMovie(u.id, 603, "guid:en1080", { confirmed: true, manual: false });
 
     expect(outcome.status).toBe("downloading");
-    expect((await prisma.movieRequest.findFirstOrThrow()).allowedGroup).toBe("foreign");
+    expect(await prisma.movieRequest.findFirstOrThrow()).toMatchObject({ allowedGroup: "foreign", germanOnly: false });
+  });
+
+  it("keeps a confirmed German cam German-only but not an English cam", async () => {
+    mockSearch.mockResolvedValue([CAM_DE, CAM_EN]);
+    const [a, b] = [await createUser(), await createUser()];
+
+    await requestMovie(a.id, 603, "guid:decam", { confirmed: true, manual: false });
+    await requestMovie(b.id, 603, "guid:encam", { confirmed: true, manual: false });
+
+    const byUser = async (userId: string) => prisma.movieRequest.findFirstOrThrow({ where: { userId } });
+    expect(await byUser(a.id)).toMatchObject({ allowedGroup: "cam", germanOnly: true });
+    expect(await byUser(b.id)).toMatchObject({ allowedGroup: "cam", germanOnly: false });
   });
 
   it("ready own file returns ready and adds it to the library", async () => {
@@ -314,21 +328,23 @@ describe("listMovieCandidates", () => {
 });
 
 describe("syncMovieRequests", () => {
-  async function createRequest(userId: string, data: Record<string, unknown>) {
-    return prisma.movieRequest.create({
+  async function createRequest(userId: string, data: Record<string, unknown>, staleMinutes = 0) {
+    const req = await prisma.movieRequest.create({
       data: { userId, tmdbId: 603, status: "downloading", allowedGroup: "german", attempts: 1, triedKeys: ["guid:de1"], ...data },
     });
+    await prisma.$executeRaw`UPDATE movie_requests SET updated_at = now() - make_interval(mins => ${staleMinutes}) WHERE id = ${req.id}`;
+    return prisma.movieRequest.findUniqueOrThrow({ where: { id: req.id } });
   }
 
-  async function failedDownload(userId: string) {
-    const file = await prisma.nzbFile.create({ data: { hash: "h-de1", originalFilename: "de1.nzb", indexerGuid: "de1" } });
+  async function failedDownload(userId: string, guid = "de1") {
+    const file = await prisma.nzbFile.create({ data: { hash: `h-${guid}`, originalFilename: `${guid}.nzb`, indexerGuid: guid } });
     await prisma.downloadJob.create({ data: { nzbFileId: file.id, userId, status: "failed" } });
     return file;
   }
 
-  function germanCheck(audioLanguages: string[]) {
+  function germanCheck(audioLanguages: string[], guid = "de1") {
     return prisma.nzbFile.create({
-      data: { hash: `h-${Math.random()}`, originalFilename: "de1.nzb", indexerGuid: "de1", s3Key: "media/x.mkv", mediaInfo: {}, audioLanguages },
+      data: { hash: `h-${Math.random()}`, originalFilename: `${guid}.nzb`, indexerGuid: guid, s3Key: "media/x.mkv", mediaInfo: {}, audioLanguages },
     });
   }
 
@@ -362,15 +378,20 @@ describe("syncMovieRequests", () => {
     expect(req.nzbFile!.indexerGuid).toBe("de2");
   });
 
-  it("retries a downloading request that never got a file", async () => {
+  it("retries a downloading request that never got a file once it is stale, not while a click is running", async () => {
     mockSearch.mockResolvedValue([DE1, DE2]);
-    const u = await createUser();
-    await createRequest(u.id, { nzbFileId: null });
+    const [a, b] = [await createUser(), await createUser()];
+    const stale = await createRequest(a.id, { nzbFileId: null }, 20);
+    const running = await createRequest(b.id, { nzbFileId: null });
 
     await syncMovieRequests();
 
     expect(mockDownload.mock.calls.map((c) => c[0])).toEqual(["de2"]);
-    expect(await prisma.movieRequest.findFirstOrThrow()).toMatchObject({ status: "downloading", attempts: 2 });
+    expect(await prisma.movieRequest.findUniqueOrThrow({ where: { id: stale.id } })).toMatchObject({
+      status: "downloading",
+      attempts: 2,
+    });
+    expect(await prisma.movieRequest.findUniqueOrThrow({ where: { id: running.id } })).toEqual(running);
   });
 
   it("leaves a request alone while its job is still active", async () => {
@@ -422,7 +443,7 @@ describe("syncMovieRequests", () => {
   it("does not re-check a version the user deliberately loaded without German", async () => {
     const u = await createUser();
     const file = await germanCheck(["eng"]);
-    await createRequest(u.id, { status: "done", allowedGroup: "foreign", nzbFileId: file.id });
+    await createRequest(u.id, { status: "done", allowedGroup: "foreign", germanOnly: false, nzbFileId: file.id });
 
     await syncMovieRequests();
 
@@ -458,8 +479,8 @@ describe("syncMovieRequests", () => {
     mockSearch.mockRejectedValueOnce(new IndexerError("http", 500)).mockResolvedValue([DE1, DE2]);
     const [a, b] = [await createUser(), await createUser()];
     const failed = await failedDownload(a.id);
-    const first = await createRequest(a.id, { nzbFileId: failed.id });
-    const second = await createRequest(b.id, { nzbFileId: null });
+    const first = await createRequest(a.id, { nzbFileId: failed.id }, 30);
+    const second = await createRequest(b.id, { nzbFileId: null }, 20);
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     await syncMovieRequests();
@@ -468,5 +489,48 @@ describe("syncMovieRequests", () => {
     expect(await prisma.movieRequest.findUniqueOrThrow({ where: { id: second.id } })).toMatchObject({ attempts: 2 });
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
+  });
+
+  it("keeps a rejected file out of the library when its retry is deferred", async () => {
+    mockSearch.mockRejectedValue(new IndexerError("http", 500));
+    const u = await createUser();
+    const file = await germanCheck(["eng"]);
+    await prisma.userLibrary.create({ data: { userId: u.id, nzbFileId: file.id } });
+    await createRequest(u.id, { status: "done", nzbFileId: file.id });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const removedAt = async () => (await prisma.userLibrary.findFirstOrThrow({ where: { nzbFileId: file.id } })).removedAt;
+    await syncMovieRequests();
+    const firstRemoval = await removedAt();
+    await syncMovieRequests();
+
+    expect(firstRemoval).not.toBeNull();
+    expect(await removedAt()).toEqual(firstRemoval);
+    expect(await prisma.movieRequest.findFirstOrThrow()).toMatchObject({ status: "downloading", attempts: 1 });
+    warn.mockRestore();
+  });
+
+  it("never falls back to an English version after a confirmed German cam failed", async () => {
+    mockSearch.mockResolvedValue([CAM_DE, EN]);
+    const u = await createUser();
+    const failed = await failedDownload(u.id, "decam");
+    await createRequest(u.id, { allowedGroup: "cam", triedKeys: ["guid:decam"], nzbFileId: failed.id });
+
+    await syncMovieRequests();
+
+    expect(mockDownload).not.toHaveBeenCalled();
+    expect(await prisma.movieRequest.findFirstOrThrow()).toMatchObject({ status: "failed", failReason: "no_candidate" });
+  });
+
+  it("re-checks the audio of a German cam and retries when ffprobe finds no German", async () => {
+    mockSearch.mockResolvedValue([CAM_DE, DE2]);
+    const u = await createUser();
+    const file = await germanCheck(["eng"], "decam");
+    await createRequest(u.id, { status: "done", allowedGroup: "cam", triedKeys: ["guid:decam"], nzbFileId: file.id });
+
+    await syncMovieRequests();
+
+    expect((await prisma.nzbFile.findUniqueOrThrow({ where: { id: file.id } })).status).toBe("broken");
+    expect(mockDownload.mock.calls.map((c) => c[0])).toEqual(["de2"]);
   });
 });

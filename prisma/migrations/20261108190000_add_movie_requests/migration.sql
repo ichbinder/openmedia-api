@@ -5,6 +5,7 @@ CREATE TABLE "movie_requests" (
     "status" TEXT NOT NULL,
     "allowed_group" TEXT NOT NULL,
     "manual" BOOLEAN NOT NULL DEFAULT false,
+    "german_only" BOOLEAN NOT NULL DEFAULT true,
     "attempts" INTEGER NOT NULL DEFAULT 0,
     "tried_keys" TEXT[] DEFAULT ARRAY[]::TEXT[],
     "fail_reason" TEXT,

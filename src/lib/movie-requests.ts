@@ -7,7 +7,7 @@ import { getTargetBand } from "./release-ranking.js";
 import { ingestNzb, type IngestResult } from "./nzb-ingest.js";
 import { GROUP_RANK, rankMovieCandidates, type CandidateGroup, type MovieCandidate } from "./movie-ranking.js";
 import { isSerializationFailure, startDownloadJob } from "./download-jobs.js";
-import { ACTIVE_JOB_STATUSES, addToLibrary, SYNC_BATCH, TmdbUnavailableError } from "./episode-requests.js";
+import { ACTIVE_JOB_STATUSES, addToLibrary, STALE_SEARCH_MS, SYNC_BATCH, TmdbUnavailableError } from "./episode-requests.js";
 import { toLanguageCodes } from "./nzb-parser.js";
 
 export const MAX_ATTEMPTS = 3;
@@ -51,11 +51,19 @@ export async function listMovieCandidates(
   return { candidates, indexer: search.indexer };
 }
 
+function speaksGerman(c: MovieCandidate): boolean {
+  return c.group === "german" || (c.group === "cam" && c.audioLanguages.includes("de"));
+}
+
 function fallbacks(request: MovieRequest, candidates: MovieCandidate[]): MovieCandidate[] {
   if (request.manual) return [];
   const allowed = GROUP_RANK[request.allowedGroup as CandidateGroup];
   return candidates.filter(
-    (c) => c.state !== "broken" && !request.triedKeys.includes(c.key) && GROUP_RANK[c.group] <= allowed,
+    (c) =>
+      c.state !== "broken" &&
+      !request.triedKeys.includes(c.key) &&
+      GROUP_RANK[c.group] <= allowed &&
+      (!request.germanOnly || speaksGerman(c)),
   );
 }
 
@@ -198,6 +206,7 @@ export async function requestMovie(
   const fresh = {
     status: "downloading",
     allowedGroup: chosen.group,
+    germanOnly: speaksGerman(chosen),
     manual: opts.manual,
     attempts: 0,
     triedKeys: [],
@@ -252,23 +261,24 @@ export async function syncMovieRequests(): Promise<void> {
     where: {
       status: "downloading",
       OR: [
-        { nzbFileId: null },
-        { nzbFile: { s3Key: { not: null } } },
+        { nzbFileId: null, updatedAt: { lt: new Date(Date.now() - STALE_SEARCH_MS) } },
+        { nzbFile: { s3Key: { not: null }, status: { not: "broken" } } },
         { nzbFile: { downloadJobs: { none: { status: { in: [...ACTIVE_JOB_STATUSES, "needs_review"] } } } } },
       ],
     },
-    include: { nzbFile: { select: { s3Key: true } } },
+    include: { nzbFile: { select: { s3Key: true, status: true } } },
     orderBy: { updatedAt: "asc" },
     take: SYNC_BATCH,
   });
   for (const request of finished) {
-    await syncOne(request.id, () => (request.nzbFile?.s3Key ? markReady(request, request.nzbFileId!) : retry(request)));
+    const ready = request.nzbFile?.s3Key && request.nzbFile.status !== "broken";
+    await syncOne(request.id, () => (ready ? markReady(request, request.nzbFileId!) : retry(request)));
   }
 
   const unchecked = await prisma.movieRequest.findMany({
     where: {
       status: "done",
-      allowedGroup: "german",
+      germanOnly: true,
       nzbFile: {
         mediaInfo: { not: Prisma.DbNull },
         NOT: [

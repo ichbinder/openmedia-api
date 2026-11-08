@@ -227,6 +227,7 @@ model MovieRequest {
   status       String   // 'downloading' | 'done' | 'failed'
   allowedGroup String   @map("allowed_group")  // 'german' | 'foreign' | 'cam'
   manual       Boolean  @default(false)
+  germanOnly   Boolean  @default(true) @map("german_only")
   attempts     Int      @default(0)
   triedKeys    String[] @default([]) @map("tried_keys")
   failReason   String?  @map("fail_reason")    // 'budget' | 'no_candidate' | 'download_failed'
