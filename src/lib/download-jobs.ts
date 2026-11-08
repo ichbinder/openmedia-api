@@ -36,6 +36,8 @@ export async function startDownloadJob(
       provisionDownload(result.job.id).catch((err) => {
         console.error("[download-job] Auto-provision failed:", err);
       });
+    }).catch((err) => {
+      console.error("[download-job] Failed to load provisioner module:", err);
     });
   }
   return result;

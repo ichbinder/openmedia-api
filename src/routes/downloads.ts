@@ -898,6 +898,13 @@ router.delete("/jobs/:id", requireAuth, async (req: AuthRequest, res: Response) 
       return;
     }
 
+    if (job.userId) {
+      await prisma.movieRequest.updateMany({
+        where: { nzbFileId: job.nzbFileId, userId: job.userId, status: "downloading" },
+        data: { status: "failed", failReason: "cancelled" },
+      });
+    }
+
     console.log(`[download-job] Deleted: ${job.id}`);
 
     res.json({ success: true });

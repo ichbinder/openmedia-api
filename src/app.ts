@@ -34,7 +34,7 @@ export function createApp() {
   app.use("/watchlist", watchlistRoutes);
   app.use("/nzb", nzbRoutes);
   app.use("/series", seriesRoutes);
-app.use("/movies", movieRoutes);
+  app.use("/movies", movieRoutes);
   app.use("/downloads", downloadsRoutes);
   app.use("/uploads", uploadRoutes);
   app.use("/storage", storageRoutes);

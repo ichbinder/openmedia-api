@@ -48,6 +48,7 @@ export interface MovieCandidate {
   guid: string | null;
   title: string;
   group: CandidateGroup;
+  german: boolean;
   state: CandidateState;
   qualityTier: QualityTier;
   releaseType: string | null;
@@ -90,7 +91,6 @@ const STATE_RANK: Record<CandidateState, number> = {
 
 interface Entry {
   candidate: MovieCandidate;
-  german: boolean;
   distance: number;
 }
 
@@ -125,8 +125,7 @@ function build(
       : "foreign";
   const audioDescription = hasWord(base.title, AUDIO_DESCRIPTION_WORDS);
   return {
-    candidate: { ...base, group, inTargetBand, audioDescription },
-    german,
+    candidate: { ...base, group, german, inTargetBand, audioDescription },
     distance,
   };
 }
@@ -227,7 +226,7 @@ export function rankMovieCandidates(
       return (
         broken(x) - broken(y) ||
         GROUP_RANK[x.group] - GROUP_RANK[y.group] ||
-        (x.group === "cam" ? Number(b.german) - Number(a.german) : 0) ||
+        (x.group === "cam" ? Number(y.german) - Number(x.german) : 0) ||
         tier(y) - tier(x) ||
         bonus(y) - bonus(x) ||
         STATE_RANK[x.state] - STATE_RANK[y.state] ||

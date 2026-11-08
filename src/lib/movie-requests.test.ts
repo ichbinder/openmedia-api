@@ -24,7 +24,13 @@ vi.mock("./download-jobs.js", async (importOriginal) => {
   return { ...original, startDownloadJob: vi.fn(original.startDownloadJob) };
 });
 
+vi.mock("./nzb-ingest.js", async (importOriginal) => {
+  const original = (await importOriginal()) as typeof import("./nzb-ingest.js");
+  return { ...original, ingestNzb: vi.fn(original.ingestNzb) };
+});
+
 import { startDownloadJob } from "./download-jobs.js";
+import { ingestNzb } from "./nzb-ingest.js";
 import { searchTmdbMovieById } from "./tmdb.js";
 import { downloadNzb, getDownloadBudget, IndexerError, searchMovie } from "./treasure-maps.js";
 import { listMovieCandidates, requestMovie, syncMovieRequests } from "./movie-requests.js";
@@ -296,6 +302,31 @@ describe("requestMovie", () => {
     expect(await prisma.movieRequest.findFirstOrThrow()).toMatchObject({ status: "downloading", nzbFileId: file.id });
   });
 
+  it("two users clicking the same indexer hit at once download its NZB only once", async () => {
+    const [a, b] = [await createUser(), await createUser()];
+
+    const [first, second] = await Promise.all([
+      requestMovie(a.id, 603, "guid:de1", auto),
+      requestMovie(b.id, 603, "guid:de1", auto),
+    ]);
+
+    expect(mockDownload).toHaveBeenCalledTimes(1);
+    expect(second).toEqual(first);
+    expect(await prisma.downloadJob.count()).toBe(1);
+  });
+
+  it("shares the file when ingest reports a concurrent job start", async () => {
+    const file = await prisma.nzbFile.create({
+      data: { hash: createHash("sha256").update(nzb("de1")).digest("hex"), originalFilename: "de1.nzb" },
+    });
+    vi.mocked(ingestNzb).mockResolvedValueOnce({ kind: "concurrent" });
+    const u = await createUser();
+
+    expect(await requestMovie(u.id, 603, "guid:de1", auto)).toEqual({ status: "downloading", nzbFileId: file.id });
+
+    expect(await prisma.movieRequest.findFirstOrThrow()).toMatchObject({ status: "downloading", nzbFileId: file.id });
+  });
+
   it("throws TmdbUnavailableError when TMDB is down for an indexer ingest", async () => {
     mockTmdb.mockResolvedValue({ status: "error", reason: "timeout" });
     const u = await createUser();
@@ -520,6 +551,38 @@ describe("syncMovieRequests", () => {
 
     expect(mockDownload).not.toHaveBeenCalled();
     expect(await prisma.movieRequest.findFirstOrThrow()).toMatchObject({ status: "failed", failReason: "no_candidate" });
+  });
+
+  it("never falls back to English after a confirmed German-named own cam without ffprobe data failed", async () => {
+    mockSearch.mockResolvedValue([EN]);
+    const file = await createOwnFile({ originalFilename: "The.Matrix.1999.German.HDCAM.x264-GRP.nzb" });
+    const u = await createUser();
+    await requestMovie(u.id, 603, `file:${file.id}`, { confirmed: true, manual: false });
+    await prisma.downloadJob.updateMany({ data: { status: "failed" } });
+
+    await syncMovieRequests();
+
+    expect(mockDownload).not.toHaveBeenCalled();
+    expect(await prisma.movieRequest.findFirstOrThrow()).toMatchObject({
+      allowedGroup: "cam",
+      germanOnly: true,
+      status: "failed",
+      failReason: "no_candidate",
+    });
+  });
+
+  it("does not restart the failed NZB of an indexer hit that now lists as an own file", async () => {
+    mockSearch.mockResolvedValue([DE1, DE2]);
+    const u = await createUser();
+    const { nzbFileId } = (await requestMovie(u.id, 603, "guid:de1", auto)) as { nzbFileId: string };
+    expect((await prisma.nzbFile.findUniqueOrThrow({ where: { id: nzbFileId } })).movieId).not.toBeNull();
+    await prisma.downloadJob.updateMany({ data: { status: "failed" } });
+    mockDownload.mockClear();
+
+    await syncMovieRequests();
+
+    expect(mockDownload.mock.calls.map((c) => c[0])).toEqual(["de2"]);
+    expect(await prisma.downloadJob.count({ where: { nzbFileId, status: "queued" } })).toBe(0);
   });
 
   it("re-checks the audio of a German cam and retries when ffprobe finds no German", async () => {

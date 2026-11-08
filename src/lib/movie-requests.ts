@@ -52,7 +52,15 @@ export async function listMovieCandidates(
 }
 
 function speaksGerman(c: MovieCandidate): boolean {
-  return c.group === "german" || (c.group === "cam" && c.audioLanguages.includes("de"));
+  return c.group === "german" || (c.group === "cam" && c.german);
+}
+
+function alreadyTried(request: MovieRequest, c: MovieCandidate): boolean {
+  return (
+    request.triedKeys.includes(c.key) ||
+    request.triedKeys.includes(`guid:${c.guid}`) ||
+    (request.nzbFileId !== null && c.nzbFileId === request.nzbFileId)
+  );
 }
 
 function fallbacks(request: MovieRequest, candidates: MovieCandidate[]): MovieCandidate[] {
@@ -61,7 +69,7 @@ function fallbacks(request: MovieRequest, candidates: MovieCandidate[]): MovieCa
   return candidates.filter(
     (c) =>
       c.state !== "broken" &&
-      !request.triedKeys.includes(c.key) &&
+      !alreadyTried(request, c) &&
       GROUP_RANK[c.group] <= allowed &&
       (!request.germanOnly || speaksGerman(c)),
   );
@@ -97,11 +105,11 @@ async function ingestCandidate(
   request: MovieRequest,
   candidate: MovieCandidate,
   tmdb: TmdbMovieResult,
-): Promise<IngestResult | { kind: "hash-race"; nzbFileId: string }> {
+): Promise<IngestResult | { kind: "shared"; nzbFileId: string }> {
   const guid = candidate.guid!;
   const nzbContent = await downloadNzb(guid);
   try {
-    return await ingestNzb({
+    const result = await ingestNzb({
       nzbContent,
       title: candidate.title,
       filename: `${candidate.title}.nzb`,
@@ -118,12 +126,13 @@ async function ingestCandidate(
         releaseType: candidate.releaseType,
       },
     });
+    if (result.kind !== "concurrent") return result;
   } catch (err: any) {
     if (err?.code !== "P2002") throw err;
-    const hash = createHash("sha256").update(nzbContent).digest("hex");
-    const file = await prisma.nzbFile.findUniqueOrThrow({ where: { hash } });
-    return { kind: "hash-race", nzbFileId: file.id };
   }
+  const hash = createHash("sha256").update(nzbContent).digest("hex");
+  const file = await prisma.nzbFile.findUniqueOrThrow({ where: { hash } });
+  return { kind: "shared", nzbFileId: file.id };
 }
 
 async function attemptIndexerHit(
@@ -132,6 +141,11 @@ async function attemptIndexerHit(
   tmdb: TmdbMovieResult,
 ): Promise<RequestOutcome | null> {
   const result = await withBudgetLock(async () => {
+    const known = await prisma.nzbFile.findFirst({
+      where: { indexerGuid: candidate.guid, status: { not: "broken" } },
+      select: { id: true, s3Key: true },
+    });
+    if (known) return { kind: "known" as const, file: known };
     const budget = await getDownloadBudget();
     if (budget.used >= budget.max - BUDGET_RESERVE) return null;
     return ingestCandidate(request, candidate, tmdb);
@@ -141,11 +155,13 @@ async function attemptIndexerHit(
     return { status: "budget" };
   }
   switch (result.kind) {
+    case "known":
+      return attemptOwnFile(request, result.file.id, !!result.file.s3Key);
     case "created":
       return markDownloading(request, result.job.nzbFileId);
     case "conflict":
       return markDownloading(request, result.activeJob.nzbFileId);
-    case "hash-race":
+    case "shared":
       return markDownloading(request, result.nzbFileId);
     case "already-available":
       return markReady(request, result.file.id);
@@ -158,9 +174,8 @@ async function attemptIndexerHit(
   }
 }
 
-async function attemptOwnFile(request: MovieRequest, candidate: MovieCandidate): Promise<RequestOutcome> {
-  const nzbFileId = candidate.nzbFileId!;
-  if (candidate.state === "ready") return markReady(request, nzbFileId);
+async function attemptOwnFile(request: MovieRequest, nzbFileId: string, ready: boolean): Promise<RequestOutcome> {
+  if (ready) return markReady(request, nzbFileId);
   try {
     await startDownloadJob(nzbFileId, request.userId);
   } catch (err) {
@@ -183,7 +198,7 @@ async function attemptCandidates(request: MovieRequest, ordered: MovieCandidate[
     const outcome =
       candidate.state === "indexer"
         ? await attemptIndexerHit(request, candidate, tmdb!)
-        : await attemptOwnFile(request, candidate);
+        : await attemptOwnFile(request, candidate.nzbFileId!, candidate.state === "ready");
     if (outcome) return outcome;
   }
   await markFailed(request, "no_candidate");
