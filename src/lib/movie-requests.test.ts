@@ -27,7 +27,7 @@ vi.mock("./download-jobs.js", async (importOriginal) => {
 import { startDownloadJob } from "./download-jobs.js";
 import { searchTmdbMovieById } from "./tmdb.js";
 import { downloadNzb, getDownloadBudget, IndexerError, searchMovie } from "./treasure-maps.js";
-import { listMovieCandidates, requestMovie } from "./movie-requests.js";
+import { listMovieCandidates, requestMovie, syncMovieRequests } from "./movie-requests.js";
 
 const mockTmdb = vi.mocked(searchTmdbMovieById);
 const mockSearch = vi.mocked(searchMovie);
@@ -310,5 +310,163 @@ describe("listMovieCandidates", () => {
 
     expect(indexer).toBe("ok");
     expect(candidates.map((c) => c.key)).toEqual(["guid:de1"]);
+  });
+});
+
+describe("syncMovieRequests", () => {
+  async function createRequest(userId: string, data: Record<string, unknown>) {
+    return prisma.movieRequest.create({
+      data: { userId, tmdbId: 603, status: "downloading", allowedGroup: "german", attempts: 1, triedKeys: ["guid:de1"], ...data },
+    });
+  }
+
+  async function failedDownload(userId: string) {
+    const file = await prisma.nzbFile.create({ data: { hash: "h-de1", originalFilename: "de1.nzb", indexerGuid: "de1" } });
+    await prisma.downloadJob.create({ data: { nzbFileId: file.id, userId, status: "failed" } });
+    return file;
+  }
+
+  function germanCheck(audioLanguages: string[]) {
+    return prisma.nzbFile.create({
+      data: { hash: `h-${Math.random()}`, originalFilename: "de1.nzb", indexerGuid: "de1", s3Key: "media/x.mkv", mediaInfo: {}, audioLanguages },
+    });
+  }
+
+  it("adds the film to every requester's library when the shared job completes", async () => {
+    const [a, b] = [await createUser(), await createUser()];
+    const file = await createOwnFile({ s3Key: "media/matrix.mkv" });
+    await prisma.downloadJob.create({ data: { nzbFileId: file.id, userId: a.id, status: "completed" } });
+    await createRequest(a.id, { nzbFileId: file.id });
+    await createRequest(b.id, { nzbFileId: file.id });
+
+    await syncMovieRequests();
+
+    const requests = await prisma.movieRequest.findMany();
+    expect(requests.map((r) => r.status)).toEqual(["done", "done"]);
+    const library = await prisma.userLibrary.findMany({ where: { nzbFileId: file.id, removedAt: null } });
+    expect(library.map((l) => l.userId).sort()).toEqual([a.id, b.id].sort());
+    expect(mockSearch).not.toHaveBeenCalled();
+  });
+
+  it("retries the next German candidate after the job failed", async () => {
+    mockSearch.mockResolvedValue([DE1, DE2, EN]);
+    const u = await createUser();
+    const failed = await failedDownload(u.id);
+    await createRequest(u.id, { nzbFileId: failed.id });
+
+    await syncMovieRequests();
+
+    expect(mockDownload.mock.calls.map((c) => c[0])).toEqual(["de2"]);
+    const req = await prisma.movieRequest.findFirstOrThrow({ include: { nzbFile: true } });
+    expect(req).toMatchObject({ status: "downloading", attempts: 2, triedKeys: ["guid:de1", "guid:de2"] });
+    expect(req.nzbFile!.indexerGuid).toBe("de2");
+  });
+
+  it("retries a downloading request that never got a file", async () => {
+    mockSearch.mockResolvedValue([DE1, DE2]);
+    const u = await createUser();
+    await createRequest(u.id, { nzbFileId: null });
+
+    await syncMovieRequests();
+
+    expect(mockDownload.mock.calls.map((c) => c[0])).toEqual(["de2"]);
+    expect(await prisma.movieRequest.findFirstOrThrow()).toMatchObject({ status: "downloading", attempts: 2 });
+  });
+
+  it("leaves a request alone while its job is still active", async () => {
+    const u = await createUser();
+    const file = await createOwnFile();
+    await prisma.downloadJob.create({ data: { nzbFileId: file.id, userId: u.id, status: "needs_review" } });
+    const request = await createRequest(u.id, { nzbFileId: file.id });
+
+    await syncMovieRequests();
+
+    expect(await prisma.movieRequest.findFirstOrThrow()).toEqual(request);
+    expect(mockSearch).not.toHaveBeenCalled();
+  });
+
+  it("marks a ffprobe-English 'German' file broken, removes it from the library and retries", async () => {
+    mockSearch.mockResolvedValue([DE1, DE2]);
+    const u = await createUser();
+    const file = await germanCheck(["eng"]);
+    await prisma.userLibrary.create({ data: { userId: u.id, nzbFileId: file.id } });
+    await createRequest(u.id, { status: "done", nzbFileId: file.id });
+
+    await syncMovieRequests();
+
+    expect(await prisma.nzbFile.findUniqueOrThrow({ where: { id: file.id } })).toMatchObject({
+      status: "broken",
+      brokenReason: "Kein deutscher Ton (ffprobe)",
+    });
+    expect((await prisma.userLibrary.findFirstOrThrow({ where: { nzbFileId: file.id } })).removedAt).not.toBeNull();
+    expect(mockDownload.mock.calls.map((c) => c[0])).toEqual(["de2"]);
+    const req = await prisma.movieRequest.findFirstOrThrow({ include: { nzbFile: true } });
+    expect(req).toMatchObject({ status: "downloading", attempts: 2 });
+    expect(req.nzbFile!.indexerGuid).toBe("de2");
+  });
+
+  it("does not mark broken when ffprobe has no or only 'und' language tags", async () => {
+    const [a, b] = [await createUser(), await createUser()];
+    const untagged = await germanCheck([]);
+    const und = await germanCheck(["und"]);
+    await createRequest(a.id, { status: "done", nzbFileId: untagged.id });
+    await createRequest(b.id, { status: "done", nzbFileId: und.id });
+
+    await syncMovieRequests();
+
+    expect((await prisma.movieRequest.findMany()).map((r) => r.status)).toEqual(["done", "done"]);
+    const files = await prisma.nzbFile.findMany({ where: { id: { in: [untagged.id, und.id] } } });
+    expect(files.map((f) => f.status)).not.toContain("broken");
+  });
+
+  it("does not re-check a version the user deliberately loaded without German", async () => {
+    const u = await createUser();
+    const file = await germanCheck(["eng"]);
+    await createRequest(u.id, { status: "done", allowedGroup: "foreign", nzbFileId: file.id });
+
+    await syncMovieRequests();
+
+    expect((await prisma.movieRequest.findFirstOrThrow()).status).toBe("done");
+    expect((await prisma.nzbFile.findUniqueOrThrow({ where: { id: file.id } })).status).not.toBe("broken");
+  });
+
+  it("does not retry a manual pick after failure", async () => {
+    mockSearch.mockResolvedValue([DE1, DE2]);
+    const u = await createUser();
+    const failed = await failedDownload(u.id);
+    await createRequest(u.id, { nzbFileId: failed.id, manual: true });
+
+    await syncMovieRequests();
+
+    expect(mockDownload).not.toHaveBeenCalled();
+    expect(await prisma.movieRequest.findFirstOrThrow()).toMatchObject({ status: "failed", failReason: "download_failed" });
+  });
+
+  it("gives up after 3 attempts", async () => {
+    mockSearch.mockResolvedValue([DE1, DE2]);
+    const u = await createUser();
+    const failed = await failedDownload(u.id);
+    await createRequest(u.id, { nzbFileId: failed.id, attempts: 3, triedKeys: ["guid:de1", "guid:x", "guid:y"] });
+
+    await syncMovieRequests();
+
+    expect(mockDownload).not.toHaveBeenCalled();
+    expect(await prisma.movieRequest.findFirstOrThrow()).toMatchObject({ status: "failed", attempts: 3 });
+  });
+
+  it("leaves a request for the next run when the indexer is unavailable and keeps going", async () => {
+    mockSearch.mockRejectedValueOnce(new IndexerError("http", 500)).mockResolvedValue([DE1, DE2]);
+    const [a, b] = [await createUser(), await createUser()];
+    const failed = await failedDownload(a.id);
+    const first = await createRequest(a.id, { nzbFileId: failed.id });
+    const second = await createRequest(b.id, { nzbFileId: null });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await syncMovieRequests();
+
+    expect(await prisma.movieRequest.findUniqueOrThrow({ where: { id: first.id } })).toEqual(first);
+    expect(await prisma.movieRequest.findUniqueOrThrow({ where: { id: second.id } })).toMatchObject({ attempts: 2 });
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
   });
 });

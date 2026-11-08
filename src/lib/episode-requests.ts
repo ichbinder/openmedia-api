@@ -17,11 +17,11 @@ export class TmdbUnavailableError extends Error {
   }
 }
 
-const ACTIVE_JOB_STATUSES = ["queued", "provisioning", "downloading", "uploading"];
+export const ACTIVE_JOB_STATUSES = ["queued", "provisioning", "downloading", "uploading"];
 const RETRY_MS = 60 * 60 * 1000;
 const EXPIRE_MS = 30 * 24 * 60 * 60 * 1000;
 const MAX_NZBS_PER_REQUEST = 3;
-const SYNC_BATCH = 20;
+export const SYNC_BATCH = 20;
 const STALE_SEARCH_MS = 15 * 60 * 1000;
 const DEFAULT_RUNTIME_MINUTES = 45;
 const TIER_PREFERENCE = ["1080p", "2160p", "720p", "480p"];

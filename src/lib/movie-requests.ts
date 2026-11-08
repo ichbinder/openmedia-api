@@ -1,5 +1,5 @@
 import { createHash } from "crypto";
-import type { MovieRequest } from "../../generated/client/index.js";
+import { Prisma, type MovieRequest } from "../../generated/client/index.js";
 import prisma from "./prisma.js";
 import { searchTmdbMovieById, type TmdbMovieResult } from "./tmdb.js";
 import { BUDGET_RESERVE, downloadNzb, getDownloadBudget, IndexerError, searchMovie, withBudgetLock } from "./treasure-maps.js";
@@ -7,7 +7,8 @@ import { getTargetBand } from "./release-ranking.js";
 import { ingestNzb, type IngestResult } from "./nzb-ingest.js";
 import { GROUP_RANK, rankMovieCandidates, type CandidateGroup, type MovieCandidate } from "./movie-ranking.js";
 import { isSerializationFailure, startDownloadJob } from "./download-jobs.js";
-import { addToLibrary, TmdbUnavailableError } from "./episode-requests.js";
+import { ACTIVE_JOB_STATUSES, addToLibrary, SYNC_BATCH, TmdbUnavailableError } from "./episode-requests.js";
+import { toLanguageCodes } from "./nzb-parser.js";
 
 export const MAX_ATTEMPTS = 3;
 export const DEFAULT_MOVIE_RUNTIME_MINUTES = 110;
@@ -209,4 +210,79 @@ export async function requestMovie(
     update: fresh,
   });
   return attemptCandidates(request, [chosen, ...fallbacks(request, candidates).filter((c) => c !== chosen)]);
+}
+
+async function retry(request: MovieRequest): Promise<void> {
+  if (request.manual) {
+    await markFailed(request, "download_failed");
+    return;
+  }
+  const { candidates, indexer } = await listMovieCandidates(request.tmdbId);
+  if (indexer === "unavailable") {
+    console.warn(`[movie-requests] Indexer unavailable, retry of request ${request.id} deferred`);
+    return;
+  }
+  await attemptCandidates(request, fallbacks(request, candidates));
+}
+
+async function rejectNonGerman(request: MovieRequest, audioLanguages: string[]): Promise<void> {
+  const codes = toLanguageCodes(audioLanguages).filter((c) => c !== "und");
+  if (codes.length === 0 || codes.includes("de")) return;
+  const nzbFileId = request.nzbFileId!;
+  await prisma.nzbFile.update({ where: { id: nzbFileId }, data: { status: "broken", brokenReason: "Kein deutscher Ton (ffprobe)" } });
+  await prisma.userLibrary.updateMany({ where: { userId: request.userId, nzbFileId }, data: { removedAt: new Date() } });
+  await prisma.movieRequest.update({ where: { id: request.id }, data: { status: "downloading" } });
+  await retry(request);
+}
+
+async function syncOne(requestId: string, step: () => Promise<unknown>): Promise<void> {
+  try {
+    await step();
+  } catch (err) {
+    if (err instanceof IndexerError || err instanceof TmdbUnavailableError) {
+      console.warn(`[movie-requests] Retry of request ${requestId} deferred: ${err.message}`);
+    } else {
+      console.error(`[movie-requests] Sync of request ${requestId} failed:`, err);
+    }
+  }
+}
+
+export async function syncMovieRequests(): Promise<void> {
+  const finished = await prisma.movieRequest.findMany({
+    where: {
+      status: "downloading",
+      OR: [
+        { nzbFileId: null },
+        { nzbFile: { s3Key: { not: null } } },
+        { nzbFile: { downloadJobs: { none: { status: { in: [...ACTIVE_JOB_STATUSES, "needs_review"] } } } } },
+      ],
+    },
+    include: { nzbFile: { select: { s3Key: true } } },
+    orderBy: { updatedAt: "asc" },
+    take: SYNC_BATCH,
+  });
+  for (const request of finished) {
+    await syncOne(request.id, () => (request.nzbFile?.s3Key ? markReady(request, request.nzbFileId!) : retry(request)));
+  }
+
+  const unchecked = await prisma.movieRequest.findMany({
+    where: {
+      status: "done",
+      allowedGroup: "german",
+      nzbFile: {
+        mediaInfo: { not: Prisma.DbNull },
+        NOT: [
+          { audioLanguages: { hasSome: ["de", "ger", "deu"] } },
+          { audioLanguages: { isEmpty: true } },
+          { audioLanguages: { equals: ["und"] } },
+        ],
+      },
+    },
+    include: { nzbFile: { select: { audioLanguages: true } } },
+    orderBy: { updatedAt: "asc" },
+    take: SYNC_BATCH - finished.length,
+  });
+  for (const request of unchecked) {
+    await syncOne(request.id, () => rejectNonGerman(request, request.nzbFile!.audioLanguages));
+  }
 }
