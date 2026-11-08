@@ -214,6 +214,8 @@ model EpisodeRequest {
 
   @@unique([userId, episodeId])
   @@index([status, nextSearchAt])
+  @@index([episodeId])
+  @@index([nzbFileId])
   @@map("episode_requests")
 }
 

@@ -281,6 +281,28 @@ describe("fulfillEpisodeRequest", () => {
     expect(mockDownload).toHaveBeenCalledTimes(1);
     expect((await prisma.episodeRequest.findFirstOrThrow()).status).toBe("downloading");
   });
+
+  it("does not let two requests share the last download of the budget", async () => {
+    const nzbShow = await prisma.nzbShow.create({ data: { tmdbId: 95396, titleDe: "Severance", titleEn: "Severance" } });
+    const user = await createUser();
+    const requests = await Promise.all(
+      [5, 6].map(async (n) => {
+        const episode = await prisma.nzbEpisode.create({ data: { showId: nzbShow.id, season: 2, episode: n } });
+        return createRequest(user.id, episode.id, { status: "waiting", nextSearchAt: new Date(Date.now() - 1000) });
+      }),
+    );
+    mockSearch.mockImplementation(async (_tmdbId, _season, ep) => releases.map((r) => ({ ...r, episode: ep })));
+    let used = 349;
+    mockBudget.mockImplementation(async () => ({ used, max: 400 }));
+    mockDownload.mockImplementation(async (guid) => {
+      await new Promise((r) => setTimeout(r, 200));
+      return nzb(`${guid}-${used++}`);
+    });
+
+    await Promise.all(requests.map((r) => fulfillEpisodeRequest(r.id)));
+
+    expect(mockDownload).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("requestEpisodes for a season", () => {

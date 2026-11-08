@@ -37,4 +37,13 @@ describe("cached", () => {
     await Promise.all([cached("k", 1000, load), cached("k", 1000, load)]);
     expect(load).toHaveBeenCalledTimes(1);
   });
+
+  it("drops the oldest entry once 5000 keys are stored", async () => {
+    const load = vi.fn(async () => "v");
+    for (let i = 0; i <= 5000; i++) await cached(`k${i}`, 1000, load);
+    await cached("k5000", 1000, load);
+    expect(load).toHaveBeenCalledTimes(5001);
+    await cached("k0", 1000, load);
+    expect(load).toHaveBeenCalledTimes(5002);
+  });
 });

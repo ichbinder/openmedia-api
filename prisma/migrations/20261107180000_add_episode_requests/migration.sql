@@ -21,6 +21,12 @@ CREATE TABLE "episode_requests" (
 CREATE INDEX "episode_requests_status_next_search_at_idx" ON "episode_requests"("status", "next_search_at");
 
 -- CreateIndex
+CREATE INDEX "episode_requests_episode_id_idx" ON "episode_requests"("episode_id");
+
+-- CreateIndex
+CREATE INDEX "episode_requests_nzb_file_id_idx" ON "episode_requests"("nzb_file_id");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "episode_requests_user_id_episode_id_key" ON "episode_requests"("user_id", "episode_id");
 
 -- CreateIndex

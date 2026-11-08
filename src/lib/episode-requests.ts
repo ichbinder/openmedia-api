@@ -149,6 +149,16 @@ async function ingestCandidate(
   }
 }
 
+// The indexer counts a download only once it happened, so check and download
+// run one at a time.
+// ponytail: per-process lock, needs a shared reservation if the API ever runs as several processes.
+let budgetLock: Promise<unknown> = Promise.resolve();
+function withBudgetLock<T>(fn: () => Promise<T>): Promise<T> {
+  const run = budgetLock.then(fn);
+  budgetLock = run.catch(() => undefined);
+  return run;
+}
+
 export async function fulfillEpisodeRequest(requestId: string, claimToken?: Date): Promise<void> {
   const claimed = await claim(
     requestId,
@@ -197,12 +207,15 @@ export async function fulfillEpisodeRequest(requestId: string, claimToken?: Date
     }
 
     for (const candidate of candidates.slice(0, MAX_NZBS_PER_REQUEST)) {
-      const budget = await getDownloadBudget();
-      if (budget.used >= budget.max - BUDGET_RESERVE) {
+      const result = await withBudgetLock(async () => {
+        const budget = await getDownloadBudget();
+        if (budget.used >= budget.max - BUDGET_RESERVE) return null;
+        return ingestCandidate(request, candidate);
+      });
+      if (!result) {
         await markWaiting(request, "budget");
         return;
       }
-      const result = await ingestCandidate(request, candidate);
       switch (result.kind) {
         case "created":
           await markDownloading(request, result.job.nzbFileId);
