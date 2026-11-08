@@ -1,7 +1,7 @@
 import { Router, type Response } from "express";
 import { requireAuth, type AuthRequest } from "../middleware/auth.js";
-import { rankEpisodeCandidates, requestEpisodes, TmdbUnavailableError } from "../lib/episode-requests.js";
-import { IndexerError } from "../lib/treasure-maps.js";
+import { rankEpisodeCandidates, requestEpisodes } from "../lib/episode-requests.js";
+import { handleIndexerError } from "./indexer-errors.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -16,30 +16,6 @@ function parseInt_(value: unknown, pattern: RegExp): number | null {
 
 function parseBodyInt(value: unknown, pattern: RegExp): number | null {
   return typeof value === "number" && Number.isInteger(value) ? parseInt_(String(value), pattern) : null;
-}
-
-function handleError(err: unknown, res: Response, context: string): void {
-  if (err instanceof IndexerError) {
-    if (err.reason === "not_configured") {
-      res.status(503).json({ error: "Indexer ist nicht eingerichtet.", reason: "indexer_not_configured" });
-    } else {
-      res.status(502).json({ error: "Indexer gerade nicht erreichbar.", reason: "indexer_error" });
-    }
-    return;
-  }
-  if (err instanceof TmdbUnavailableError) {
-    if (err.status === "disabled") {
-      res.status(503).json({
-        error: "TMDB-Matching ist nicht verfügbar — Server-Konfiguration fehlt.",
-        reason: "tmdb_disabled",
-      });
-    } else {
-      res.status(502).json({ error: "TMDB gerade nicht erreichbar.", reason: "tmdb_error" });
-    }
-    return;
-  }
-  console.error(`[series] ${context} error:`, err);
-  res.status(500).json({ error: "Interner Fehler bei der Serien-Anfrage." });
 }
 
 router.post("/requests", async (req: AuthRequest, res: Response) => {
@@ -59,7 +35,7 @@ router.post("/requests", async (req: AuthRequest, res: Response) => {
     const requests = await requestEpisodes(req.user!.userId, tmdb, seasonNumber, episodeNumber ?? undefined, guid);
     res.json({ requests });
   } catch (err) {
-    handleError(err, res, "request");
+    handleIndexerError(err, res, "series request", "Interner Fehler bei der Serien-Anfrage.");
   }
 });
 
@@ -89,7 +65,7 @@ router.get("/candidates", async (req: AuthRequest, res: Response) => {
       })),
     });
   } catch (err) {
-    handleError(err, res, "candidates");
+    handleIndexerError(err, res, "series candidates", "Interner Fehler bei der Serien-Anfrage.");
   }
 });
 
