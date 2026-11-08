@@ -1,6 +1,12 @@
 import type { DownloadJob, NzbFile, NzbMovie } from "../../generated/client/index.js";
 import prisma from "./prisma.js";
 
+// The pg driver adapter can surface a commit-time conflict as a raw
+// DriverAdapterError without a Prisma code.
+export function isSerializationFailure(err: any): boolean {
+  return err?.code === "P2034" || err?.code === "40001" || err?.cause?.kind === "TransactionWriteConflict";
+}
+
 export async function startDownloadJob(
   nzbFileId: string,
   userId: string | null,

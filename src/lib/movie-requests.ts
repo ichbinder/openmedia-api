@@ -6,7 +6,7 @@ import { BUDGET_RESERVE, downloadNzb, getDownloadBudget, IndexerError, searchMov
 import { getTargetBand } from "./release-ranking.js";
 import { ingestNzb, type IngestResult } from "./nzb-ingest.js";
 import { GROUP_RANK, rankMovieCandidates, type CandidateGroup, type MovieCandidate } from "./movie-ranking.js";
-import { startDownloadJob } from "./download-jobs.js";
+import { isSerializationFailure, startDownloadJob } from "./download-jobs.js";
 import { addToLibrary, TmdbUnavailableError } from "./episode-requests.js";
 
 export const MAX_ATTEMPTS = 3;
@@ -152,7 +152,12 @@ async function attemptIndexerHit(
 async function attemptOwnFile(request: MovieRequest, candidate: MovieCandidate): Promise<RequestOutcome> {
   const nzbFileId = candidate.nzbFileId!;
   if (candidate.state === "ready") return markReady(request, nzbFileId);
-  await startDownloadJob(nzbFileId, request.userId);
+  try {
+    await startDownloadJob(nzbFileId, request.userId);
+  } catch (err) {
+    // A serialization failure means a parallel click created the job; share it like a conflict.
+    if (!isSerializationFailure(err)) throw err;
+  }
   return markDownloading(request, nzbFileId);
 }
 

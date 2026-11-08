@@ -19,6 +19,12 @@ vi.mock("./treasure-maps.js", async (importOriginal) => {
   return { ...original, searchMovie: vi.fn(), downloadNzb: vi.fn(), getDownloadBudget: vi.fn() };
 });
 
+vi.mock("./download-jobs.js", async (importOriginal) => {
+  const original = (await importOriginal()) as typeof import("./download-jobs.js");
+  return { ...original, startDownloadJob: vi.fn(original.startDownloadJob) };
+});
+
+import { startDownloadJob } from "./download-jobs.js";
 import { searchTmdbMovieById } from "./tmdb.js";
 import { downloadNzb, getDownloadBudget, IndexerError, searchMovie } from "./treasure-maps.js";
 import { listMovieCandidates, requestMovie } from "./movie-requests.js";
@@ -244,6 +250,36 @@ describe("requestMovie", () => {
       ["downloading", (first as { nzbFileId: string }).nzbFileId],
       ["downloading", (first as { nzbFileId: string }).nzbFileId],
     ]);
+  });
+
+  it("two simultaneous clicks on the same own file share one job", async () => {
+    mockSearch.mockResolvedValue([]);
+    const file = await createOwnFile();
+    const [a, b] = [await createUser(), await createUser()];
+
+    const outcomes = await Promise.all([
+      requestMovie(a.id, 603, `file:${file.id}`, auto),
+      requestMovie(b.id, 603, `file:${file.id}`, auto),
+    ]);
+
+    expect(outcomes).toEqual([
+      { status: "downloading", nzbFileId: file.id },
+      { status: "downloading", nzbFileId: file.id },
+    ]);
+    expect(await prisma.downloadJob.count()).toBe(1);
+    const requests = await prisma.movieRequest.findMany();
+    expect(requests.map((r) => r.nzbFileId)).toEqual([file.id, file.id]);
+  });
+
+  it("treats a serialization failure while starting the job as a shared job", async () => {
+    mockSearch.mockResolvedValue([]);
+    const file = await createOwnFile();
+    const u = await createUser();
+    vi.mocked(startDownloadJob).mockRejectedValueOnce({ code: "P2034" });
+
+    expect(await requestMovie(u.id, 603, `file:${file.id}`, auto)).toEqual({ status: "downloading", nzbFileId: file.id });
+
+    expect(await prisma.movieRequest.findFirstOrThrow()).toMatchObject({ status: "downloading", nzbFileId: file.id });
   });
 
   it("throws TmdbUnavailableError when TMDB is down for an indexer ingest", async () => {
