@@ -148,6 +148,25 @@ describe("rankMovieCandidates", () => {
     expect(r[1].hashPrefix).toBe("abcdef12");
   });
 
+  it("own file without mediaInfo shows the languages named in its filename", () => {
+    const [c] = rankMovieCandidates(
+      [],
+      [file({ originalFilename: "Der Teufel traegt Prada 2 2026 German DL 1080p WEB H264-WAREZCX.nzb", audioLanguages: ["de", "en"], mediaInfo: null })],
+      opts,
+    );
+    expect(c.group).toBe("german");
+    expect(c.audioLanguages).toEqual(["de", "en"]);
+  });
+
+  it("leaves out expired own files", () => {
+    const result = rankMovieCandidates(
+      [],
+      [file({ id: "old", status: "expired", originalFilename: "4532860a4bb9820f.nzb" }), file({ id: "ok" })],
+      opts,
+    );
+    expect(keys(result)).toEqual(["file:ok"]);
+  });
+
   it("own file without language hint and without mediaInfo is foreign with no languages", () => {
     const [c] = rankMovieCandidates(
       [],
