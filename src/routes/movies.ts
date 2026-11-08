@@ -56,6 +56,9 @@ router.post("/requests", async (req: AuthRequest, res: Response) => {
       case "candidate_gone":
         res.status(404).json({ reason: "candidate_gone", error: "Version nicht mehr verfügbar" });
         return;
+      case "service_unavailable":
+        res.status(503).json({ reason: "nzb_service_unavailable", error: "NZB-Service nicht erreichbar — bitte später erneut versuchen." });
+        return;
       case "failed":
         res.status(409).json({ reason: "failed", error: "Keine passende Version konnte geladen werden" });
         return;

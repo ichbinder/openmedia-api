@@ -98,6 +98,13 @@ describe("Film-Routen", () => {
       expect(res.body).toEqual({ reason: "failed", error: "Keine passende Version konnte geladen werden" });
     });
 
+    it("bildet einen nicht erreichbaren NZB-Service auf 503 ab", async () => {
+      mockRequest.mockResolvedValue({ status: "service_unavailable" } as never);
+      const res = await post({ tmdbId: 603, key: GUID_KEY });
+      expect(res.status).toBe(503);
+      expect(res.body).toEqual({ reason: "nzb_service_unavailable", error: "NZB-Service nicht erreichbar — bitte später erneut versuchen." });
+    });
+
     it("lehnt einen fehlerhaften key mit 400 ab", async () => {
       expect((await post({ tmdbId: 603, key: "guid:xyz" })).status).toBe(400);
       expect((await post({ tmdbId: 603 })).status).toBe(400);

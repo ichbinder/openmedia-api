@@ -19,6 +19,7 @@ export type RequestOutcome =
   | { status: "confirm_required"; group: "foreign" | "cam" }
   | { status: "budget" }
   | { status: "candidate_gone" }
+  | { status: "service_unavailable" }
   | { status: "failed" };
 
 export async function listMovieCandidates(
@@ -167,6 +168,9 @@ async function attemptIndexerHit(
       return markReady(request, result.file.id);
     case "broken":
       return null;
+    case "service-unavailable":
+      await markFailed(request, "download_failed");
+      return { status: "service_unavailable" };
     default:
       console.warn(`[movie-requests] Ingest for request ${request.id} returned ${result.kind}`);
       await markFailed(request, "download_failed");
@@ -185,6 +189,12 @@ async function attemptOwnFile(request: MovieRequest, nzbFileId: string, ready: b
   return markDownloading(request, nzbFileId);
 }
 
+function isTemporary(err: unknown): boolean {
+  if (!(err instanceof IndexerError)) return false;
+  const status = err.status ?? 0;
+  return !(err.reason === "http" && status >= 400 && status < 500);
+}
+
 async function attemptCandidates(request: MovieRequest, ordered: MovieCandidate[]): Promise<RequestOutcome> {
   let { attempts, triedKeys } = request;
   let tmdb: TmdbMovieResult | undefined;
@@ -192,13 +202,20 @@ async function attemptCandidates(request: MovieRequest, ordered: MovieCandidate[
     if (attempts >= MAX_ATTEMPTS) break;
     if (candidate.state === "indexer") tmdb ??= await loadTmdb(request.tmdbId);
     attempts++;
+    const untried = triedKeys;
     triedKeys = [...triedKeys, candidate.key];
     await prisma.movieRequest.update({ where: { id: request.id }, data: { attempts, triedKeys } });
 
-    const outcome =
-      candidate.state === "indexer"
-        ? await attemptIndexerHit(request, candidate, tmdb!)
-        : await attemptOwnFile(request, candidate.nzbFileId!, candidate.state === "ready");
+    let outcome: RequestOutcome | null;
+    try {
+      outcome =
+        candidate.state === "indexer"
+          ? await attemptIndexerHit(request, candidate, tmdb!)
+          : await attemptOwnFile(request, candidate.nzbFileId!, candidate.state === "ready");
+    } catch (err) {
+      if (isTemporary(err)) await prisma.movieRequest.update({ where: { id: request.id }, data: { triedKeys: untried } });
+      throw err;
+    }
     if (outcome) return outcome;
   }
   await markFailed(request, "no_candidate");
@@ -251,7 +268,11 @@ async function retry(request: MovieRequest): Promise<void> {
 
 async function rejectNonGerman(request: MovieRequest, audioLanguages: string[]): Promise<void> {
   const codes = toLanguageCodes(audioLanguages).filter((c) => c !== "und");
-  if (codes.length === 0 || codes.includes("de")) return;
+  if (codes.length === 0 || codes.includes("de")) {
+    // ponytail: passed rows rotate via updatedAt; add an audioCheckedAt column if they ever crowd the batch.
+    await prisma.movieRequest.update({ where: { id: request.id }, data: { updatedAt: new Date() } });
+    return;
+  }
   const nzbFileId = request.nzbFileId!;
   await prisma.nzbFile.update({ where: { id: nzbFileId }, data: { status: "broken", brokenReason: "Kein deutscher Ton (ffprobe)" } });
   await prisma.userLibrary.updateMany({ where: { userId: request.userId, nzbFileId }, data: { removedAt: new Date() } });

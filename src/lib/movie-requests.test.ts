@@ -30,6 +30,7 @@ vi.mock("./nzb-ingest.js", async (importOriginal) => {
 });
 
 import { startDownloadJob } from "./download-jobs.js";
+import { NzbServiceUnavailableError, storeNzbInService } from "./nzb-service.js";
 import { ingestNzb } from "./nzb-ingest.js";
 import { searchTmdbMovieById } from "./tmdb.js";
 import { downloadNzb, getDownloadBudget, IndexerError, searchMovie } from "./treasure-maps.js";
@@ -334,6 +335,30 @@ describe("requestMovie", () => {
     await expect(requestMovie(u.id, 603, "guid:de1", auto)).rejects.toMatchObject({ name: "TmdbUnavailableError" });
     expect(mockDownload).not.toHaveBeenCalled();
   });
+
+  it("reports a down NZB service instead of 'no version' and does not try another candidate", async () => {
+    mockSearch.mockResolvedValue([DE1, DE2]);
+    vi.mocked(storeNzbInService).mockRejectedValueOnce(new NzbServiceUnavailableError("down"));
+    const u = await createUser();
+
+    expect(await requestMovie(u.id, 603, "guid:de1", auto)).toEqual({ status: "service_unavailable" });
+
+    expect(mockDownload).toHaveBeenCalledTimes(1);
+    expect(await prisma.movieRequest.findFirstOrThrow()).toMatchObject({ status: "failed", failReason: "download_failed" });
+  });
+
+  it.each([
+    ["temporary", new IndexerError("http", 503), []],
+    ["permanent", new IndexerError("http", 404), ["guid:de1"]],
+  ])("a %s indexer error while loading the NZB counts the attempt and remembers the candidate accordingly", async (_, err, triedKeys) => {
+    mockSearch.mockResolvedValue([DE1, DE2]);
+    mockDownload.mockRejectedValueOnce(err);
+    const u = await createUser();
+
+    await expect(requestMovie(u.id, 603, "guid:de1", auto)).rejects.toBe(err);
+
+    expect(await prisma.movieRequest.findFirstOrThrow()).toMatchObject({ status: "downloading", attempts: 1, triedKeys });
+  });
 });
 
 describe("listMovieCandidates", () => {
@@ -469,6 +494,22 @@ describe("syncMovieRequests", () => {
     expect((await prisma.movieRequest.findMany()).map((r) => r.status)).toEqual(["done", "done"]);
     const files = await prisma.nzbFile.findMany({ where: { id: { in: [untagged.id, und.id] } } });
     expect(files.map((f) => f.status)).not.toContain("broken");
+  });
+
+  it("keeps checking newer files when a full batch of earlier ones already passed the audio check", async () => {
+    mockSearch.mockResolvedValue([DE1, DE2]);
+    const u = await createUser();
+    for (let i = 0; i < 20; i++) {
+      const passed = await germanCheck(["und", "und"]);
+      await createRequest(u.id, { tmdbId: 1000 + i, status: "done", nzbFileId: passed.id }, 30);
+    }
+    const english = await germanCheck(["eng"]);
+    await createRequest(u.id, { status: "done", nzbFileId: english.id }, 10);
+
+    await syncMovieRequests();
+    await syncMovieRequests();
+
+    expect((await prisma.nzbFile.findUniqueOrThrow({ where: { id: english.id } })).status).toBe("broken");
   });
 
   it("does not re-check a version the user deliberately loaded without German", async () => {
