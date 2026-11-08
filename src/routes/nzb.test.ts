@@ -82,6 +82,34 @@ describe("NZB Routes", () => {
       expect(none.body.myRequests).toEqual([]);
     });
 
+    it("liefert myLibrary inklusive gelöschter Einträge, nur vom eigenen Nutzer", async () => {
+      const userId = (t: string) => JSON.parse(Buffer.from(t.split(".")[1], "base64url").toString()).userId as string;
+      const other = await getAuthToken();
+      const show = await prisma.nzbShow.create({ data: { tmdbId: 95398, titleDe: "S", titleEn: "S" } });
+      const [e1, e2, e3] = await Promise.all(
+        [1, 2, 3].map((episode) => prisma.nzbEpisode.create({ data: { showId: show.id, season: 1, episode } })),
+      );
+      const file = (episodeId: string, name: string) =>
+        prisma.nzbFile.create({ data: { episodeId, hash: `lib-${name}-${Date.now()}`, originalFilename: `${name}.nzb` } });
+      const f1 = await file(e1.id, "e1");
+      const f2 = await file(e2.id, "e2");
+      const f2b = await file(e2.id, "e2b");
+      const f3 = await file(e3.id, "e3");
+      const me = userId(token);
+      await prisma.userLibrary.createMany({
+        data: [
+          { userId: me, nzbFileId: f2.id },
+          { userId: me, nzbFileId: f2b.id },
+          { userId: me, nzbFileId: f1.id, removedAt: new Date() },
+          { userId: userId(other), nzbFileId: f3.id },
+        ],
+      });
+
+      const res = await request(app).get("/nzb/shows/by-tmdb/95398").set("Authorization", `Bearer ${token}`);
+
+      expect(res.body.myLibrary).toEqual([{ season: 1, episode: 1 }, { season: 1, episode: 2 }]);
+    });
+
     it("404 für unbekannte Serie, 400 bei ungültiger ID", async () => {
       const missing = await request(app).get("/nzb/shows/by-tmdb/424242").set("Authorization", `Bearer ${token}`);
       expect(missing.status).toBe(404);
