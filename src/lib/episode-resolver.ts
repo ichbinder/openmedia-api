@@ -6,7 +6,7 @@ export async function resolveEpisodeFromTmdb(
   parsed: ParsedNzbName,
   fallbackTitle: string,
 ): Promise<
-  | { source: "tmdb-found"; show: TmdbShowResult; episode: TmdbEpisodeResult | null }
+  | { source: "tmdb-found"; show: TmdbShowResult; season: number; episode: number; tmdbEpisode: TmdbEpisodeResult | null }
   | { source: "needs-review"; reason: "not-found" | "error"; errorDetail?: string }
   | { source: "tmdb-disabled"; reason: string }
 > {
@@ -26,7 +26,7 @@ export async function resolveEpisodeFromTmdb(
     console.log(`[matching] No TMDB show match for "${searchTitle}" — marking needs_review`);
     return { source: "needs-review", reason: "not-found" };
   }
-  return { source: "tmdb-found", show: result.show, episode: result.episode };
+  return { source: "tmdb-found", show: result.show, season: parsed.season, episode: parsed.episode, tmdbEpisode: result.episode };
 }
 
 export async function upsertEpisode(

@@ -29,4 +29,19 @@ describe("series schema", () => {
     expect(await prisma.nzbEpisode.count()).toBe(0);
     expect(await prisma.nzbFile.count()).toBe(0);
   });
+
+  it("erlaubt pro Nutzer und Folge nur eine Anforderung und behält sie beim Löschen der NzbFile", async () => {
+    const { episode, file } = await createShowWithVersion();
+    const user = await prisma.user.create({
+      data: { email: "u@example.com", name: "U", password: "x" },
+    });
+    const data = { userId: user.id, episodeId: episode.id, nzbFileId: file.id };
+    const request = await prisma.episodeRequest.create({ data });
+    expect(request.status).toBe("searching");
+    await expect(prisma.episodeRequest.create({ data })).rejects.toThrow();
+
+    await prisma.nzbFile.delete({ where: { id: file.id } });
+    const kept = await prisma.episodeRequest.findUniqueOrThrow({ where: { id: request.id } });
+    expect(kept.nzbFileId).toBeNull();
+  });
 });

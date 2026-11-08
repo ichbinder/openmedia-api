@@ -63,7 +63,7 @@ const SOURCE_PATTERNS: [RegExp, string][] = [
 ];
 
 // Language indicators (DL handled separately below)
-const LANGUAGE_PATTERNS: [RegExp, string][] = [
+export const LANGUAGE_PATTERNS: [RegExp, string][] = [
   [/\b(german|deutsch|ger)\b/i, "de"],
   [/\b(english|eng|en)\b/i, "en"],
   [/\b(french|fra|fre)\b/i, "fr"],

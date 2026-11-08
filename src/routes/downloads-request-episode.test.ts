@@ -58,7 +58,7 @@ function foundEpisode(n: number) {
   mockShow.mockResolvedValueOnce({
     status: "found",
     show,
-    episode: { titleDe: `Folge ${n}`, airDate: "2025-02-14" },
+    episode: { titleDe: `Folge ${n}`, airDate: "2025-02-14", runtime: null },
   });
 }
 

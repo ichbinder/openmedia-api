@@ -4,6 +4,7 @@ import prisma from "./lib/prisma.js";
 import authRoutes from "./routes/auth.js";
 import watchlistRoutes from "./routes/watchlist.js";
 import nzbRoutes from "./routes/nzb.js";
+import seriesRoutes from "./routes/series.js";
 import downloadsRoutes from "./routes/downloads.js";
 import storageRoutes from "./routes/storage.js";
 import uploadRoutes from "./routes/uploads.js";
@@ -31,6 +32,7 @@ export function createApp() {
   app.use("/auth", authRoutes);
   app.use("/watchlist", watchlistRoutes);
   app.use("/nzb", nzbRoutes);
+  app.use("/series", seriesRoutes);
   app.use("/downloads", downloadsRoutes);
   app.use("/uploads", uploadRoutes);
   app.use("/storage", storageRoutes);

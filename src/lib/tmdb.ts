@@ -1,9 +1,12 @@
+import { cached } from "./ttl-cache.js";
+
 const TMDB_API_KEY = process.env.TMDB_API_KEY || "";
 // Base URL is overridable via TMDB_BASE_URL so the E2E test suite can point
 // this client at a local mock server (see openmedia-web e2e/tmdb-mock-server.ts).
 // Falls back to the real TMDB API in normal development and production.
 const TMDB_BASE = process.env.TMDB_BASE_URL || "https://api.themoviedb.org/3";
 const TMDB_REQUEST_TIMEOUT_MS = 10_000;
+const TMDB_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
 export interface TmdbMovieResult {
   tmdbId: number;
@@ -183,6 +186,7 @@ export interface TmdbShowResult {
 export interface TmdbEpisodeResult {
   titleDe: string;
   airDate: string | null;
+  runtime: number | null;
 }
 
 export type TmdbShowLookupResult =
@@ -233,7 +237,7 @@ async function fetchTmdbEpisode(
   const de = await fetchTmdbJson(path, "de-DE");
   const data = de?.name ? de : ((await fetchTmdbJson(path, "en-US")) ?? de);
   if (!data) return null;
-  return { titleDe: data.name || `Episode ${episode}`, airDate: data.air_date || null };
+  return { titleDe: data.name || `Episode ${episode}`, airDate: data.air_date || null, runtime: data.runtime || null };
 }
 
 /**
@@ -290,4 +294,64 @@ export async function searchTmdbShowEpisode(
     console.error("[tmdb] Show lookup error:", err);
     return { status: "error", reason: "Network or unexpected error" };
   }
+}
+
+export type TmdbEpisodeByIdResult =
+  | { status: "found"; show: TmdbShowResult; episode: TmdbEpisodeResult }
+  | { status: "not_found" }
+  | { status: "error"; reason: string }
+  | { status: "disabled"; reason: string };
+
+export type TmdbSeasonByIdResult =
+  | { status: "found"; show: TmdbShowResult; episodes: (TmdbEpisodeResult & { episode: number })[] }
+  | { status: "not_found" }
+  | { status: "error"; reason: string }
+  | { status: "disabled"; reason: string };
+
+const keepDefinitive = (r: { status: string }) => r.status === "found" || r.status === "not_found";
+
+export function getTmdbEpisodeById(
+  tmdbId: number,
+  season: number,
+  episode: number,
+): Promise<TmdbEpisodeByIdResult> {
+  if (!TMDB_API_KEY) {
+    return Promise.resolve({ status: "disabled", reason: "TMDB_API_KEY is not configured" });
+  }
+  return cached(`tmdb:ep:${tmdbId}:${season}:${episode}`, TMDB_CACHE_TTL_MS, async (): Promise<TmdbEpisodeByIdResult> => {
+    try {
+      const show = await fetchTmdbShowDetails(tmdbId, "", "", null);
+      if (!show) return { status: "not_found" };
+      const episodeResult = await fetchTmdbEpisode(tmdbId, season, episode);
+      if (!episodeResult) return { status: "not_found" };
+      return { status: "found", show, episode: episodeResult };
+    } catch (err) {
+      console.error(`[tmdb] Episode by-id error for ${tmdbId}:`, err);
+      return { status: "error", reason: "Network or unexpected error" };
+    }
+  }, keepDefinitive);
+}
+
+export function getTmdbSeasonById(tmdbId: number, season: number): Promise<TmdbSeasonByIdResult> {
+  if (!TMDB_API_KEY) {
+    return Promise.resolve({ status: "disabled", reason: "TMDB_API_KEY is not configured" });
+  }
+  return cached(`tmdb:season:${tmdbId}:${season}`, TMDB_CACHE_TTL_MS, async (): Promise<TmdbSeasonByIdResult> => {
+    try {
+      const show = await fetchTmdbShowDetails(tmdbId, "", "", null);
+      if (!show) return { status: "not_found" };
+      const data = await fetchTmdbJson(`/tv/${tmdbId}/season/${season}`, "de-DE");
+      if (!data) return { status: "not_found" };
+      const episodes = ((data.episodes ?? []) as Record<string, any>[]).map((e) => ({
+        episode: e.episode_number as number,
+        titleDe: e.name || `Episode ${e.episode_number}`,
+        airDate: e.air_date || null,
+        runtime: e.runtime || null,
+      }));
+      return { status: "found", show, episodes };
+    } catch (err) {
+      console.error(`[tmdb] Season by-id error for ${tmdbId}:`, err);
+      return { status: "error", reason: "Network or unexpected error" };
+    }
+  }, keepDefinitive);
 }

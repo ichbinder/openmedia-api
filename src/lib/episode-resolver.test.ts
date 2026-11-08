@@ -15,7 +15,7 @@ describe("upsertEpisode", () => {
   it("legt bei gleichzeitigen Anfragen derselben neuen Serie genau eine Serie an", async () => {
     const ids = await Promise.all(
       [1, 2, 3, 4].map((episode) =>
-        prisma.$transaction((tx) => upsertEpisode(tx, show, 1, episode, { titleDe: `Folge ${episode}`, airDate: null })),
+        prisma.$transaction((tx) => upsertEpisode(tx, show, 1, episode, { titleDe: `Folge ${episode}`, airDate: null, runtime: null })),
       ),
     );
 

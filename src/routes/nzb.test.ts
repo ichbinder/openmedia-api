@@ -64,6 +64,24 @@ describe("NZB Routes", () => {
       expect(res.body.show.episodes[1].nzbFiles).toEqual([]);
     });
 
+    it("liefert myRequests nur vom eigenen Nutzer", async () => {
+      const userId = (t: string) => JSON.parse(Buffer.from(t.split(".")[1], "base64url").toString()).userId as string;
+      const other = await getAuthToken();
+      const show = await prisma.nzbShow.create({ data: { tmdbId: 95397, titleDe: "S", titleEn: "S" } });
+      const e1 = await prisma.nzbEpisode.create({ data: { showId: show.id, season: 1, episode: 2 } });
+      const e2 = await prisma.nzbEpisode.create({ data: { showId: show.id, season: 1, episode: 1 } });
+      await prisma.episodeRequest.create({
+        data: { userId: userId(token), episodeId: e1.id, status: "waiting", waitReason: "no_german" },
+      });
+      await prisma.episodeRequest.create({ data: { userId: userId(other), episodeId: e2.id, status: "done" } });
+
+      const res = await request(app).get("/nzb/shows/by-tmdb/95397").set("Authorization", `Bearer ${token}`);
+
+      expect(res.body.myRequests).toEqual([{ season: 1, episode: 2, status: "waiting", waitReason: "no_german" }]);
+      const none = await request(app).get("/nzb/shows/by-tmdb/95397").set("Authorization", `Bearer ${await getAuthToken()}`);
+      expect(none.body.myRequests).toEqual([]);
+    });
+
     it("404 für unbekannte Serie, 400 bei ungültiger ID", async () => {
       const missing = await request(app).get("/nzb/shows/by-tmdb/424242").set("Authorization", `Bearer ${token}`);
       expect(missing.status).toBe(404);

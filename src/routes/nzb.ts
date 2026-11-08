@@ -226,6 +226,12 @@ router.get("/shows/by-tmdb/:tmdbId", async (req: AuthRequest, res: Response) => 
       return;
     }
 
+    const requests = await prisma.episodeRequest.findMany({
+      where: { userId: req.user!.userId, episode: { showId: show.id } },
+      select: { status: true, waitReason: true, episode: { select: { season: true, episode: true } } },
+      orderBy: [{ episode: { season: "asc" } }, { episode: { episode: "asc" } }],
+    });
+
     res.json({
       show: {
         ...show,
@@ -234,6 +240,12 @@ router.get("/shows/by-tmdb/:tmdbId", async (req: AuthRequest, res: Response) => 
           nzbFiles: episode.nzbFiles.map(serializeNzbFile),
         })),
       },
+      myRequests: requests.map((r) => ({
+        season: r.episode.season,
+        episode: r.episode.episode,
+        status: r.status,
+        waitReason: r.waitReason,
+      })),
     });
   } catch (err) {
     console.error("[nzb] Find show by TMDB error:", err);

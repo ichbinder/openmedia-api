@@ -20,6 +20,7 @@ model User {
   searchHistory    SearchHistory[]
   apiTokens        ApiToken[]
   precacheRequests PrecacheRequest[]
+  episodeRequests  EpisodeRequest[]
 
   @@map("users")
 }
@@ -104,7 +105,8 @@ model NzbEpisode {
   show   NzbShow @relation(fields: [showId], references: [id], onDelete: Cascade)
   showId String   @map("show_id")
 
-  nzbFiles NzbFile[]
+  nzbFiles        NzbFile[]
+  episodeRequests EpisodeRequest[]
 
   @@unique([showId, season, episode])
   @@map("nzb_episodes")
@@ -125,6 +127,7 @@ model NzbFile {
   status            String   @default("untested")  // 'untested' | 'ok' | 'broken' | 'expired'
   brokenReason      String?  @map("broken_reason")
   failedAttempts    Int      @default(0) @map("failed_attempts")
+  indexerGuid       String?  @map("indexer_guid")
 
   // Media metadata from ffprobe (populated for both source='own' and source='external' NzbFiles)
   videoWidth        Int?     @map("video_width")
@@ -163,13 +166,15 @@ model NzbFile {
   episode   NzbEpisode? @relation(fields: [episodeId], references: [id], onDelete: Cascade)
   episodeId String?     @map("episode_id")
 
-  downloadJobs DownloadJob[]
-  uploadJobs   UploadJob[]
-  libraryUsers UserLibrary[]
+  downloadJobs    DownloadJob[]
+  uploadJobs      UploadJob[]
+  libraryUsers    UserLibrary[]
+  episodeRequests EpisodeRequest[]
 
   @@index([movieId])
   @@index([episodeId])
   @@index([source])
+  @@index([indexerGuid])
   @@map("nzb_files")
 }
 
@@ -187,6 +192,31 @@ model UserLibrary {
   @@unique([userId, nzbFileId])
   @@index([nzbFileId])
   @@map("user_library")
+}
+
+model EpisodeRequest {
+  id           String    @id @default(uuid())
+  status       String    @default("searching") // 'searching' | 'waiting' | 'downloading' | 'done' | 'expired'
+  waitReason   String?   @map("wait_reason")   // 'no_german' | 'budget' | 'indexer_error'
+  manualGuid   String?   @map("manual_guid")
+  nextSearchAt DateTime? @map("next_search_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String @map("user_id")
+
+  episode   NzbEpisode @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+  episodeId String     @map("episode_id")
+
+  nzbFile   NzbFile? @relation(fields: [nzbFileId], references: [id], onDelete: SetNull)
+  nzbFileId String?  @map("nzb_file_id")
+
+  @@unique([userId, episodeId])
+  @@index([status, nextSearchAt])
+  @@index([episodeId])
+  @@index([nzbFileId])
+  @@map("episode_requests")
 }
 
 model DownloadJob {

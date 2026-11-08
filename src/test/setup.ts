@@ -33,6 +33,7 @@ beforeEach(async () => {
   await prisma.$executeRawUnsafe('TRUNCATE TABLE "upload_jobs" CASCADE');
   await prisma.$executeRawUnsafe('TRUNCATE TABLE "nzb_files" CASCADE');
   await prisma.$executeRawUnsafe('TRUNCATE TABLE "nzb_movies" CASCADE');
+  await prisma.$executeRawUnsafe('TRUNCATE TABLE "episode_requests" CASCADE');
   await prisma.$executeRawUnsafe('TRUNCATE TABLE "nzb_episodes" CASCADE');
   await prisma.$executeRawUnsafe('TRUNCATE TABLE "nzb_shows" CASCADE');
   await prisma.$executeRawUnsafe('TRUNCATE TABLE "precache_requests" CASCADE');

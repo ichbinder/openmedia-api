@@ -61,7 +61,7 @@ describe("searchTmdbShowEpisode", () => {
         year: 2022,
         posterPath: "/p.jpg",
       },
-      episode: { titleDe: "Trojan's Horse", airDate: "2025-02-13" },
+      episode: { titleDe: "Trojan's Horse", airDate: "2025-02-13", runtime: null },
     });
   });
 
@@ -127,5 +127,92 @@ describe("searchTmdbShowEpisode", () => {
     await search("Severance", 2022, 1, 1);
 
     expect(calls[0]).toContain("first_air_date_year=2022");
+  });
+});
+
+describe("getTmdbEpisodeById", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  async function loadById(apiKey = "test-key") {
+    vi.stubEnv("TMDB_API_KEY", apiKey);
+    vi.stubEnv("TMDB_BASE_URL", "http://tmdb.test/3");
+    vi.resetModules();
+    return await import("./tmdb.js");
+  }
+
+  const episodeRoute: Route = {
+    match: "/tv/95396/season/2/episode/5",
+    body: { name: "Trojan's Horse", air_date: "2025-02-13", runtime: 52 },
+  };
+
+  it("returns runtime and title, and caches the second call", async () => {
+    const calls = stubFetch([...showRoutes, episodeRoute]);
+    const { getTmdbEpisodeById } = await loadById();
+    const first = await getTmdbEpisodeById(95396, 2, 5);
+    expect(first).toMatchObject({
+      status: "found",
+      episode: { titleDe: "Trojan's Horse", runtime: 52 },
+    });
+    const callCount = calls.length;
+    await getTmdbEpisodeById(95396, 2, 5);
+    expect(calls.length).toBe(callCount);
+  });
+
+  it("returns not_found when the episode is missing", async () => {
+    stubFetch(showRoutes);
+    const { getTmdbEpisodeById } = await loadById();
+    expect(await getTmdbEpisodeById(95396, 2, 99)).toEqual({ status: "not_found" });
+  });
+
+  it("returns disabled without an API key", async () => {
+    stubFetch([]);
+    const { getTmdbEpisodeById } = await loadById("");
+    expect((await getTmdbEpisodeById(95396, 2, 5)).status).toBe("disabled");
+  });
+
+  it("returns error and does not cache it", async () => {
+    stubFetch([{ match: "/tv/95396", status: 500 }]);
+    const { getTmdbEpisodeById } = await loadById();
+    expect((await getTmdbEpisodeById(95396, 2, 5)).status).toBe("error");
+  });
+});
+
+describe("getTmdbSeasonById", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it("returns all episodes of a season", async () => {
+    stubFetch([
+      ...showRoutes,
+      {
+        match: "/tv/95396/season/2?",
+        body: { episodes: [{ episode_number: 1, name: "Hello", air_date: "2025-01-17", runtime: 50 }, { episode_number: 2, name: "Goodbye", air_date: null, runtime: null }] },
+      },
+    ]);
+    vi.stubEnv("TMDB_API_KEY", "test-key");
+    vi.stubEnv("TMDB_BASE_URL", "http://tmdb.test/3");
+    vi.resetModules();
+    const { getTmdbSeasonById } = await import("./tmdb.js");
+    const result = await getTmdbSeasonById(95396, 2);
+    expect(result).toMatchObject({
+      status: "found",
+      episodes: [
+        { episode: 1, titleDe: "Hello", runtime: 50 },
+        { episode: 2, titleDe: "Goodbye", runtime: null },
+      ],
+    });
   });
 });
