@@ -228,6 +228,7 @@ export function rankMovieCandidates(
         broken(x) - broken(y) ||
         GROUP_RANK[x.group] - GROUP_RANK[y.group] ||
         (x.group === "cam" ? Number(y.german) - Number(x.german) : 0) ||
+        Number(y.state === "ready") - Number(x.state === "ready") ||
         tier(y) - tier(x) ||
         bonus(y) - bonus(x) ||
         STATE_RANK[x.state] - STATE_RANK[y.state] ||

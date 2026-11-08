@@ -99,17 +99,19 @@ describe("rankMovieCandidates", () => {
     expect(r[0].state).toBe("ready");
   });
 
-  it("bigger tier still beats a ready file", () => {
+  it("a ready file beats a better indexer hit of the same language group", () => {
     const r = rankMovieCandidates(
       [release({ guid: "hit", size: 5e9 })],
-      [
-        file({
-          id: "a",
-          qualityTier: "720p",
-          s3Key: "k",
-          fileSize: BigInt(2e9),
-        }),
-      ],
+      [file({ id: "a", qualityTier: "720p", s3Key: "k", fileSize: BigInt(2e9) })],
+      opts,
+    );
+    expect(keys(r)).toEqual(["file:a", "guid:hit"]);
+  });
+
+  it("a ready non-German file does not beat a German indexer hit", () => {
+    const r = rankMovieCandidates(
+      [release({ guid: "hit" })],
+      [file({ id: "a", originalFilename: "Film.2024.1080p.WEB.mkv", s3Key: "k" })],
       opts,
     );
     expect(keys(r)).toEqual(["guid:hit", "file:a"]);
