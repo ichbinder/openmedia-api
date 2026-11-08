@@ -35,6 +35,23 @@ afterEach(() => {
 });
 
 describe("treasure-maps client", () => {
+  it("searchMovie queries /movie by TMDB id with extended data", async () => {
+    fetchMock.mockResolvedValue(reply(200, fixture));
+    const { searchMovie } = await import("./treasure-maps.js");
+    await searchMovie(603);
+
+    expect(fetchMock.mock.calls[0][0]).toBe("https://treasure-maps.com/api/v1/movie?tmdbid=603&extended=true&limit=100");
+  });
+
+  it("searchMovie caches per film for one hour", async () => {
+    fetchMock.mockResolvedValue(reply(200, fixture));
+    const { searchMovie } = await import("./treasure-maps.js");
+    await searchMovie(603);
+    await searchMovie(603);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("searchEpisode sends key and query and maps releases", async () => {
     fetchMock.mockResolvedValue(reply(200, fixture));
     const { searchEpisode } = await import("./treasure-maps.js");

@@ -16,6 +16,7 @@ export interface TmdbMovieResult {
   description: string;
   year: number | null;
   posterPath: string | null;
+  runtime: number | null;
 }
 
 export type TmdbLookupResult =
@@ -72,6 +73,7 @@ async function fetchTmdbMovieDetails(
     description: detailDe?.overview || detailEn?.overview || "",
     year: releaseYear,
     posterPath: detailDe?.poster_path || detailEn?.poster_path || fallbackPosterPath || null,
+    runtime: detailDe?.runtime || detailEn?.runtime || null,
   };
 }
 

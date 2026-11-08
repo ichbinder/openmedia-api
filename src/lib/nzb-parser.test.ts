@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseNzbName, calculateHash, resolveQualityTier } from "./nzb-parser.js";
+import { parseNzbName, calculateHash, resolveQualityTier, toLanguageCodes } from "./nzb-parser.js";
 
 describe("parseNzbName", () => {
   it("parst Standard-Release-Name", () => {
@@ -175,5 +175,12 @@ describe("parseNzbName Serien", () => {
     ["Dune.2021.German.DL.1080p.BluRay.x264-GRP.nzb", "Dune", 2021, null, null, "1080p"],
   ])("parst %s", (filename, title, year, season, episode, resolution) => {
     expect(parseNzbName(filename)).toMatchObject({ title, year, season, episode, resolution });
+  });
+});
+
+describe("toLanguageCodes", () => {
+  it("maps indexer names and ffprobe tags", () => {
+    expect(toLanguageCodes(["German", "deu", "ger", "English", "und"])).toEqual(["de", "en", "und"]);
+    expect(toLanguageCodes(null)).toEqual([]);
   });
 });

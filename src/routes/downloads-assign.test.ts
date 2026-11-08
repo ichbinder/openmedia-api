@@ -36,6 +36,7 @@ vi.mock("../lib/tmdb.js", () => ({
       description: "Used by setup to create initial needs_review NzbFiles via the request path.",
       year: 2024,
       posterPath: "/seed.jpg",
+      runtime: null,
     },
   }),
   searchTmdbMovieById: vi.fn().mockResolvedValue({
@@ -48,6 +49,7 @@ vi.mock("../lib/tmdb.js", () => ({
       description: "Ein Hacker entdeckt die Wahrheit über seine Realität.",
       year: 1999,
       posterPath: "/matrix.jpg",
+      runtime: null,
     },
   }),
 }));
@@ -116,6 +118,7 @@ describe("POST /downloads/jobs/:id/assign-movie", () => {
         description: "default",
         year: 2024,
         posterPath: "/seed.jpg",
+        runtime: null,
       },
     });
     vi.mocked(tmdbModule.searchTmdbMovieById).mockResolvedValue({
@@ -128,6 +131,7 @@ describe("POST /downloads/jobs/:id/assign-movie", () => {
         description: "default",
         year: 1999,
         posterPath: "/matrix.jpg",
+        runtime: null,
       },
     });
   });
