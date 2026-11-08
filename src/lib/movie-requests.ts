@@ -33,6 +33,7 @@ export async function listMovieCandidates(
       (releases) => ({ releases, indexer: "ok" as const }),
       (err) => {
         if (!(err instanceof IndexerError)) throw err;
+        console.warn(`[movie-requests] Indexer search for film ${tmdbId} failed: ${err.message}`);
         return { releases: [], indexer: "unavailable" as const };
       },
     ),

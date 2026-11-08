@@ -40,6 +40,7 @@ interface RawRelease {
   audio_languages?: string[] | null;
   subtitles?: string[] | null;
   video?: { resolution?: string } | null;
+  category?: { id?: number } | null;
 }
 
 let spacing: Promise<void> = Promise.resolve();
@@ -141,13 +142,19 @@ export function searchEpisode(tmdbId: number, season: number, episode: number): 
   });
 }
 
+function isFilm(release: RawRelease): boolean {
+  const id = release.category?.id ?? 0;
+  return id >= 2000 && id < 3000;
+}
+
 export function searchMovie(tmdbId: number): Promise<IndexerRelease[]> {
   return cached(`tm:movie:${tmdbId}`, SEARCH_TTL_MS, async () => {
-    const query = new URLSearchParams({ tmdbid: String(tmdbId), extended: "true", limit: "100" });
-    const res = await request(`/movie?${query}`);
+    const query = new URLSearchParams({ tmdbid: String(tmdbId), extended: "true", limit: "500" });
+    // /movie answers 400 without q or title, so the ID-only lookup goes through /search.
+    const res = await request(`/search?${query}`);
     const body = await readJson<{ items?: unknown }>(res);
     if (!Array.isArray(body?.items)) throw new IndexerError("http");
-    return (body.items as RawRelease[]).map(toRelease);
+    return (body.items as RawRelease[]).filter(isFilm).map(toRelease);
   });
 }
 

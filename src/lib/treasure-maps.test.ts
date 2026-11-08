@@ -35,12 +35,21 @@ afterEach(() => {
 });
 
 describe("treasure-maps client", () => {
-  it("searchMovie queries /movie by TMDB id with extended data", async () => {
+  it("searchMovie queries /search by TMDB id because /movie rejects requests without q or title", async () => {
     fetchMock.mockResolvedValue(reply(200, fixture));
     const { searchMovie } = await import("./treasure-maps.js");
     await searchMovie(603);
 
-    expect(fetchMock.mock.calls[0][0]).toBe("https://treasure-maps.com/api/v1/movie?tmdbid=603&extended=true&limit=100");
+    expect(fetchMock.mock.calls[0][0]).toBe("https://treasure-maps.com/api/v1/search?tmdbid=603&extended=true&limit=500");
+  });
+
+  it("searchMovie keeps only film categories", async () => {
+    const item = (guid: string, id: number) => ({ guid, title: guid, size: 1, posted_at: "2026-01-01", category: { id, name: "x" } });
+    fetchMock.mockResolvedValue(reply(200, { items: [item("film", 2145), item("filmde", 2040), item("tv", 5140), item("nocat", 0)] }));
+    const { searchMovie } = await import("./treasure-maps.js");
+    const releases = await searchMovie(603);
+
+    expect(releases.map((r) => r.guid)).toEqual(["film", "filmde"]);
   });
 
   it("searchMovie caches per film for one hour", async () => {
