@@ -168,7 +168,7 @@ function fromFile(
   opts: { runtimeMinutes: number; band: Band },
 ): Entry {
   const hasMediaInfo = f.mediaInfo !== null && f.mediaInfo !== undefined;
-  const audioLanguages = hasMediaInfo ? toLanguageCodes(f.audioLanguages) : [];
+  const audioLanguages = hasMediaInfo ? toLanguageCodes(f.audioLanguages) : languagesFromName(f.originalFilename);
   const qualityTier =
     f.videoWidth !== null
       ? tierOf({ videoWidth: f.videoWidth } as IndexerRelease)
@@ -202,15 +202,16 @@ export function rankMovieCandidates(
   files: OwnFile[],
   opts: { runtimeMinutes: number; band: Band },
 ): MovieCandidate[] {
+  const liveFiles = files.filter((f) => f.status !== "expired");
   const ownGuids = new Set(
-    files.map((f) => f.indexerGuid).filter((g): g is string => g !== null),
+    liveFiles.map((f) => f.indexerGuid).filter((g): g is string => g !== null),
   );
   const usable = releases.filter((r) => r.password !== 2 && r.size > 0);
   const entries = [
     ...dropDatalessTwins(usable)
       .filter((r) => !ownGuids.has(r.guid))
       .map((r) => fromRelease(r, opts)),
-    ...files
+    ...liveFiles
       .filter((f) => f.failedAttempts < MAX_FAILED_ATTEMPTS)
       .map((f) => fromFile(f, opts)),
   ];
