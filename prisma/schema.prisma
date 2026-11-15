@@ -22,6 +22,7 @@ model User {
   precacheRequests PrecacheRequest[]
   episodeRequests  EpisodeRequest[]
   movieRequests    MovieRequest[]
+  watchProgress    WatchProgress[]
 
   @@map("users")
 }
@@ -74,6 +75,7 @@ model NzbMovie {
   updatedAt   DateTime @updatedAt @map("updated_at")
 
   nzbFiles NzbFile[]
+  watchProgress WatchProgress[]
 
   @@map("nzb_movies")
 }
@@ -108,6 +110,7 @@ model NzbEpisode {
 
   nzbFiles        NzbFile[]
   episodeRequests EpisodeRequest[]
+  watchProgress   WatchProgress[]
 
   @@unique([showId, season, episode])
   @@map("nzb_episodes")
@@ -172,6 +175,7 @@ model NzbFile {
   libraryUsers    UserLibrary[]
   episodeRequests EpisodeRequest[]
   movieRequests   MovieRequest[]
+  watchProgress   WatchProgress[]
 
   @@index([movieId])
   @@index([episodeId])
@@ -556,4 +560,31 @@ model PrecacheRequest {
   @@unique([userId, hash])
   @@index([state, requestedAt])
   @@map("precache_requests")
+}
+
+model WatchProgress {
+  id          String    @id @default(uuid())
+  positionSec Int       @map("position_sec")
+  durationSec Int       @map("duration_sec")
+  finishedAt  DateTime? @map("finished_at")
+  startedAt   DateTime  @default(now()) @map("started_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  hiddenAt    DateTime? @map("hidden_at")
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String @map("user_id")
+
+  movie   NzbMovie? @relation(fields: [movieId], references: [id], onDelete: Cascade)
+  movieId String?   @map("movie_id")
+
+  episode   NzbEpisode? @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+  episodeId String?     @map("episode_id")
+
+  nzbFile   NzbFile? @relation(fields: [nzbFileId], references: [id], onDelete: SetNull)
+  nzbFileId String?  @map("nzb_file_id")
+
+  @@unique([userId, movieId])
+  @@unique([userId, episodeId])
+  @@index([userId, updatedAt])
+  @@map("watch_progress")
 }
