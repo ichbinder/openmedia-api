@@ -21,7 +21,7 @@ const attempt = async (key: string, model: string, messages: ChatMessage[], time
     const res = await fetch(ENDPOINT, {
       method: "POST",
       headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ model, messages, response_format: { type: "json_object" }, max_tokens: 16000 }),
+      body: JSON.stringify({ model, messages, response_format: { type: "json_object" }, max_tokens: 16000, reasoning: { effort: "low" } }),
       signal: AbortSignal.timeout(timeoutMs),
     });
     if (!res.ok) return { error: await httpError(res) };
@@ -58,7 +58,7 @@ export async function chatJson(
   key: string,
   model: string,
   messages: ChatMessage[],
-  timeoutMs = 120_000,
+  timeoutMs = 300_000,
 ): Promise<ChatResult> {
   for (let i = 0; i < 2; i++) {
     const result = await attempt(key, model, messages, timeoutMs);

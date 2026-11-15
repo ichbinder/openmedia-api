@@ -21,6 +21,14 @@ describe("chatJson", () => {
     expect(init.headers.Authorization).toBe(`Bearer ${KEY}`);
     expect(JSON.parse(init.body).response_format).toEqual({ type: "json_object" });
     expect(JSON.parse(init.body).max_tokens).toBe(16000);
+    expect(JSON.parse(init.body).reasoning).toEqual({ effort: "low" });
+  });
+
+  it("wartet standardmäßig bis zu 5 Minuten", async () => {
+    const timeout = vi.spyOn(AbortSignal, "timeout");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(reply('{"a":1}')));
+    await chatJson(KEY, "m", messages);
+    expect(timeout).toHaveBeenCalledWith(300_000);
   });
 
   it("versucht es nach Müll genau einmal erneut", async () => {
