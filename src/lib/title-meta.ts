@@ -56,26 +56,43 @@ const KNOWN: Record<string, Origin> = {
   skyatlantic: { label: "SKY", brand: "sky" },
   skyone: { label: "SKY", brand: "sky" },
   skydeutschland: { label: "SKY", brand: "sky" },
+  hulu: { label: "HULU", brand: "other" },
+  peacock: { label: "PEACOCK", brand: "other" },
+};
+
+const CINEMA_WINDOW_DAYS = 30;
+
+const daysBetween = (from?: string | null, to?: string | null) => {
+  const ms = Date.parse(to ?? "") - Date.parse(from ?? "");
+  return Number.isNaN(ms) ? 0 : ms / 86_400_000;
 };
 
 const firstName = (raw: string) => raw.split(",")[0].trim();
 
-function resolve(name: string): Origin {
-  const key = name.toLowerCase().replace(/\s+/g, "");
-  return KNOWN[key] ?? { label: name.toLocaleUpperCase("de-DE"), brand: "other" };
-}
+const known = (name: string): Origin | undefined => KNOWN[name.toLowerCase().replace(/\s+/g, "")];
+
+const resolve = (name: string): Origin =>
+  known(name) ?? { label: name.toLocaleUpperCase("de-DE"), brand: "other" };
 
 export function originLabel(
   kind: Kind,
-  raw: { network?: string | null; digitalDetail?: string | null },
+  raw: {
+    network?: string | null;
+    digitalDetail?: string | null;
+    released?: string | null;
+    digitalDate?: string | null;
+  },
 ): Origin | null {
   if (kind === "show") {
     const name = firstName(raw.network ?? "");
     return name ? resolve(name) : null;
   }
-  const name = firstName(raw.digitalDetail ?? "");
-  if (!name || name.toLowerCase() === "tvod") return CINEMA;
-  return resolve(name);
+  // MDBList's first digital source is also a store ("iTunes / Apple TV"), a festival or a
+  // pay window after cinema (The Batman → HBO Max 48 days later); only a known service
+  // starting within the cinema window counts as an original.
+  const service = known(firstName(raw.digitalDetail ?? ""));
+  if (!service || daysBetween(raw.released, raw.digitalDate) > CINEMA_WINDOW_DAYS) return CINEMA;
+  return service;
 }
 
 export function storedRatings(

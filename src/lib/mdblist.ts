@@ -28,7 +28,8 @@ interface RawTitle {
   year?: number | null;
   score?: number | null;
   network?: string | null;
-  releases?: { digital?: { detail?: string | null } | null } | null;
+  released?: string | null;
+  releases?: { digital?: { date?: string | null; detail?: string | null } | null } | null;
   ratings?: { source: string; value: number | null; votes?: number | null }[];
 }
 
@@ -59,6 +60,8 @@ export async function fetchMdblistTitle(kind: Kind, tmdbId: number): Promise<Mdb
     const origin = originLabel(kind, {
       network: body.network,
       digitalDetail: body.releases?.digital?.detail,
+      released: body.released,
+      digitalDate: body.releases?.digital?.date,
     });
     return {
       status: "found",

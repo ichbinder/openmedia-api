@@ -42,8 +42,25 @@ describe("originLabel", () => {
     ["TVOD, Netflix", "KINO", "cinema"],
     [",", "KINO", "cinema"],
     ["Hulu", "HULU", "other"],
+    ["iTunes / Apple TV", "KINO", "cinema"],
+    ["Melbourne International Film Festival (…", "KINO", "cinema"],
+    ["Vudu", "KINO", "cinema"],
   ])("movie digitalDetail %s", (digitalDetail, label, brand) => {
     expect(originLabel("movie", { digitalDetail })).toEqual({ label, brand });
+  });
+
+  it.each([
+    ["2022-03-01", "2022-04-18", "KINO", "cinema"],
+    ["2021-12-08", "2021-12-23", "HBO", "hbo"],
+    ["2022-03-01", "2022-03-31", "HBO", "hbo"],
+    ["2021-08-13", "2021-08-05", "HBO", "hbo"],
+    [null, "2022-04-18", "HBO", "hbo"],
+    ["2022-03-01", null, "HBO", "hbo"],
+  ])("movie released %s, streaming %s", (released, digitalDate, label, brand) => {
+    expect(originLabel("movie", { digitalDetail: "HBO Max", released, digitalDate })).toEqual({
+      label,
+      brand,
+    });
   });
 });
 
