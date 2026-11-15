@@ -8,7 +8,8 @@ import {
   type StoredRatings,
 } from "./title-meta.js";
 
-const BASE_URL = "https://api.mdblist.com/tmdb";
+const API_URL = "https://api.mdblist.com";
+const BASE_URL = `${API_URL}/tmdb`;
 
 export type MdblistResult =
   | {
@@ -73,5 +74,19 @@ export async function fetchMdblistTitle(kind: Kind, tmdbId: number): Promise<Mdb
     };
   } catch (e) {
     return { status: "error", reason: isTimeout(e) ? "timeout" : "http" };
+  }
+}
+
+export async function mdblistGet(path: string, params: Record<string, string>): Promise<unknown | null> {
+  try {
+    const entry = await getEntry("metadata", "mdblistApiKey", true).catch(() => null);
+    if (!entry?.value) return null;
+    const query = new URLSearchParams({ ...params, apikey: entry.value });
+    const res = await fetch(`${API_URL}${path}?${query}`, {
+      signal: AbortSignal.timeout(META_RULES.TIMEOUT_MS),
+    });
+    return res.ok ? await res.json() : null;
+  } catch {
+    return null;
   }
 }

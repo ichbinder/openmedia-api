@@ -207,6 +207,19 @@ async function fetchTmdbJson(path: string, language: string): Promise<Record<str
   return (await res.json()) as Record<string, any>;
 }
 
+export async function tmdbGet(
+  path: string,
+  params: Record<string, string>,
+): Promise<Record<string, any> | null> {
+  const query = new URLSearchParams({ api_key: TMDB_API_KEY, language: "de-DE", ...params });
+  const res = await fetch(`${TMDB_BASE}${path}?${query}`, {
+    signal: AbortSignal.timeout(TMDB_REQUEST_TIMEOUT_MS),
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`TMDB ${path} responded ${res.status}`);
+  return (await res.json()) as Record<string, any>;
+}
+
 async function fetchTmdbShowDetails(
   tmdbId: number,
   fallbackName: string,
