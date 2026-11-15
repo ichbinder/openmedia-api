@@ -34,6 +34,16 @@ describe("POST /meta", () => {
     token = res.body.token;
   });
 
+  it("fehlender MDBList-Key: kein Backoff, Warnung nur einmal", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    fetchMock.mockResolvedValue({ status: "error", reason: "not_configured" });
+    await post(token, [{ kind: "movie", tmdbId: 901 }]);
+    await post(token, [{ kind: "movie", tmdbId: 901 }]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
   it("holt fehlenden Titel und speichert ihn", async () => {
     fetchMock.mockResolvedValue(found());
     const res = await post(token, [{ kind: "movie", tmdbId: 1 }]);

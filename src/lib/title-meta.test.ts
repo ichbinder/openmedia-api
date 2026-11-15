@@ -24,6 +24,14 @@ describe("originLabel", () => {
 
   it.each([
     ["Netflix", "NETFLIX", "netflix"],
+    [" netflix ", "NETFLIX", "netflix"],
+    ["NETFLIX", "NETFLIX", "netflix"],
+    ["Prime Video", "PRIME VIDEO", "prime"],
+    ["Amazon", "PRIME VIDEO", "prime"],
+    ["Disney Plus", "DISNEY+", "disney"],
+    ["Apple TV+", "APPLE TV+", "apple"],
+    ["HBO Max", "HBO", "hbo"],
+    ["Paramount+", "PARAMOUNT+", "paramount"],
     ["Amazon Prime Video", "PRIME VIDEO", "prime"],
     ["Disney+, Disney +", "DISNEY+", "disney"],
     ["Paramount Plus", "PARAMOUNT+", "paramount"],

@@ -26,6 +26,7 @@ const inFlight = new Map<string, Promise<Row | null>>();
 const failedAt = new Map<string, number>();
 const waiting: (() => void)[] = [];
 let active = 0;
+let warnedNotConfigured = false;
 
 async function limited<T>(task: () => Promise<T>): Promise<T> {
   if (active >= META_RULES.CONCURRENCY) await new Promise<void>((r) => waiting.push(r));
@@ -75,6 +76,13 @@ function toData(result: MdblistResult) {
 
 async function lookup({ kind, tmdbId }: Item): Promise<Row | null> {
   const result = await limited(() => fetchMdblistTitle(kind, tmdbId));
+  if (result.status === "error" && result.reason === "not_configured") {
+    if (!warnedNotConfigured) {
+      warnedNotConfigured = true;
+      console.warn("[meta] MDBList-Key nicht konfiguriert, Herkunft und Bewertungen entfallen");
+    }
+    return null;
+  }
   if (result.status === "error") {
     failedAt.set(`${kind}:${tmdbId}`, Date.now());
     console.warn(`[meta] MDBList-Abruf fehlgeschlagen: ${result.reason}`);
