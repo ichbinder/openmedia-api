@@ -1,6 +1,6 @@
 import { Router, type Response } from "express";
 import { requireAuth, type AuthRequest } from "../middleware/auth.js";
-import { recordProgress } from "../lib/progress-service.js";
+import { hideContinue, listContinue, nextForFile, recordProgress } from "../lib/progress-service.js";
 
 const router = Router();
 
@@ -27,6 +27,44 @@ async function report(req: AuthRequest, res: Response) {
     res.status(500).json({ error: "Fehler beim Speichern des Fortschritts." });
   }
 }
+
+router.get("/continue", async (req: AuthRequest, res: Response) => {
+  try {
+    res.json({ items: await listContinue(req.user!.userId) });
+  } catch (err) {
+    console.error("[progress] Continue error:", err);
+    res.status(500).json({ error: "Fehler beim Laden der Weiterschauen-Liste." });
+  }
+});
+
+router.get("/next/:nzbFileId", async (req: AuthRequest, res: Response) => {
+  try {
+    const next = await nextForFile(req.user!.userId, String(req.params.nzbFileId));
+    if (next === "not_found") {
+      res.status(404).json({ error: "NZB-Datei nicht gefunden." });
+      return;
+    }
+    res.json({ next });
+  } catch (err) {
+    console.error("[progress] Next error:", err);
+    res.status(500).json({ error: "Fehler beim Ermitteln der nächsten Folge." });
+  }
+});
+
+router.delete("/:kind/:tmdbId", async (req: AuthRequest, res: Response) => {
+  try {
+    const { kind } = req.params;
+    const rawTmdbId = String(req.params.tmdbId);
+    if ((kind !== "movie" && kind !== "show") || !/^[1-9]\d{0,9}$/.test(rawTmdbId)) {
+      res.status(400).json({ error: "Ungültige Art oder TMDB-ID." });
+      return;
+    }
+    res.json({ hidden: await hideContinue(req.user!.userId, kind, Number(rawTmdbId)) });
+  } catch (err) {
+    console.error("[progress] Hide error:", err);
+    res.status(500).json({ error: "Fehler beim Entfernen des Eintrags." });
+  }
+});
 
 router.put("/", report);
 router.post("/", report);

@@ -2,6 +2,7 @@ import { Router, type Response } from "express";
 import multer from "multer";
 import prisma from "../lib/prisma.js";
 import { requireAuth, type AuthRequest } from "../middleware/auth.js";
+import { titleState } from "../lib/watch-progress.js";
 import { parseNzbName, calculateHash, resolveQualityTier } from "../lib/nzb-parser.js";
 
 // Shared select for NzbFile responses — includes all metadata fields including the full ffprobe JSON blob
@@ -195,7 +196,12 @@ router.get("/movies/by-tmdb/:tmdbId", async (req: AuthRequest, res: Response) =>
       return;
     }
 
-    res.json({ movie: serializeMovieWithFiles(movie) });
+    const progress = await prisma.watchProgress.findFirst({ where: { userId: req.user!.userId, movieId: movie.id } });
+    const myProgress = progress
+      ? { positionSec: progress.positionSec, durationSec: progress.durationSec, state: titleState(progress) }
+      : null;
+
+    res.json({ movie: serializeMovieWithFiles(movie), myProgress });
   } catch (err) {
     console.error("[nzb] Find by TMDB error:", err);
     res.status(500).json({ error: "Fehler beim Suchen des Films." });
@@ -246,6 +252,20 @@ router.get("/shows/by-tmdb/:tmdbId", async (req: AuthRequest, res: Response) => 
       ).values(),
     ].sort((a, b) => a.season - b.season || a.episode - b.episode);
 
+    const progressRows = await prisma.watchProgress.findMany({
+      where: { userId: req.user!.userId, episode: { showId: show.id } },
+      select: { positionSec: true, durationSec: true, finishedAt: true, episode: { select: { season: true, episode: true } } },
+    });
+    const myProgress = progressRows
+      .map((p) => ({
+        season: p.episode!.season,
+        episode: p.episode!.episode,
+        positionSec: p.positionSec,
+        durationSec: p.durationSec,
+        state: titleState(p),
+      }))
+      .sort((a, b) => a.season - b.season || a.episode - b.episode);
+
     res.json({
       show: {
         ...show,
@@ -261,6 +281,7 @@ router.get("/shows/by-tmdb/:tmdbId", async (req: AuthRequest, res: Response) => 
         waitReason: r.waitReason,
       })),
       myLibrary,
+      myProgress,
     });
   } catch (err) {
     console.error("[nzb] Find show by TMDB error:", err);
