@@ -23,6 +23,8 @@ model User {
   episodeRequests  EpisodeRequest[]
   movieRequests    MovieRequest[]
   watchProgress    WatchProgress[]
+  titleRatings     TitleRating[]
+  tasteProfile     TasteProfile?
 
   @@map("users")
 }
@@ -603,4 +605,36 @@ model TitleMeta {
 
   @@unique([kind, tmdbId])
   @@map("title_meta")
+}
+
+model TitleRating {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  kind      String
+  tmdbId    Int      @map("tmdb_id")
+  verdict   String?
+  tags      String[]
+  forWhom   String?  @map("for_whom")
+  source    String
+  ratedAt   DateTime @default(now()) @map("rated_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, kind, tmdbId])
+  @@map("title_rating")
+}
+
+model TasteProfile {
+  userId            String    @id @map("user_id")
+  persons           Json      @default("[]")
+  genres            String[]
+  likesText         String    @default("") @map("likes_text")
+  traktImportedAt   DateTime? @map("trakt_imported_at")
+  traktImportCounts Json?     @map("trakt_import_counts")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("taste_profile")
 }
