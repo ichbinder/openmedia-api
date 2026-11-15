@@ -39,12 +39,12 @@ router.get("/continue", async (req: AuthRequest, res: Response) => {
 
 router.get("/next/:nzbFileId", async (req: AuthRequest, res: Response) => {
   try {
-    const next = await nextForFile(req.user!.userId, String(req.params.nzbFileId));
-    if (next === "not_found") {
+    const info = await nextForFile(req.user!.userId, String(req.params.nzbFileId));
+    if (info === "not_found") {
       res.status(404).json({ error: "NZB-Datei nicht gefunden." });
       return;
     }
-    res.json({ next });
+    res.json(info);
   } catch (err) {
     console.error("[progress] Next error:", err);
     res.status(500).json({ error: "Fehler beim Ermitteln der nächsten Folge." });

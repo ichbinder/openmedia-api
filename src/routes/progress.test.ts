@@ -223,7 +223,7 @@ describe("Weiterschauen", () => {
     mockedSeason.mockImplementation(async (_id, s) => (s === 1 ? { status: "error", reason: "down" } : season(8)));
     expect(await items()).toEqual([]);
     const res = await auth(request(app).get(`/progress/next/${file.id}`));
-    expect(res.body).toEqual({ next: null });
+    expect(res.body).toMatchObject({ next: null, seasonFinale: false });
   });
 
   it("springt nach der letzten Folge in die nächste Staffel, aber nur wenn ausgestrahlt", async () => {
@@ -343,8 +343,51 @@ describe("Weiterschauen", () => {
     expect(res.body.next).toMatchObject({ showTmdbId: 10, season: 1, episode: 4 });
 
     const m = await movie(20);
-    expect((await auth(request(app).get(`/progress/next/${m.file.id}`))).body).toEqual({ next: null });
+    expect((await auth(request(app).get(`/progress/next/${m.file.id}`))).body).toMatchObject({ next: null, seasonFinale: false });
     expect((await auth(request(app).get("/progress/next/gibt-es-nicht"))).status).toBe(404);
+  });
+
+  const nextInfo = async (nzbFileId: string) => (await auth(request(app).get(`/progress/next/${nzbFileId}`))).body;
+
+  it("liefert Bewertungsziel und Bewertung für Filme, null ohne tmdbId", async () => {
+    const m = await movie(20);
+    expect(await nextInfo(m.file.id)).toEqual({
+      next: null, seasonFinale: false, title: { kind: "movie", tmdbId: 20, name: "Film 20" }, rating: null,
+    });
+    const put = await auth(request(app).put("/ratings/movie/20")).send({ verdict: "up", tags: [] });
+    expect(put.status).toBe(200);
+    expect((await nextInfo(m.file.id)).rating).toMatchObject({ kind: "movie", tmdbId: 20, verdict: "up" });
+
+    const noId = await prisma.nzbMovie.create({ data: { titleDe: "Ohne ID", titleEn: "No id" } });
+    const file = await prisma.nzbFile.create({
+      data: { hash: "m-noid", originalFilename: "m.mkv", movieId: noId.id, s3StreamKey: "k" },
+    });
+    expect(await nextInfo(file.id)).toMatchObject({ title: null, rating: null, seasonFinale: false });
+  });
+
+  it("liefert für Folgen die Serie als Bewertungsziel", async () => {
+    const e3 = await showFile(10, 1, 3);
+    expect(await nextInfo(e3.file.id)).toMatchObject({
+      title: { kind: "show", tmdbId: 10, name: "Serie" }, rating: null,
+    });
+  });
+
+  it("erkennt das Staffelfinale nur, wenn TMDB keine spätere Folge der Staffel listet", async () => {
+    const e8 = await showFile(10, 1, 8);
+    const e7 = await showFile(10, 1, 7);
+    expect((await nextInfo(e8.file.id)).seasonFinale).toBe(true);
+    expect((await nextInfo(e7.file.id)).seasonFinale).toBe(false);
+
+    const tomorrow = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+    mockedSeason.mockImplementation(async () => {
+      const s = season(9);
+      s.episodes[8].airDate = tomorrow;
+      return s;
+    });
+    expect((await nextInfo(e8.file.id)).seasonFinale).toBe(false);
+
+    mockedSeason.mockResolvedValue({ status: "error", reason: "down" });
+    expect((await nextInfo(e8.file.id)).seasonFinale).toBe(false);
   });
 
   it("liefert myProgress auf den Detailseiten", async () => {

@@ -1,5 +1,6 @@
 import prisma from "./prisma.js";
 import { getTmdbSeasonById } from "./tmdb.js";
+import { getRating, type RatingView } from "./rating-service.js";
 import { PROGRESS, isFinishedPosition, pickStreamableFile, resumePosition, titleState } from "./watch-progress.js";
 
 const MAX_SEC = 7 * 24 * 60 * 60;
@@ -149,21 +150,34 @@ export async function findNextEpisode(
   season: number,
   episode: number,
 ): Promise<NextEpisode | null> {
+  return (await resolveNext(userId, showTmdbId, season, episode)).next;
+}
+
+async function resolveNext(
+  userId: string,
+  showTmdbId: number,
+  season: number,
+  episode: number,
+): Promise<{ next: NextEpisode | null; seasonFinale: boolean }> {
   let nextSeason = season;
   let next = await firstAfter(showTmdbId, season, episode);
-  if (next === undefined) return null;
+  if (next === undefined) return { next: null, seasonFinale: false };
+  const seasonFinale = season >= 1 && next === null;
   if (!next && season >= 1) {
     nextSeason = season + 1;
     next = await firstAfter(showTmdbId, nextSeason, 0);
   }
   const today = new Date().toISOString().slice(0, 10);
-  if (!next || !next.airDate || next.airDate.slice(0, 10) > today) return null;
+  if (!next || !next.airDate || next.airDate.slice(0, 10) > today) return { next: null, seasonFinale };
 
   const show = await prisma.nzbShow.findUnique({ where: { tmdbId: showTmdbId }, select: { id: true } });
   const availability = show
     ? await episodeAvailability(userId, show.id, nextSeason, next.episode)
     : { nzbFileId: null, request: null };
-  return { showTmdbId, season: nextSeason, episode: next.episode, titleDe: next.titleDe, ...availability };
+  return {
+    next: { showTmdbId, season: nextSeason, episode: next.episode, titleDe: next.titleDe, ...availability },
+    seasonFinale,
+  };
 }
 
 type Candidate = { updatedAt: Date; resolve: () => Promise<ContinueItem | null> };
@@ -279,12 +293,29 @@ export async function hideContinue(userId: string, kind: "movie" | "show", tmdbI
   return count;
 }
 
-export async function nextForFile(userId: string, nzbFileId: string): Promise<NextEpisode | null | "not_found"> {
+export type NextInfo = {
+  next: NextEpisode | null;
+  seasonFinale: boolean;
+  title: { kind: "movie" | "show"; tmdbId: number; name: string } | null;
+  rating: RatingView | null;
+};
+
+export async function nextForFile(userId: string, nzbFileId: string): Promise<NextInfo | "not_found"> {
   const file = await prisma.nzbFile.findUnique({
     where: { id: nzbFileId },
-    include: { episode: { include: { show: true } } },
+    include: { movie: true, episode: { include: { show: true } } },
   });
   if (!file) return "not_found";
-  if (!file.episode) return null;
-  return findNextEpisode(userId, file.episode.show.tmdbId, file.episode.season, file.episode.episode);
+
+  const { episode, movie } = file;
+  const { next, seasonFinale } = episode
+    ? await resolveNext(userId, episode.show.tmdbId, episode.season, episode.episode)
+    : { next: null, seasonFinale: false };
+  const title: NextInfo["title"] = episode
+    ? { kind: "show", tmdbId: episode.show.tmdbId, name: episode.show.titleDe }
+    : movie?.tmdbId != null
+      ? { kind: "movie", tmdbId: movie.tmdbId, name: movie.titleDe }
+      : null;
+  const rating = title ? await getRating(userId, title.kind, title.tmdbId) : null;
+  return { next, seasonFinale, title, rating };
 }
