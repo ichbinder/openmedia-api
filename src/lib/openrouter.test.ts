@@ -20,15 +20,15 @@ describe("chatJson", () => {
     expect(url).toBe("https://openrouter.ai/api/v1/chat/completions");
     expect(init.headers.Authorization).toBe(`Bearer ${KEY}`);
     expect(JSON.parse(init.body).response_format).toEqual({ type: "json_object" });
-    expect(JSON.parse(init.body).max_tokens).toBe(16000);
-    expect(JSON.parse(init.body).reasoning).toEqual({ effort: "low" });
+    expect(JSON.parse(init.body).max_tokens).toBe(64000);
+    expect(JSON.parse(init.body).reasoning).toEqual({ effort: "high" });
   });
 
-  it("wartet standardmäßig bis zu 5 Minuten", async () => {
+  it("wartet standardmäßig bis zu 10 Minuten", async () => {
     const timeout = vi.spyOn(AbortSignal, "timeout");
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(reply('{"a":1}')));
     await chatJson(KEY, "m", messages);
-    expect(timeout).toHaveBeenCalledWith(300_000);
+    expect(timeout).toHaveBeenCalledWith(600_000);
   });
 
   it("versucht es nach Müll genau einmal erneut", async () => {
