@@ -84,7 +84,7 @@ export async function getResume(
   if (!row || titleState(row) !== "started") return null;
   return {
     positionSec: resumePosition(row, file.duration),
-    durationSec: row.durationSec,
+    durationSec: file.duration ?? row.durationSec,
     finished: false,
   };
 }
@@ -139,7 +139,7 @@ async function episodeAvailability(
 
 async function firstAfter(showTmdbId: number, season: number, after: number) {
   const result = await getTmdbSeasonById(showTmdbId, season);
-  if (result.status !== "found") return null;
+  if (result.status !== "found") return undefined;
   return result.episodes.filter((e) => e.episode > after).sort((a, b) => a.episode - b.episode)[0] ?? null;
 }
 
@@ -151,6 +151,7 @@ export async function findNextEpisode(
 ): Promise<NextEpisode | null> {
   let nextSeason = season;
   let next = await firstAfter(showTmdbId, season, episode);
+  if (next === undefined) return null;
   if (!next && season >= 1) {
     nextSeason = season + 1;
     next = await firstAfter(showTmdbId, nextSeason, 0);
@@ -209,10 +210,12 @@ async function showCandidates(userId: string): Promise<Candidate[]> {
     orderBy: { updatedAt: "desc" },
   });
   const newestPerShow = new Map<string, (typeof rows)[number]>();
-  for (const r of rows) if (!newestPerShow.has(r.episode!.showId)) newestPerShow.set(r.episode!.showId, r);
+  for (const r of rows) {
+    if (titleState(r) !== "new" && !newestPerShow.has(r.episode!.showId)) newestPerShow.set(r.episode!.showId, r);
+  }
 
   return [...newestPerShow.values()]
-    .filter((r) => !r.hiddenAt && titleState(r) !== "new")
+    .filter((r) => !r.hiddenAt)
     .map((r) => ({
       updatedAt: r.updatedAt,
       resolve: async () => {

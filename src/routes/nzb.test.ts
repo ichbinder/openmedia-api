@@ -577,7 +577,7 @@ describe("NZB Routes", () => {
       await report(token, file.id, 3000, 6000);
 
       expect((await streamLink(token, file.id)).body.resume).toEqual({ positionSec: 2995, durationSec: 6000, finished: false });
-      expect((await streamLink(token, longer.id)).body.resume.positionSec).toBe(3595);
+      expect((await streamLink(token, longer.id)).body.resume).toEqual({ positionSec: 3595, durationSec: 7200, finished: false });
     });
 
     it("liefert null für ein anderes Konto", async () => {

@@ -209,6 +209,23 @@ describe("Weiterschauen", () => {
     });
   });
 
+  it("S1E3 fertig, danach S1E4 bei 20 s → Eintrag S1E4", async () => {
+    const e3 = await showFile(10, 1, 3);
+    const e4 = await showFile(10, 1, 4);
+    await put(e3.file.id, 2700, 3000);
+    await put(e4.file.id, 20, 3000);
+    expect(await items()).toMatchObject([{ season: 1, episode: 4, positionSec: 0, nzbFileId: e4.file.id }]);
+  });
+
+  it("springt bei TMDB-Fehler in der aktuellen Staffel nicht in die nächste", async () => {
+    const { file } = await showFile(10, 1, 3);
+    await put(file.id, 2700, 3000);
+    mockedSeason.mockImplementation(async (_id, s) => (s === 1 ? { status: "error", reason: "down" } : season(8)));
+    expect(await items()).toEqual([]);
+    const res = await auth(request(app).get(`/progress/next/${file.id}`));
+    expect(res.body).toEqual({ next: null });
+  });
+
   it("springt nach der letzten Folge in die nächste Staffel, aber nur wenn ausgestrahlt", async () => {
     const { file } = await showFile(10, 1, 8);
     await put(file.id, 2700, 3000);
