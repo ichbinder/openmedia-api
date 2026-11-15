@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import request from "supertest";
 import { createApp } from "../app.js";
 import { prisma } from "../test/setup.js";
@@ -537,6 +537,65 @@ describe("NZB Routes", () => {
 
       expect(res.status).toBe(400);
       expect(res.body.error).toContain("expires");
+    });
+  });
+
+  describe("GET /nzb/files/:id/stream-link resume", () => {
+    const s3Env = { S3_ACCESS_KEY: "k", S3_SECRET_KEY: "s", S3_ENDPOINT: "http://localhost:9", S3_BUCKET: "b" };
+    let saved: Record<string, string | undefined>;
+
+    beforeEach(() => {
+      saved = Object.fromEntries(Object.keys(s3Env).map((k) => [k, process.env[k]]));
+      Object.assign(process.env, s3Env);
+    });
+
+    afterEach(() => {
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    });
+
+    async function movieFile(movieId: string, hash: string, duration: number | null) {
+      return prisma.nzbFile.create({
+        data: { hash, originalFilename: `${hash}.mkv`, movieId, s3StreamKey: `${hash}.mp4`, duration },
+      });
+    }
+
+    async function report(t: string, nzbFileId: string, positionSec: number, durationSec: number) {
+      return request(app).put("/progress").set("Authorization", `Bearer ${t}`).send({ nzbFileId, positionSec, durationSec });
+    }
+
+    async function streamLink(t: string, id: string) {
+      return request(app).get(`/nzb/files/${id}/stream-link`).set("Authorization", `Bearer ${t}`);
+    }
+
+    it("liefert die Stelle zurück, auch umgerechnet auf eine Version anderer Länge", async () => {
+      const movie = await prisma.nzbMovie.create({ data: { titleDe: "A", titleEn: "A" } });
+      const file = await movieFile(movie.id, "h1", 6000);
+      const longer = await movieFile(movie.id, "h2", 7200);
+      await report(token, file.id, 3000, 6000);
+
+      expect((await streamLink(token, file.id)).body.resume).toEqual({ positionSec: 2995, durationSec: 6000, finished: false });
+      expect((await streamLink(token, longer.id)).body.resume.positionSec).toBe(3595);
+    });
+
+    it("liefert null für ein anderes Konto", async () => {
+      const movie = await prisma.nzbMovie.create({ data: { titleDe: "A", titleEn: "A" } });
+      const file = await movieFile(movie.id, "h1", 6000);
+      await report(token, file.id, 3000, 6000);
+      const other = await getAuthToken();
+
+      expect((await streamLink(other, file.id)).body.resume).toBeNull();
+    });
+
+    it("liefert null bei fertigem Titel, auch nach erneutem Anfang", async () => {
+      const movie = await prisma.nzbMovie.create({ data: { titleDe: "A", titleEn: "A" } });
+      const file = await movieFile(movie.id, "h1", 6000);
+      await report(token, file.id, 5500, 6000);
+      await report(token, file.id, 20, 6000);
+
+      expect((await streamLink(token, file.id)).body.resume).toBeNull();
     });
   });
 });

@@ -3,6 +3,7 @@ import cors from "cors";
 import prisma from "./lib/prisma.js";
 import authRoutes from "./routes/auth.js";
 import watchlistRoutes from "./routes/watchlist.js";
+import progressRoutes from "./routes/progress.js";
 import nzbRoutes from "./routes/nzb.js";
 import seriesRoutes from "./routes/series.js";
 import movieRoutes from "./routes/movies.js";
@@ -32,6 +33,7 @@ export function createApp() {
 
   app.use("/auth", authRoutes);
   app.use("/watchlist", watchlistRoutes);
+  app.use("/progress", progressRoutes);
   app.use("/nzb", nzbRoutes);
   app.use("/series", seriesRoutes);
   app.use("/movies", movieRoutes);

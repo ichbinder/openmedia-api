@@ -23,6 +23,7 @@ const nzbFileDetailSelect = {
   ...nzbFileSelect,
 } as const;
 import { searchTmdbMovie } from "../lib/tmdb.js";
+import { getResume } from "../lib/progress-service.js";
 
 const router = Router();
 
@@ -775,6 +776,7 @@ router.get("/files/:id/stream-link", async (req: AuthRequest, res: Response) => 
         resolution: nzbFile.resolution,
       },
       movie: nzbFile.movie,
+      resume: await getResume(req.user!.userId, nzbFile),
     });
   } catch (err) {
     console.error("[nzb] Stream link error:", err);
