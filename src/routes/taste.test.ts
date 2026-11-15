@@ -75,6 +75,8 @@ describe("/taste", () => {
 
   it("recordTraktImport legt Profil an und behält es beim Speichern", async () => {
     await recordTraktImport(userId, { rated: 3, seen: 2, skipped: 1 });
+    const [row] = await prisma.$queryRaw<{ genres: string[] | null }[]>`SELECT genres FROM taste_profile WHERE user_id = ${userId}`;
+    expect(row.genres).toEqual([]);
     await putTaste({ persons: [person("A")] });
     const body = (await request(app).get("/taste").set(auth(token))).body;
     expect(body.traktImportCounts).toEqual({ rated: 3, seen: 2, skipped: 1 });

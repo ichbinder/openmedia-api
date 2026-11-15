@@ -67,7 +67,7 @@ export async function recordTraktImport(userId: string, counts: TraktImportCount
   const data = { traktImportedAt: new Date(), traktImportCounts: counts };
   await prisma.tasteProfile.upsert({
     where: { userId },
-    create: { userId, persons: [], ...data },
+    create: { userId, persons: [], genres: [], ...data },
     update: data,
   });
 }
