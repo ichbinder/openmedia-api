@@ -9,6 +9,9 @@ describe("originLabel", () => {
     ["Disney+", "DISNEY+", "disney"],
     ["Max", "HBO", "hbo"],
     ["Sky Atlantic", "SKY", "sky"],
+    ["Sky", "SKY", "sky"],
+    ["Sky One", "SKY", "sky"],
+    ["Sky Deutschland", "SKY", "sky"],
     ["BBC One", "BBC ONE", "other"],
   ])("show network %s", (network, label, brand) => {
     expect(originLabel("show", { network })).toEqual({ label, brand });

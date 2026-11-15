@@ -53,6 +53,8 @@ const KNOWN: Record<string, Origin> = {
   paramountplus: { label: "PARAMOUNT+", brand: "paramount" },
   sky: { label: "SKY", brand: "sky" },
   skyatlantic: { label: "SKY", brand: "sky" },
+  skyone: { label: "SKY", brand: "sky" },
+  skydeutschland: { label: "SKY", brand: "sky" },
 };
 
 function resolve(raw: string): Origin {
