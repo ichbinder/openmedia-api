@@ -253,6 +253,33 @@ describe("Weiterschauen", () => {
     expect(await items()).toMatchObject([{ kind: "movie", tmdbId: 20 }]);
   });
 
+  it("lässt nur die Serie weg, wenn TMDB wirft", async () => {
+    const e3 = await showFile(10, 1, 3);
+    await put(e3.file.id, 2700, 3000);
+    await movie(20);
+    mockedSeason.mockRejectedValue(new Error("boom"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await items()).toMatchObject([{ kind: "movie", tmdbId: 20 }]);
+  });
+
+  it("nimmt bei einer Lücke in den Folgennummern die nächste vorhandene Folge", async () => {
+    const e2 = await showFile(10, 1, 2);
+    await put(e2.file.id, 2700, 3000);
+    const gap = season(4);
+    gap.episodes = gap.episodes.filter((e) => e.episode !== 3);
+    mockedSeason.mockResolvedValue(gap);
+    expect(await items()).toMatchObject([{ season: 1, episode: 4 }]);
+  });
+
+  it("verwendet für einen leeren TMDB-Titel null wie bei begonnenen Folgen", async () => {
+    const e3 = await showFile(10, 1, 3);
+    await put(e3.file.id, 2700, 3000);
+    const empty = season(8);
+    empty.episodes[3].titleDe = "";
+    mockedSeason.mockResolvedValue(empty);
+    expect(await items()).toMatchObject([{ episode: 4, episodeTitle: null }]);
+  });
+
   it("behält einen Film, dessen Datei gelöscht wurde", async () => {
     const { file } = await movie(20);
     await prisma.nzbFile.delete({ where: { id: file.id } });

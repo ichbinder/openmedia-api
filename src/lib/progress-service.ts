@@ -165,41 +165,44 @@ export async function findNextEpisode(
   return { showTmdbId, season: nextSeason, episode: next.episode, titleDe: next.titleDe, ...availability };
 }
 
-async function movieItems(userId: string): Promise<ContinueItem[]> {
+type Candidate = { updatedAt: Date; resolve: () => Promise<ContinueItem | null> };
+
+async function movieCandidates(userId: string): Promise<Candidate[]> {
   const rows = await prisma.watchProgress.findMany({
     where: { userId, movieId: { not: null }, hiddenAt: null },
     include: { movie: true },
   });
   const started = rows.filter((r) => r.movie?.tmdbId != null && titleState(r) === "started");
-  const requests = await prisma.movieRequest.findMany({
-    where: { userId, tmdbId: { in: started.map((r) => r.movie!.tmdbId!) } },
-  });
+  const [requests, files] = await Promise.all([
+    prisma.movieRequest.findMany({ where: { userId, tmdbId: { in: started.map((r) => r.movie!.tmdbId!) } } }),
+    prisma.nzbFile.findMany({ where: { movieId: { in: started.map((r) => r.movieId!) } } }),
+  ]);
   const requestByTmdb = new Map(requests.map((r) => [r.tmdbId, r]));
 
-  const items: ContinueItem[] = [];
-  for (const r of started) {
-    const movie = r.movie!;
-    const files = await prisma.nzbFile.findMany({ where: { movieId: movie.id } });
-    const request = requestByTmdb.get(movie.tmdbId!);
-    items.push({
-      kind: "movie",
-      tmdbId: movie.tmdbId!,
-      title: movie.titleDe,
-      posterPath: movie.posterPath,
-      season: null,
-      episode: null,
-      episodeTitle: null,
-      positionSec: r.positionSec,
-      durationSec: r.durationSec,
-      updatedAt: r.updatedAt.toISOString(),
-      nzbFileId: pickStreamableFile(files)?.id ?? null,
-      request: request ? { status: request.status, waitReason: request.failReason } : null,
-    });
-  }
-  return items;
+  return started.map((r) => ({
+    updatedAt: r.updatedAt,
+    resolve: async () => {
+      const movie = r.movie!;
+      const request = requestByTmdb.get(movie.tmdbId!);
+      return {
+        kind: "movie",
+        tmdbId: movie.tmdbId!,
+        title: movie.titleDe,
+        posterPath: movie.posterPath,
+        season: null,
+        episode: null,
+        episodeTitle: null,
+        positionSec: r.positionSec,
+        durationSec: r.durationSec,
+        updatedAt: r.updatedAt.toISOString(),
+        nzbFileId: pickStreamableFile(files.filter((f) => f.movieId === movie.id))?.id ?? null,
+        request: request ? { status: request.status, waitReason: request.failReason } : null,
+      };
+    },
+  }));
 }
 
-async function showItems(userId: string): Promise<ContinueItem[]> {
+async function showCandidates(userId: string): Promise<Candidate[]> {
   const rows = await prisma.watchProgress.findMany({
     where: { userId, episodeId: { not: null } },
     include: { episode: { include: { show: true } } },
@@ -208,52 +211,62 @@ async function showItems(userId: string): Promise<ContinueItem[]> {
   const newestPerShow = new Map<string, (typeof rows)[number]>();
   for (const r of rows) if (!newestPerShow.has(r.episode!.showId)) newestPerShow.set(r.episode!.showId, r);
 
-  const items: ContinueItem[] = [];
-  for (const r of newestPerShow.values()) {
-    if (r.hiddenAt) continue;
-    const { episode: ep } = r;
-    const show = ep!.show;
-    const state = titleState(r);
-    const base = {
-      kind: "episode" as const,
-      tmdbId: show.tmdbId,
-      title: show.titleDe,
-      posterPath: show.posterPath,
-      updatedAt: r.updatedAt.toISOString(),
-    };
-    if (state === "started") {
-      items.push({
-        ...base,
-        season: ep!.season,
-        episode: ep!.episode,
-        episodeTitle: ep!.titleDe || null,
-        positionSec: r.positionSec,
-        durationSec: r.durationSec,
-        ...(await episodeAvailability(userId, show.id, ep!.season, ep!.episode)),
-      });
-    } else if (state === "finished") {
-      const next = await findNextEpisode(userId, show.tmdbId, ep!.season, ep!.episode);
-      if (!next) continue;
-      items.push({
-        ...base,
-        season: next.season,
-        episode: next.episode,
-        episodeTitle: next.titleDe,
-        positionSec: 0,
-        durationSec: 0,
-        nzbFileId: next.nzbFileId,
-        request: next.request,
-      });
-    }
-  }
-  return items;
+  return [...newestPerShow.values()]
+    .filter((r) => !r.hiddenAt && titleState(r) !== "new")
+    .map((r) => ({
+      updatedAt: r.updatedAt,
+      resolve: async () => {
+        const ep = r.episode!;
+        const show = ep.show;
+        const base = {
+          kind: "episode" as const,
+          tmdbId: show.tmdbId,
+          title: show.titleDe,
+          posterPath: show.posterPath,
+          updatedAt: r.updatedAt.toISOString(),
+        };
+        try {
+          if (titleState(r) === "started") {
+            return {
+              ...base,
+              season: ep.season,
+              episode: ep.episode,
+              episodeTitle: ep.titleDe || null,
+              positionSec: r.positionSec,
+              durationSec: r.durationSec,
+              ...(await episodeAvailability(userId, show.id, ep.season, ep.episode)),
+            };
+          }
+          const next = await findNextEpisode(userId, show.tmdbId, ep.season, ep.episode);
+          if (!next) return null;
+          return {
+            ...base,
+            season: next.season,
+            episode: next.episode,
+            episodeTitle: next.titleDe || null,
+            positionSec: 0,
+            durationSec: 0,
+            nzbFileId: next.nzbFileId,
+            request: next.request,
+          };
+        } catch (err) {
+          console.error("[progress] Continue entry error:", err);
+          return null;
+        }
+      },
+    }));
 }
 
 export async function listContinue(userId: string): Promise<ContinueItem[]> {
-  const [movies, shows] = await Promise.all([movieItems(userId), showItems(userId)]);
-  return [...movies, ...shows]
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-    .slice(0, PROGRESS.CONTINUE_LIMIT);
+  const [movies, shows] = await Promise.all([movieCandidates(userId), showCandidates(userId)]);
+  const candidates = [...movies, ...shows].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+  const items: ContinueItem[] = [];
+  for (const candidate of candidates) {
+    if (items.length >= PROGRESS.CONTINUE_LIMIT) break;
+    const item = await candidate.resolve();
+    if (item) items.push(item);
+  }
+  return items;
 }
 
 export async function hideContinue(userId: string, kind: "movie" | "show", tmdbId: number): Promise<number> {
