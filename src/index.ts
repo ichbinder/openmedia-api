@@ -1,5 +1,6 @@
 import { createApp } from "./app.js";
 import { startReconciler, stopReconciler } from "./lib/job-reconciler.js";
+import { startSuggestionScheduler, stopSuggestionScheduler } from "./lib/suggestion-run.js";
 
 const PORT = process.env.PORT || 4000;
 const app = createApp();
@@ -10,6 +11,7 @@ app.listen(PORT, () => {
 
   // Start background job reconciler (detects stuck/orphaned download jobs)
   startReconciler();
+  startSuggestionScheduler();
 });
 
 // Graceful shutdown
@@ -18,6 +20,7 @@ import prisma from "./lib/prisma.js";
 async function shutdown(signal: string) {
   console.log(`[server] ${signal} received, shutting down...`);
   stopReconciler();
+  stopSuggestionScheduler();
   await prisma.$disconnect();
   process.exit(0);
 }

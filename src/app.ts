@@ -8,6 +8,7 @@ import ratingsRoutes from "./routes/ratings.js";
 import progressRoutes from "./routes/progress.js";
 import tasteRoutes from "./routes/taste.js";
 import aiSettingsRoutes from "./routes/ai-settings.js";
+import suggestionsRoutes from "./routes/suggestions.js";
 import traktRoutes from "./routes/trakt.js";
 import nzbRoutes from "./routes/nzb.js";
 import seriesRoutes from "./routes/series.js";
@@ -42,7 +43,8 @@ export function createApp() {
   app.use("/ratings", ratingsRoutes);
   app.use("/progress", progressRoutes);
   app.use("/taste", tasteRoutes);
-app.use("/ai-settings", aiSettingsRoutes);
+  app.use("/ai-settings", aiSettingsRoutes);
+  app.use("/suggestions", suggestionsRoutes);
   app.use("/trakt", traktRoutes);
   app.use("/nzb", nzbRoutes);
   app.use("/series", seriesRoutes);
