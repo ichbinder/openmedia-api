@@ -120,7 +120,24 @@ describe("/suggestions", () => {
     expect(run?.error).toBe("Die KI hat keine passenden Vorschläge geliefert.");
   });
 
+  it("schließt die becauseTitles der letzten 7 Läufe aus", async () => {
+    const ids = [11, 12, 13, 14, 15, 16, 17, 18];
+    await prisma.titleRating.createMany({
+      data: ids.map((tmdbId) => ({ userId, kind: "movie", tmdbId, verdict: "up", tags: [], source: "app" })),
+    });
+    await prisma.suggestionRun.createMany({
+      data: ids.slice(0, 7).map((tmdbId, i) => ({
+        userId, status: "done", model: "m", becauseKind: "movie", becauseTmdbId: tmdbId,
+        startedAt: new Date(Date.now() - (i + 1) * 3_600_000),
+      })),
+    });
+    vi.mocked(chatJson).mockResolvedValueOnce(answer(["movie-1"]));
+    await runSuggestions(userId);
+    expect(vi.mocked(collectCandidates).mock.calls[0][1]).toMatchObject({ kind: "movie", tmdbId: 18 });
+  });
+
   it("geworfener Fehler: failed statt running, Sperre frei", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
     vi.mocked(collectCandidates).mockRejectedValueOnce(new Error(`boom ${KEY}`));
     expect(await runSuggestions(userId)).toBe("failed");
     const run = await prisma.suggestionRun.findFirstOrThrow({ where: { userId } });

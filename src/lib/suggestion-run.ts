@@ -11,6 +11,7 @@ import type { Kind } from "./title-meta.js";
 const MIN_INTERVAL_MS = 10 * 60_000;
 const STALE_RUNNING_MS = 15 * 60_000;
 const KEPT_RUNS = 7;
+const RECENT_PASS_MS = 20 * 60 * 60_000;
 const MAX_RATED = 150;
 const MAX_SEEN = 100;
 const SCHEDULE_HOUR = 3;
@@ -83,16 +84,18 @@ export async function runSuggestions(userId: string): Promise<"done" | "failed" 
     const [key, settings] = await Promise.all([getAiKey(userId), getAiSettings(userId)]);
     if (!key || !settings) return "skipped";
 
-    const run = await prisma.suggestionRun.create({ data: { userId, status: "running", model: settings.model } });
-    runId = run.id;
-
     const because = await pickBecauseTitle(userId);
-    if (because) {
-      await prisma.suggestionRun.update({
-        where: { id: runId },
-        data: { becauseKind: because.kind, becauseTmdbId: because.tmdbId, becauseName: because.name },
-      });
-    }
+    const run = await prisma.suggestionRun.create({
+      data: {
+        userId,
+        status: "running",
+        model: settings.model,
+        becauseKind: because?.kind,
+        becauseTmdbId: because?.tmdbId,
+        becauseName: because?.name,
+      },
+    });
+    runId = run.id;
     const now = new Date();
     const candidates = await collectCandidates(userId, because, now);
     const input = await loadTasteInput(userId);
@@ -135,9 +138,13 @@ const berlinParts = (date: Date) => {
   return { day: `${get("year")}-${get("month")}-${get("day")}`, hour: Number(get("hour")), minute: Number(get("minute")) };
 };
 
-async function runForAllAccounts(): Promise<void> {
+async function runForAllAccounts(now: Date): Promise<void> {
   const accounts = await prisma.aiSettings.findMany({ where: { keyCipher: { not: null } }, select: { userId: true } });
-  for (const { userId } of accounts) await runSuggestions(userId);
+  const since = new Date(now.getTime() - RECENT_PASS_MS);
+  for (const { userId } of accounts) {
+    if (await prisma.suggestionRun.count({ where: { userId, startedAt: { gt: since } } })) continue;
+    await runSuggestions(userId);
+  }
 }
 
 let timer: ReturnType<typeof setInterval> | null = null;
@@ -146,10 +153,11 @@ let lastPassDay: string | null = null;
 export function startSuggestionScheduler(now: () => Date = () => new Date()): void {
   stopSuggestionScheduler();
   timer = setInterval(() => {
-    const { day, hour, minute } = berlinParts(now());
-    if (hour !== SCHEDULE_HOUR || minute !== 0 || lastPassDay === day) return;
+    const current = now();
+    const { day, hour } = berlinParts(current);
+    if (hour !== SCHEDULE_HOUR || lastPassDay === day) return;
     lastPassDay = day;
-    runForAllAccounts().catch((err) => console.error("[suggestions] Durchgang fehlgeschlagen:", err instanceof Error ? err.name : "unbekannt"));
+    runForAllAccounts(current).catch((err) => console.error("[suggestions] Durchgang fehlgeschlagen:", err instanceof Error ? err.name : "unbekannt"));
   }, 60_000);
   timer.unref();
 }

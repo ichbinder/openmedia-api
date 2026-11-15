@@ -54,6 +54,26 @@ describe("startSuggestionScheduler", () => {
     expect(chatJson).toHaveBeenCalledTimes(1);
   });
 
+  it("erster Tick um 03:07 startet trotzdem genau einen Durchgang", async () => {
+    current = new Date("2026-01-15T02:07:00Z");
+    await tick();
+    await vi.waitFor(() => expect(chatJson).toHaveBeenCalledTimes(1));
+    await tick();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(chatJson).toHaveBeenCalledTimes(1);
+  });
+
+  it("überspringt Konten mit einem Lauf in den letzten 20 Stunden", async () => {
+    const account = await prisma.aiSettings.findFirstOrThrow();
+    await prisma.suggestionRun.create({
+      data: { userId: account.userId, status: "done", model: "m", startedAt: new Date("2026-01-15T01:00:00Z") },
+    });
+    current = new Date("2026-01-15T02:00:00Z");
+    await tick();
+    await new Promise((r) => setTimeout(r, 200));
+    expect(chatJson).not.toHaveBeenCalled();
+  });
+
   it("beachtet die Sommerzeit", async () => {
     current = new Date("2026-07-15T01:00:00Z");
     await tick();
