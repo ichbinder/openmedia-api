@@ -25,6 +25,9 @@ model User {
   watchProgress    WatchProgress[]
   titleRatings     TitleRating[]
   tasteProfile     TasteProfile?
+  aiSettings       AiSettings?
+  suggestionRuns   SuggestionRun[]
+  titleDismissals  TitleDismissal[]
 
   @@map("users")
 }
@@ -637,4 +640,78 @@ model TasteProfile {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("taste_profile")
+}
+
+model AiSettings {
+  userId    String   @id @map("user_id")
+  model     String
+  keyCipher String?  @map("key_cipher")
+  keyIv     String?  @map("key_iv")
+  keyTag    String?  @map("key_tag")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("ai_settings")
+}
+
+model SuggestionRun {
+  id            String    @id @default(uuid())
+  userId        String    @map("user_id")
+  status        String
+  error         String?
+  model         String
+  becauseKind   String?   @map("because_kind")
+  becauseTmdbId Int?      @map("because_tmdb_id")
+  becauseName   String?   @map("because_name")
+  startedAt     DateTime  @default(now()) @map("started_at")
+  finishedAt    DateTime? @map("finished_at")
+
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  suggestions Suggestion[]
+
+  @@index([userId, startedAt])
+  @@map("suggestion_run")
+}
+
+model Suggestion {
+  id       String @id @default(uuid())
+  runId    String @map("run_id")
+  row      String
+  position Int
+  kind     String
+  tmdbId   Int    @map("tmdb_id")
+  reason   String
+
+  run SuggestionRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@map("suggestion")
+}
+
+model TitleDismissal {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  kind      String
+  tmdbId    Int      @map("tmdb_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, kind, tmdbId])
+  @@map("title_dismissal")
+}
+
+model TitleInfo {
+  id         String   @id @default(uuid())
+  kind       String
+  tmdbId     Int      @map("tmdb_id")
+  name       String
+  year       Int?
+  genres     String[]
+  overview   String
+  posterPath String?  @map("poster_path")
+  fetchedAt  DateTime @default(now()) @map("fetched_at")
+
+  @@unique([kind, tmdbId])
+  @@map("title_info")
 }
