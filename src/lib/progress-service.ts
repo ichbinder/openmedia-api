@@ -1,6 +1,8 @@
 import prisma from "./prisma.js";
 import { PROGRESS, isFinishedPosition, resumePosition, titleState } from "./watch-progress.js";
 
+const MAX_SEC = 7 * 24 * 60 * 60;
+
 export type Resume = { positionSec: number; durationSec: number; finished: boolean };
 
 export type RecordResult =
@@ -14,12 +16,16 @@ export async function recordProgress(
   positionSec: number,
   durationSec: number,
 ): Promise<RecordResult> {
+  const position = Math.round(positionSec);
+  const duration = Math.round(durationSec);
   if (
-    !Number.isFinite(positionSec) ||
-    !Number.isFinite(durationSec) ||
-    positionSec < 0 ||
-    durationSec <= 0 ||
-    positionSec > durationSec * (1 + PROGRESS.LENGTH_TOLERANCE) + 5
+    !Number.isFinite(position) ||
+    !Number.isFinite(duration) ||
+    position < 0 ||
+    duration <= 0 ||
+    duration > MAX_SEC ||
+    position > MAX_SEC ||
+    position > duration * (1 + PROGRESS.LENGTH_TOLERANCE) + 5
   ) {
     return { status: "invalid" };
   }
@@ -30,8 +36,6 @@ export async function recordProgress(
   });
   if (!file || (!file.movieId && !file.episodeId)) return { status: "not_found" };
 
-  const position = Math.round(positionSec);
-  const duration = Math.round(durationSec);
   const now = new Date();
   const finishedNow = isFinishedPosition(position, duration);
 
@@ -39,7 +43,7 @@ export async function recordProgress(
     ? { userId_movieId: { userId, movieId: file.movieId } }
     : { userId_episodeId: { userId, episodeId: file.episodeId! } };
 
-  const row = await prisma.watchProgress.upsert({
+  let row = await prisma.watchProgress.upsert({
     where,
     create: {
       userId,
@@ -55,9 +59,12 @@ export async function recordProgress(
       positionSec: position,
       durationSec: duration,
       hiddenAt: null,
-      ...(finishedNow ? { finishedAt: now } : {}),
     },
   });
+
+  if (finishedNow && !row.finishedAt) {
+    row = await prisma.watchProgress.update({ where: { id: row.id }, data: { finishedAt: now } });
+  }
 
   return {
     status: "ok",

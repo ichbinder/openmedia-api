@@ -83,6 +83,14 @@ describe("Progress Routes", () => {
     expect((await prisma.watchProgress.findFirstOrThrow()).finishedAt).not.toBeNull();
   });
 
+  it("ändert finishedAt bei späteren Meldungen ab 90 % nicht mehr", async () => {
+    const file = await movieFile("a");
+    await put({ nzbFileId: file.id, positionSec: 5400, durationSec: 6000 });
+    const first = (await prisma.watchProgress.findFirstOrThrow()).finishedAt;
+    await put({ nzbFileId: file.id, positionSec: 5700, durationSec: 6000 });
+    expect((await prisma.watchProgress.findFirstOrThrow()).finishedAt).toEqual(first);
+  });
+
   it("blendet den Eintrag wieder ein, wenn weitergeschaut wird", async () => {
     const file = await movieFile("a");
     await put({ nzbFileId: file.id, positionSec: 100, durationSec: 6000 });
@@ -97,6 +105,9 @@ describe("Progress Routes", () => {
     { positionSec: "abc", durationSec: 6000 },
     { positionSec: 10, durationSec: null },
     { positionSec: 7000, durationSec: 6000 },
+    { positionSec: 10, durationSec: 1e12 },
+    { positionSec: 1e12, durationSec: 1e12 },
+    { positionSec: 0, durationSec: 0.4 },
   ])("lehnt %j mit 400 ab", async (body) => {
     const file = await movieFile("a");
     const res = await put({ nzbFileId: file.id, ...body });
