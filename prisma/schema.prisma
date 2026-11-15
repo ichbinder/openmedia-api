@@ -588,3 +588,19 @@ model WatchProgress {
   @@index([userId, updatedAt])
   @@map("watch_progress")
 }
+
+model TitleMeta {
+  id        String   @id @default(uuid())
+  kind      String
+  tmdbId    Int      @map("tmdb_id")
+  label     String?
+  brand     String?
+  ratings   Json     @default("{}")
+  score     Int?
+  year      Int?
+  status    String
+  fetchedAt DateTime @map("fetched_at")
+
+  @@unique([kind, tmdbId])
+  @@map("title_meta")
+}
