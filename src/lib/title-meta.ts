@@ -57,8 +57,9 @@ const KNOWN: Record<string, Origin> = {
   skydeutschland: { label: "SKY", brand: "sky" },
 };
 
-function resolve(raw: string): Origin {
-  const name = raw.split(",")[0].trim();
+const firstName = (raw: string) => raw.split(",")[0].trim();
+
+function resolve(name: string): Origin {
   const key = name.toLowerCase().replace(/\s+/g, "");
   return KNOWN[key] ?? { label: name.toLocaleUpperCase("de-DE"), brand: "other" };
 }
@@ -68,11 +69,12 @@ export function originLabel(
   raw: { network?: string | null; digitalDetail?: string | null },
 ): Origin | null {
   if (kind === "show") {
-    return raw.network?.trim() ? resolve(raw.network) : null;
+    const name = firstName(raw.network ?? "");
+    return name ? resolve(name) : null;
   }
-  const detail = raw.digitalDetail?.trim();
-  if (!detail || detail.toLowerCase() === "tvod") return CINEMA;
-  return resolve(detail);
+  const name = firstName(raw.digitalDetail ?? "");
+  if (!name || name.toLowerCase() === "tvod") return CINEMA;
+  return resolve(name);
 }
 
 export function storedRatings(
@@ -107,9 +109,12 @@ export function isStale(
   row: { status: string; year: number | null; fetchedAt: Date },
   now: Date,
 ): boolean {
-  const fresh =
-    row.status === "not_found" ||
-    (row.year !== null && row.year >= now.getUTCFullYear() - 1);
-  const days = fresh ? META_RULES.FRESH_TITLE_STALE_DAYS : META_RULES.STALE_DAYS;
+  const isFreshTitle = row.year !== null && row.year >= now.getUTCFullYear() - 1;
+  const days =
+    row.status === "not_found"
+      ? META_RULES.NOT_FOUND_STALE_DAYS
+      : isFreshTitle
+        ? META_RULES.FRESH_TITLE_STALE_DAYS
+        : META_RULES.STALE_DAYS;
   return now.getTime() - row.fetchedAt.getTime() > days * 86_400_000;
 }

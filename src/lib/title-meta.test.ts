@@ -19,6 +19,7 @@ describe("originLabel", () => {
 
   it("returns null without network", () => {
     expect(originLabel("show", { network: null })).toBeNull();
+    expect(originLabel("show", { network: "," })).toBeNull();
   });
 
   it.each([
@@ -30,6 +31,8 @@ describe("originLabel", () => {
     ["", "KINO", "cinema"],
     ["TVOD", "KINO", "cinema"],
     ["tvod", "KINO", "cinema"],
+    ["TVOD, Netflix", "KINO", "cinema"],
+    [",", "KINO", "cinema"],
     ["Hulu", "HULU", "other"],
   ])("movie digitalDetail %s", (digitalDetail, label, brand) => {
     expect(originLabel("movie", { digitalDetail })).toEqual({ label, brand });
