@@ -11,7 +11,16 @@ type Rated = Named & { verdict: Verdict; tags: string[] };
 export type SuggestionRow = { row: Hint; items: { kind: Kind; tmdbId: number; reason: string }[] };
 
 export const HARD_EXCLUSION_RULE =
-  "Ein Titel, der gegen die Grenze irgendeiner Person verstößt, darf in keine Reihe.";
+  "Ein Titel, der gegen die Grenze irgendeiner Person verstößt, darf in keine Reihe. " +
+  "Prüfe jeden Kandidaten gegen die Grenzen ALLER Personen; eine Grenze gilt auch dann, wenn eine andere Person den Titel mögen würde. " +
+  "Im Zweifel lass den Titel weg.";
+
+const LIMIT_LABELS: Record<string, string> = {
+  gewalt_selbstzweck: "Gewalt als Selbstzweck",
+  sex_hauptinhalt: "Sex als Hauptinhalt",
+  horror: "Horror",
+};
+const limitLabel = (key: string) => LIMIT_LABELS[key] ?? key;
 
 const ROWS: Hint[] = ["neu", "aehnlich", "serien", "perlen"];
 const MAX_RATED = 150;
@@ -40,7 +49,7 @@ function systemPrompt(because: string | null): string {
 
 function userPrompt(i: Parameters<typeof buildMessages>[0]): string {
   const persons = i.taste.persons.map(
-    (p) => `- ${p.name}: harte Grenzen: ${p.limits.join(", ") || "keine"}; ${p.limitsText || "kein weiterer Text"}`,
+    (p) => `- ${p.name}: harte Grenzen: ${p.limits.map(limitLabel).join(", ") || "keine"}; ${p.limitsText || "kein weiterer Text"}`,
   );
   const rated = i.rated.slice(0, MAX_RATED).map((r) => {
     const tags = r.tags.length ? ` [${r.tags.join(", ")}]` : "";
@@ -55,7 +64,7 @@ function userPrompt(i: Parameters<typeof buildMessages>[0]): string {
   return [
     `Genres des Haushalts: ${i.taste.genres.join(", ") || "keine Angabe"}`,
     `Was schaut ihr gern?: ${i.taste.likesText || "keine Angabe"}`,
-    "Personen (harter Ausschluss):",
+    `Personen (harter Ausschluss): ${HARD_EXCLUSION_RULE}`,
     ...persons,
     "Bewertungen (neueste zuerst):",
     ...rated,

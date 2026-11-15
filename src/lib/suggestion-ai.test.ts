@@ -29,6 +29,14 @@ describe("buildMessages", () => {
     expect(t).toMatch(/movie-1[^\n]*neu/);
   });
 
+  it("renders limit keys as German labels", () => {
+    const person = { id: "3", name: "Cleo", limits: ["gewalt_selbstzweck", "sex_hauptinhalt"], limitsText: "" };
+    const t = text(buildMessages({ ...base, taste: { ...taste, persons: [person] } }));
+    expect(t).toContain("Gewalt als Selbstzweck");
+    expect(t).toContain("Sex als Hauptinhalt");
+    expect(t).not.toContain("gewalt_selbstzweck");
+  });
+
   it("caps ratings at 150", () => {
     const rated = Array.from({ length: 200 }, (_, i) => ({ name: `R${i}X`, year: 2020, verdict: "up" as const, tags: [] }));
     const t = text(buildMessages({ ...base, rated }));
