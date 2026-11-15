@@ -23,6 +23,7 @@ type Item = { kind: Kind; tmdbId: number };
 type Row = NonNullable<Awaited<ReturnType<typeof prisma.titleMeta.findFirst>>>;
 
 const inFlight = new Map<string, Promise<Row | null>>();
+const failedAt = new Map<string, number>();
 const waiting: (() => void)[] = [];
 let active = 0;
 
@@ -74,7 +75,12 @@ function toData(result: MdblistResult) {
 
 async function lookup({ kind, tmdbId }: Item): Promise<Row | null> {
   const result = await limited(() => fetchMdblistTitle(kind, tmdbId));
-  if (result.status === "error") return null;
+  if (result.status === "error") {
+    failedAt.set(`${kind}:${tmdbId}`, Date.now());
+    console.warn(`[meta] MDBList-Abruf fehlgeschlagen: ${result.reason}`);
+    return null;
+  }
+  failedAt.delete(`${kind}:${tmdbId}`);
   const data = { ...toData(result), fetchedAt: new Date() };
   try {
     return await prisma.titleMeta.upsert({
@@ -113,6 +119,8 @@ export async function getMeta(items: Item[], now = new Date()): Promise<TitleMet
     unique.map(async (item) => {
       const key = `${item.kind}:${item.tmdbId}`;
       const row = byKey.get(key);
+      const lastFailure = failedAt.get(key);
+      if (lastFailure !== undefined && now.getTime() - lastFailure < META_RULES.ERROR_BACKOFF_MS) return;
       if (!row) {
         byKey.set(key, await fetchShared(item).catch((e) => (console.error("[meta] Abruf fehlgeschlagen:", e), null)));
       } else if (isStale(row, now)) {

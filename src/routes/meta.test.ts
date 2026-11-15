@@ -111,7 +111,7 @@ describe("POST /meta", () => {
     const res = await post(token, [{ kind: "movie", tmdbId: 7 }]);
     expect(res.body.items[0]).toMatchObject({ label: null, brand: null, ratings: {}, score: null });
     expect(await prisma.titleMeta.count()).toBe(0);
-    await post(token, [{ kind: "movie", tmdbId: 7 }]);
+    await getMeta([{ kind: "movie", tmdbId: 7 }], new Date(Date.now() + 6 * 60_000));
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
@@ -124,6 +124,50 @@ describe("POST /meta", () => {
     expect((await prisma.titleMeta.findFirstOrThrow()).status).toBe("not_found");
     await getMeta(items, new Date(Date.now() + 2 * 86_400_000));
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+  });
+
+  it("pausiert nach Fehler 5 Minuten, danach wird neu gefragt", async () => {
+    fetchMock.mockResolvedValue({ status: "error", reason: "timeout" });
+    const items = [{ kind: "movie" as const, tmdbId: 11 }];
+    await getMeta(items);
+    await getMeta(items);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await getMeta(items, new Date(Date.now() + 6 * 60_000));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("behaelt alte Zeile, wenn das Auffrischen fehlschlaegt", async () => {
+    await prisma.titleMeta.create({
+      data: {
+        kind: "movie",
+        tmdbId: 12,
+        label: "ALT",
+        brand: "other",
+        ratings: {},
+        year: 2010,
+        status: "found",
+        fetchedAt: new Date(Date.now() - 8 * 86_400_000),
+      },
+    });
+    fetchMock.mockResolvedValue({ status: "error", reason: "http" });
+    const items = [{ kind: "movie" as const, tmdbId: 12 }];
+    const [first] = await getMeta(items);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const [second] = await getMeta(items);
+    expect(first.label).toBe("ALT");
+    expect(second.label).toBe("ALT");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect((await prisma.titleMeta.findFirstOrThrow()).label).toBe("ALT");
+  });
+
+  it("holt doppelte Eintraege einmal und fuellt beide Positionen", async () => {
+    fetchMock.mockResolvedValue(found());
+    const res = await getMeta([
+      { kind: "movie", tmdbId: 13 },
+      { kind: "movie", tmdbId: 13 },
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(res.map((r) => r.label)).toEqual(["NETFLIX", "NETFLIX"]);
   });
 
   it("not_configured liefert leere Werte mit 200", async () => {

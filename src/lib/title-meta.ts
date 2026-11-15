@@ -27,6 +27,7 @@ export const META_RULES = {
   MAX_ITEMS: 60,
   CONCURRENCY: 6,
   TIMEOUT_MS: 8000,
+  ERROR_BACKOFF_MS: 5 * 60_000,
 } as const;
 
 type Origin = { label: string; brand: Brand };
