@@ -86,6 +86,19 @@ describe("/trakt", () => {
     logs.forEach((l) => l.mockRestore());
   });
 
+  it("ungültige tmdb-IDs werden übersprungen, Rest importiert; Serien-Watched ohne Staffeln", async () => {
+    routes["/oauth/device/token"] = () => reply(200, { access_token: TOKEN });
+    routes["/sync/ratings/movies"] = () => reply(200, [
+      { rating: 9, movie: { ids: { tmdb: 0 } } },
+      { rating: 9, movie: { ids: { tmdb: 1.5 } } },
+      { rating: 9, movie: { ids: { tmdb: 1 } } },
+    ]);
+    await connect();
+    const res = await poll();
+    expect(res.body).toEqual({ status: "done", counts: { rated: 1, seen: 1, skipped: 2 } });
+    expect(fetchMock.mock.calls.some(([u]) => String(u).endsWith("/sync/watched/shows?extended=noseasons"))).toBe(true);
+  });
+
   it("Fehler beim Holen: 502, Token trotzdem widerrufen", async () => {
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
     routes["/oauth/device/token"] = () => reply(200, { access_token: TOKEN });
@@ -95,6 +108,9 @@ describe("/trakt", () => {
     expect(res.status).toBe(502);
     expect(res.body).toEqual({ error: "Trakt-Import fehlgeschlagen." });
     expect(calls("/oauth/revoke")).toHaveLength(1);
+    const logged = JSON.stringify(err.mock.calls);
+    expect(logged).not.toContain(TOKEN);
+    expect(logged).not.toContain(CLIENT_ID);
     err.mockRestore();
   });
 });

@@ -70,6 +70,9 @@ export async function pollDeviceToken(deviceCode: string): Promise<DevicePoll> {
   throw new Error(`Trakt device token: HTTP ${res.status}`);
 }
 
+const validTmdbId = (t: unknown): number | null =>
+  typeof t === "number" && Number.isInteger(t) && t > 0 ? t : null;
+
 async function get(path: string, id: string, accessToken: string) {
   const res = await fetch(`${BASE_URL}${path}`, {
     headers: headers(id, accessToken),
@@ -86,10 +89,10 @@ export async function fetchTraktLibrary(accessToken: string): Promise<TraktLibra
   const lib: TraktLibrary = { ratings: [], watched: [] };
   for (const [kind, plural] of kinds) {
     for (const r of await get(`/sync/ratings/${plural}`, id, accessToken)) {
-      lib.ratings.push({ kind, tmdbId: r[kind]?.ids?.tmdb ?? null, rating: r.rating });
+      lib.ratings.push({ kind, tmdbId: validTmdbId(r[kind]?.ids?.tmdb), rating: r.rating });
     }
-    for (const w of await get(`/sync/watched/${plural}`, id, accessToken)) {
-      lib.watched.push({ kind, tmdbId: w[kind]?.ids?.tmdb ?? null });
+    for (const w of await get(`/sync/watched/${plural}${kind === "show" ? "?extended=noseasons" : ""}`, id, accessToken)) {
+      lib.watched.push({ kind, tmdbId: validTmdbId(w[kind]?.ids?.tmdb) });
     }
   }
   return lib;
