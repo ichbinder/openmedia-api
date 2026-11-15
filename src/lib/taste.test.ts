@@ -91,7 +91,8 @@ describe("parseTasteInput", () => {
     ["long likesText", { likesText: "x".repeat(2001) }],
     ["long limitsText", { persons: [person({ limitsText: "x".repeat(501) })] }],
     ["foreign id", { persons: [person({ id: "fremd" })] }],
+    ["duplicate id", { persons: [person({ id: "p1" }), person({ id: "p1", name: "B" })] }],
   ])("rejects %s", (_, over) => {
-    expect(taste(over)).toHaveProperty("error");
+    expect(taste(over, ["p1"])).toHaveProperty("error");
   });
 });

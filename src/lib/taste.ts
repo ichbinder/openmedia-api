@@ -120,6 +120,8 @@ export function parseTasteInput(body: unknown, knownPersonIds: string[]): TasteI
     if ("error" in person) return person;
     persons.push(person);
   }
+  const ids = persons.flatMap((p) => (p.id ? [p.id] : []));
+  if (new Set(ids).size !== ids.length) return { error: "Person doppelt angegeben" };
   const genres = keyList(rawGenres, GENRE_KEYS);
   if (!genres) return { error: "Ungültige Genres" };
   if (typeof likesText !== "string" || likesText.length > TASTE_RULES.LIKES_MAX) {
