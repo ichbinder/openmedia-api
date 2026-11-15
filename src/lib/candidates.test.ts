@@ -131,4 +131,24 @@ describe("collectCandidates", () => {
     tmdbRoutes({});
     expect((await collectCandidates(user.id, null)).length).toBe(500);
   });
+
+  it.each([
+    [["horror"], [531]],
+    [[] as string[], [530, 531]],
+  ])("household limits %j keep %j", async (limits, expected) => {
+    const user = await createUser();
+    await prisma.tasteProfile.create({ data: { userId: user.id, genres: [], persons: [{ id: "p", name: "A", limits }] } });
+    await prisma.titleInfo.createMany({
+      data: [
+        { kind: "movie", tmdbId: 530, name: "H", genres: ["Horror"], overview: "" },
+        { kind: "movie", tmdbId: 531, name: "D", genres: ["Drama"], overview: "" },
+      ],
+    });
+    mockMdblist.mockImplementation(async (path) =>
+      path.includes("/movie") ? [{ ids: { tmdb: 530 } }, { ids: { tmdb: 531 } }] : [],
+    );
+    tmdbRoutes({});
+    const ids = (await collectCandidates(user.id, null)).map((c) => c.tmdbId).sort();
+    expect(ids).toEqual(expected);
+  });
 });

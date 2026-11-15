@@ -21,6 +21,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const RELEASE_DAYS = 90;
 const RELEASE_WINDOW_DAYS = 35;
 const MAX_CANDIDATES = 500;
+const INFO_FETCH_LIMIT = 650;
+const HORROR_GENRE = "Horror";
 const RECENT_RUNS = 7;
 const MAX_SERIES_SEEDS = 5;
 const PERLEN_PAGES = 5;
@@ -176,6 +178,9 @@ function interleave(lists: Item[][]): Item[] {
   return out;
 }
 
+const hasHorrorLimit = (persons: unknown) =>
+  Array.isArray(persons) && persons.some((p) => Array.isArray(p?.limits) && p.limits.includes("horror"));
+
 export async function collectCandidates(
   userId: string,
   because: Because,
@@ -183,7 +188,7 @@ export async function collectCandidates(
   random: () => number = Math.random,
 ): Promise<Candidate[]> {
   const [profile, liked, excluded] = await Promise.all([
-    prisma.tasteProfile.findUnique({ where: { userId }, select: { genres: true } }),
+    prisma.tasteProfile.findUnique({ where: { userId }, select: { genres: true, persons: true } }),
     likedTitles(userId),
     excludedKeys(userId),
   ]);
@@ -229,8 +234,14 @@ export async function collectCandidates(
   }
 
   const ranked = [...new Map(order.map((i) => [titleKey(i), i])).values()].filter((i) => hintsByKey.has(titleKey(i)));
-  const infos = await getTitleInfos(ranked);
-  const kept = ranked.filter((i) => infos.has(titleKey(i))).slice(0, MAX_CANDIDATES);
+  const infos = await getTitleInfos(ranked.slice(0, INFO_FETCH_LIMIT));
+  const horrorExcluded = hasHorrorLimit(profile?.persons);
+  const kept = ranked
+    .filter((i) => {
+      const info = infos.get(titleKey(i));
+      return info && !(horrorExcluded && info.genres.includes(HORROR_GENRE));
+    })
+    .slice(0, MAX_CANDIDATES);
 
   const metas = new Map((await getMeta(kept, now)).map((m) => [titleKey(m), m]));
   return kept.map((item) => {

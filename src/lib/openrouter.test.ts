@@ -20,6 +20,7 @@ describe("chatJson", () => {
     expect(url).toBe("https://openrouter.ai/api/v1/chat/completions");
     expect(init.headers.Authorization).toBe(`Bearer ${KEY}`);
     expect(JSON.parse(init.body).response_format).toEqual({ type: "json_object" });
+    expect(JSON.parse(init.body).max_tokens).toBe(16000);
   });
 
   it("versucht es nach Müll genau einmal erneut", async () => {
@@ -56,6 +57,31 @@ describe("chatJson", () => {
       vi.fn().mockResolvedValue(new Response('{"error":{"message":"x is not a valid model ID"}}', { status: 400 })),
     );
     expect(await chatJson(KEY, "m", messages)).toEqual({ ok: false, error: "Modell unbekannt" });
+  });
+
+  it("400 ohne Modellbezug bleibt ein allgemeiner Fehler", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response('{"error":{"message":"bad model parameter: max_tokens"}}', { status: 400 })),
+    );
+    expect(await chatJson(KEY, "m", messages)).toEqual({ ok: false, error: "OpenRouter-Fehler (HTTP 400)" });
+  });
+
+  it("akzeptiert JSON im Code-Block", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(reply('```json\n{"a":1}\n```')));
+    expect(await chatJson(KEY, "m", messages)).toEqual({ ok: true, json: { a: 1 } });
+  });
+
+  it("meldet abgeschnittene Antworten ohne zweiten Versuch", async () => {
+    const fetchMock = vi.fn().mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ choices: [{ message: { content: '{"a":' }, finish_reason: "length" }] }), {
+          status: 200,
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await chatJson(KEY, "m", messages)).toEqual({ ok: false, error: "Antwort der KI war zu lang." });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("Zeitlimit wird gemeldet", async () => {
